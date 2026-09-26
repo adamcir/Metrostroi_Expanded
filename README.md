@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.5.0**
+Current damage-system module version: **0.5.1**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -71,6 +71,8 @@ It currently provides:
 - fragile controls now release after very small local structural displacement, instead of travelling away together as one rigid ButtonMap cluster
 - detached controls are blocked in the server-side `ButtonEvent` path, so neither mouse clicks nor Metrostroi keyboard shortcuts can operate a control after its physical part has torn off
 - **keyboard alias expansion** automatically maps generated ButtonMap IDs back to related KeyMap events (for example `KDLSet` ↔ `KDL`, or pneumatic brake direct positions ↔ up/down events), so every generated button with a shortcut loses that shortcut when its physical control detaches
+- standalone brake-valve hardware (`334`, `013`, brake/train/driver-valve disconnect cocks, EPK/EPV valves) is now treated as a control even when it is not a generated ButtonMap prop
+- detached standalone controls also search nearby 3D ButtonMap hit targets and remove those local clickable regions; the server guard additionally wraps `OnButtonPress`/`OnButtonRelease`, so direct event paths cannot bypass a destroyed control
 - detaching the main KV/GRKV controller blocks `KVUp`, `KVDown` and direct KV position shortcuts; detaching the driver brake valve blocks `PneumaticBrakeUp/Down` and the direct pneumatic-brake positions
 - debris captures the component sequence/cycle/`position` pose at the moment of detachment, sets playback rate to zero and remains physically/visually static apart from rigid-body motion
 - separate glass/window ClientEnts are treated as fragile components: local impacts can hide the intact pane, play a glass-break effect/sound and spawn physics glass shards
