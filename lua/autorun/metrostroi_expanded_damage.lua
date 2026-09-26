@@ -1482,6 +1482,14 @@ if SERVER then
                 if IsValid(data.debris) then
                     data.debris:Remove()
                 end
+
+                if istable(data.debrisList) then
+                    for _, debris in ipairs(data.debrisList) do
+                        if IsValid(debris) then
+                            debris:Remove()
+                        end
+                    end
+                end
             end
         end
     end)
