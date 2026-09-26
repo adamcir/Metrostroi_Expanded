@@ -3435,17 +3435,23 @@ if CLIENT then
         return out
     end
 
-    local function DisableDetachedButtonIDs(train, buttonIDs)
-        if not istable(train.ButtonMap) or not istable(buttonIDs) then return end
-
-        local wanted = {}
-        for _, id in ipairs(buttonIDs) do
-            if isstring(id) and id ~= "" then
-                wanted[id:gsub("^.+:", "")] = true
-            end
+    local function EnforceDisabledButtonHitboxes(train)
+        if not IsSubwayTrain(train) then return end
+        if not istable(train.MEXDamageDisabledButtonIDs)
+            or table.IsEmpty(train.MEXDamageDisabledButtonIDs)
+        then
+            return
         end
 
-        if table.IsEmpty(wanted) then return end
+        -- A direct bullet/crowbar hit can detach a component without creating
+        -- structural deformation. Keep a private ButtonMap even in that case;
+        -- otherwise RestoreInteractivePanels would resurrect an invisible
+        -- clickable control on the next Think.
+        if not train.MEXDamageV4ButtonMapOriginal then
+            CloneInteractivePanels(train)
+        end
+
+        if not istable(train.ButtonMap) then return end
 
         for _, panel in pairs(train.ButtonMap) do
             if not istable(panel) or not istable(panel.buttons) then continue end
@@ -3463,11 +3469,28 @@ if CLIENT then
                 if not istable(button) or not isstring(button.ID) then continue end
 
                 local id = button.ID:gsub("^.+:", "")
-                if wanted[id] then
+                if train.MEXDamageDisabledButtonIDs[id] then
                     panel.buttons[key] = nil
                 end
             end
         end
+    end
+
+    local function DisableDetachedButtonIDs(train, buttonIDs)
+        if not IsSubwayTrain(train) or not istable(buttonIDs) then return end
+
+        train.MEXDamageDisabledButtonIDs =
+            train.MEXDamageDisabledButtonIDs or {}
+
+        for _, id in ipairs(buttonIDs) do
+            if isstring(id) and id ~= "" then
+                train.MEXDamageDisabledButtonIDs[
+                    id:gsub("^.+:", "")
+                ] = true
+            end
+        end
+
+        EnforceDisabledButtonHitboxes(train)
     end
 
     local function GetPanelAttachedLocalTransform(train, cached, panelName)
@@ -3546,7 +3569,14 @@ if CLIENT then
                 )
 
             if matches then
-                panel.buttons[key] = nil
+                if isstring(button.ID) then
+                    DisableDetachedButtonIDs(
+                        train,
+                        {button.ID:gsub("^.+:", "")}
+                    )
+                else
+                    panel.buttons[key] = nil
+                end
             end
         end
     end
@@ -3949,6 +3979,10 @@ if CLIENT then
             previous.debris = debris
         end
 
+        local panelMap =
+            train.MEXDamageV4PanelProps or BuildPanelPropMap(train)
+        local panelName = panelMap[name]
+
         if istable(train.ClientEnts) then
             local prop = train.ClientEnts[name]
 
@@ -3969,7 +4003,7 @@ if CLIENT then
 
                 local mappedButtons = GetButtonIDsForProp(
                     train,
-                    nil,
+                    panelName,
                     name,
                     cached
                 )
@@ -3982,12 +4016,11 @@ if CLIENT then
             end
         end
 
-        local panelMap = train.MEXDamageV4PanelProps or BuildPanelPropMap(train)
-        local panelName = panelMap[name]
-
         if panelName then
             DisableDetachedPanelControl(train, panelName, name)
         end
+
+        EnforceDisabledButtonHitboxes(train)
     end
 
     local function MaybeDetachClientComponent(
@@ -4136,6 +4169,7 @@ if CLIENT then
         train.MEXDamageV4ServerDetached = nil
         train.MEXDamageV4DetachPending = nil
         train.MEXDamageDisabledLights = {}
+        train.MEXDamageDisabledButtonIDs = {}
     end
 
     net.Receive("MEX.ComponentDetached", function()
@@ -4419,6 +4453,25 @@ if CLIENT then
         end
     end
 
+    local function EnforceDetachedVisuals(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageV4ServerDetached)
+            or not istable(train.ClientEnts)
+        then
+            return
+        end
+
+        for name in pairs(train.MEXDamageV4ServerDetached) do
+            local prop = train.ClientEnts[name]
+            if IsValid(prop) then
+                prop:SetRenderOrigin(nil)
+                prop:SetRenderAngles(nil)
+                prop:DisableMatrix("RenderMultiply")
+                prop:SetNoDraw(true)
+            end
+        end
+    end
+
     local function ClearAllVisualDamage(train)
         RestoreInteractivePanels(train)
         ApplyLightDeformation(train, nil)
@@ -4430,6 +4483,10 @@ if CLIENT then
                 end
             end
         end
+
+        -- Failure state is independent of deformation state.
+        EnforceDisabledButtonHitboxes(train)
+        EnforceDetachedVisuals(train)
     end
 
     local function ApplyCompleteDamage(train)
@@ -4449,8 +4506,11 @@ if CLIENT then
         -- Panel props may be generated after the map was cloned.
         train.MEXDamageV4PanelProps = BuildPanelPropMap(train)
 
+        EnforceDisabledButtonHitboxes(train)
         ApplyClientEnts(train, state)
         ApplyLightDeformation(train, state)
+        EnforceDisabledButtonHitboxes(train)
+        EnforceDetachedVisuals(train)
     end
 
     ---------------------------------------------------------------------------
