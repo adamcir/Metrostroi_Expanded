@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.5.1**
+Damage System version: **0.6.0**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -253,3 +253,75 @@ When such a part detaches, the client additionally searches ButtonMap button cen
 The server guards `ButtonEvent`, `OnButtonPress` and `OnButtonRelease`. This prevents mouse, keyboard, direct button-event paths and train-specific button handlers from continuing to operate a destroyed physical control.
 
 A detached 334/013 driver's brake valve explicitly disables the complete `PneumaticBrake*` control family. Driver-valve, brake-line and train-line disconnect cocks disable their matching disconnect events.
+
+
+## Damage System 0.6.0
+
+### Structural crash model
+
+0.6.0 changes the structural approximation from a simple smooth displacement field into a local load-path / collapse approximation.
+
+Front/rear impacts now contain:
+
+- an end crush zone around the contact point
+- an axial attenuation into the vehicle
+- a stronger deformation region near the crush/survival-volume boundary
+- local bowing of side posts, roof and floor structure
+- a small alternating fold term that becomes visible only where the MDL has enough weighted bones
+
+Side impacts add a local wall crease around the intrusion field. Roof/floor impacts remain local to the contact zone.
+
+This is deliberately not a soft-body solver. The goal is to make available Source bones/ClientEnt parts behave more like a rail carbody collapse while preserving the occupied volume for moderate impacts.
+
+### Failure state is independent from deformation state
+
+A component can now fail from a local crowbar/bullet/blast hit without requiring the whole train to enter a structural crush state.
+
+Client failure state stores:
+
+- detached ClientEnt names
+- permanently disabled ButtonMap IDs
+- disabled light sources
+- broken glass material overrides
+
+These are re-applied every update until `mex_damage_reset`.
+
+This fixes the old case where the physical model disappeared but the next no-damage Think restored the original ButtonMap and left an invisible clickable switch/door/valve.
+
+### Impact impulse and detached physics
+
+Each local impact contains:
+
+- impact point in train-local space
+- impulse direction/magnitude in train-local space
+- influence radius
+- damage power
+- detach budget
+- whether the event is an explosion
+
+When a mounting fails, the detached networked physics entity inherits train velocity and then receives an off-centre impulse at the actual impact point. This naturally adds both translation and torque.
+
+Passenger-door leaves are treated independently after a combined Metrostroi door model is split.
+
+### Explosion approximation
+
+Explosion handling is a gameplay-scale impulse approximation, not CFD/FEA.
+
+For each visible mounted ClientEnt inside the blast radius:
+
+1. distance falloff is calculated from the blast centre
+2. blast impulse is combined with radial direction away from the pressure centre
+3. a component-type compliance factor estimates relative mounting movement
+4. fragile glass/controls require very little predicted movement to fail
+5. doors and larger mounted hardware require more movement
+6. once predicted relative movement exceeds the mounting threshold, the part is detached and becomes independent physics debris
+
+The same blast field is also applied to available structural bones / mounted ClientEnts, producing a local directional push and small wrinkle term instead of scaling the entire wagon.
+
+### Embedded glass fallback
+
+Many older Metrostroi trains do not expose cab windows as separate ClientEnt models. When the impacted body/cab model has material slots whose names look like glass/window/stekl, 0.6.0 stores their original submaterial overrides and replaces those glass slots with a transparent client material.
+
+On reset, the original submaterial overrides are restored.
+
+If the glass is baked into the same opaque material/mesh as the surrounding metal and has no separable material/bodygroup, Lua cannot create a true local hole in that compiled MDL. Such models require a prepared damage variant for fully physical glazing loss.
