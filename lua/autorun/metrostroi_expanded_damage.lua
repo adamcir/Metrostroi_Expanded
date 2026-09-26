@@ -4201,7 +4201,13 @@ if CLIENT then
                         propName,
                         true
                     )
-                    if isstring(originalButton.ID) then
+                    if isstring(originalButton.ID)
+                        and not HasOtherAttachedProvider(
+                            train,
+                            originalButton.ID,
+                            propName
+                        )
+                    then
                         SetDamageNativeHidden(
                             train,
                             originalButton.ID,
