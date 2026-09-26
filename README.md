@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.3.0**
+Current damage-system module version: **0.3.1**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -56,7 +56,7 @@ It currently provides:
 - persistent per-zone structural damage while the train entity exists
 - simple client-side visual crumpling from the damaged direction
 - a unified deformation field shared by the **outer carbody, salon/interior, cab equipment, panels and controls**
-- Metrostroi `ButtonMap` positions/angles/scales are deformed together with the visible panel, so buttons remain clickable after a crash
+- Metrostroi `ButtonMap` is deliberately left untouched so all switches/buttons/touchscreens remain fully operable; interactive ClientEnts are kept on their original Metrostroi coordinates while the surrounding body/interior deformation continues
 - local impact-centered crumple/dent deformation instead of only scaling the whole wagon
 - `BuildBonePositions` deformation for train/interior models with multiple bones, allowing genuinely local bending where the existing MDL rig permits it
 - panels, buttons, gauges, handles and other small ClientEnts keep their rigid shape but remain attached to their deformed mounting point
