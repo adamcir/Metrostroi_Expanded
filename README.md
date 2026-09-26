@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.4.3**
+Current damage-system module version: **0.4.4**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -62,12 +62,16 @@ It currently provides:
 - interactive `ButtonMap` panels are shallow-cloned per wagon (nested Metrostroi runtime tables are not copied) and their generated buttons move with the same rigid panel transform, keeping controls usable
 - train lights follow their deformed mounting points
 - **server-authoritative breakaway components**: doors, lamps, switches, buttons, handles, brake wheels, covers, seats/fixtures and other localized mounted ClientEnt parts may tear off independently according to local deformation around their own mounting point
-- detached components are real networked `mex_damage_debris` physics entities, visible to all players and manipulable with the Physgun/Gravity Gun; models without a usable physics mesh receive a box-physics fallback
+- detached components are real networked `mex_damage_debris` physics entities, visible to all players and manipulable with the Physgun/Gravity Gun
+- debris physics is always recentered on the visible model geometry instead of the original Metrostroi model origin; this prevents detached parts from appearing to hang in mid-air while an offset collision hull rests on the ground
+- combined 81-717 passenger-door models are split into the original separate `door_right_spb.mdl` / `door_left_spb.mdl` leaf models on detachment, so the two leaves become independent physics objects
 - each component has a deterministic individual mounting threshold, so a crash can tear off only one nearby button or several components depending on impact location and severity
 - **local mounting impacts** from crowbar/melee, bullets, buckshot, crush/vehicle contact and explosions resolve against the real ClientEnt geometry around the hit point; a normal pistol/crowbar hit usually releases only the nearest mounted component
 - small controls are prioritized over the backing panel/case at the same hit location, preventing an entire dashboard plate from being selected when the player actually hit one switch/button
 - fragile controls now release after very small local structural displacement, instead of travelling away together as one rigid ButtonMap cluster
 - detached controls are blocked in the server-side `ButtonEvent` path, so neither mouse clicks nor Metrostroi keyboard shortcuts can operate a control after its physical part has torn off
+- detaching the main KV/GRKV controller blocks `KVUp`, `KVDown` and direct KV position shortcuts; detaching the driver brake valve blocks `PneumaticBrakeUp/Down` and the direct pneumatic-brake positions
+- debris captures the component sequence/cycle/`position` pose at the moment of detachment, sets playback rate to zero and remains physically/visually static apart from rigid-body motion
 - parking/manual-brake controls receive explicit fallback button blocking (`ParkingBrakeToggle`, `ParkingBrakeLeft`, `ParkingBrakeRight`) when their wheel/handle detaches
 - detached lamp/headlight assemblies also disable nearby Metrostroi client light sources, preventing an invisible detached lamp from continuing to illuminate the world
 - detached button hit targets are removed from the per-wagon panel copy so a button that physically tore off is no longer clickable; the corresponding server ButtonEvent IDs remain disabled until `mex_damage_reset`
