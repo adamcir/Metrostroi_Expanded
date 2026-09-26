@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.3.0"
+MEXD.Version = "0.3.1"
 
 local ZONES = {
     front = true,
@@ -773,78 +773,76 @@ if CLIENT then
     end
 
     ---------------------------------------------------------------------------
-    -- ButtonMap deformation
+    -- Interactive controls
+    --
+    -- Metrostroi calculates panel aiming/clicks from ButtonMap every frame.
+    -- Moving/rotating those panels from a third-party addon breaks interaction
+    -- on several train classes because their own client code also updates the
+    -- same data. Keep ButtonMap completely untouched.
     ---------------------------------------------------------------------------
 
-    local function EnsurePrivateButtonMap(train)
-        if train.MEXDamagePrivateButtonMap then return end
+    local function RestoreButtonMap(train)
         if not istable(train.ButtonMap) then return end
 
-        -- ENT.ButtonMap is normally shared by every entity of a class. Clone it
-        -- before changing positions or one damaged train would move the control
-        -- hitboxes of every other train of the same type.
-        train.ButtonMap = table.Copy(train.ButtonMap)
-        train.MEXDamagePrivateButtonMap = true
-
-        for _, panel in pairs(train.ButtonMap) do
-            if istable(panel) and isvector(panel.pos) then
-                panel.MEXDamageBasePos = Vector(panel.pos.x, panel.pos.y, panel.pos.z)
-                if isangle(panel.ang) then
-                    panel.MEXDamageBaseAng = Angle(panel.ang.p, panel.ang.y, panel.ang.r)
-                end
-                panel.MEXDamageBaseScale = panel.scale
-            end
+        if train.MEXDamageButtonMapOriginal then
+            train.ButtonMap = train.MEXDamageButtonMapOriginal
+            train.MEXDamageButtonMapOriginal = nil
         end
-    end
 
-    local function RestoreButtonMap(train)
-        if not train.MEXDamagePrivateButtonMap or not istable(train.ButtonMap) then return end
-
-        for _, panel in pairs(train.ButtonMap) do
-            if istable(panel) and panel.MEXDamageBasePos then
-                panel.pos = Vector(
-                    panel.MEXDamageBasePos.x,
-                    panel.MEXDamageBasePos.y,
-                    panel.MEXDamageBasePos.z
-                )
-
-                if panel.MEXDamageBaseAng then
-                    panel.ang = Angle(
-                        panel.MEXDamageBaseAng.p,
-                        panel.MEXDamageBaseAng.y,
-                        panel.MEXDamageBaseAng.r
-                    )
-                end
-
-                if panel.MEXDamageBaseScale ~= nil then
-                    panel.scale = panel.MEXDamageBaseScale
-                end
-            end
-        end
+        train.MEXDamagePrivateButtonMap = nil
     end
 
     local function ApplyButtonMapDeformation(train, state)
-        if not istable(train.ButtonMap) then return end
-        EnsurePrivateButtonMap(train)
+        -- Intentionally disabled. Interactive panels must remain exactly where
+        -- Metrostroi expects them so all switches, buttons and touchscreen
+        -- controls keep working.
+        RestoreButtonMap(train)
+    end
 
-        for _, panel in pairs(train.ButtonMap) do
-            if not istable(panel) or not panel.MEXDamageBasePos then continue end
+    local function BuildInteractivePropSet(train)
+        local set = {}
 
-            local basePos = panel.MEXDamageBasePos
-            local baseAng = panel.MEXDamageBaseAng or panel.ang or angle_zero
+        if istable(train.ButtonMap) then
+            for panelName, panel in pairs(train.ButtonMap) do
+                if panelName ~= "BaseClass" and istable(panel) then
+                    -- Some trains use ClientEnts named after the panel itself.
+                    set[panelName] = true
 
-            panel.pos = DeformLocalPoint(basePos, state)
-            panel.ang = DeformLocalAngle(basePos, baseAng, state)
+                    if istable(panel.props) then
+                        for _, propName in pairs(panel.props) do
+                            if isstring(propName) then set[propName] = true end
+                        end
+                    end
 
-            if panel.MEXDamageBaseScale then
-                local step = 6
-                local p0 = DeformLocalPoint(basePos, state)
-                local px = DeformLocalPoint(basePos + baseAng:Forward() * step, state)
-                local py = DeformLocalPoint(basePos - baseAng:Right() * step, state)
-                local factor = ((px - p0):Length() + (py - p0):Length()) / (step * 2)
-                panel.scale = panel.MEXDamageBaseScale * math.Clamp(factor, 0.78, 1.08)
+                    if istable(panel.buttons) then
+                        for _, button in pairs(panel.buttons) do
+                            if istable(button) then
+                                if isstring(button.PropName) then set[button.PropName] = true end
+                                if isstring(button.ID) and string.sub(button.ID,1,1) ~= "!" then
+                                    set[button.ID] = true
+                                end
+
+                                if istable(button.model) and isstring(button.model.name) then
+                                    set[button.model.name] = true
+                                end
+
+                                if istable(button.lamp) and isstring(button.lamp.name) then
+                                    set[button.lamp.name] = true
+                                end
+                            end
+                        end
+                    end
+                end
             end
         end
+
+        train.MEXDamageInteractiveProps = set
+        return set
+    end
+
+    local function IsInteractiveProp(train, name)
+        local set = train.MEXDamageInteractiveProps or BuildInteractivePropSet(train)
+        return set[name] == true
     end
 
     ---------------------------------------------------------------------------
@@ -960,8 +958,27 @@ if CLIENT then
     local function ApplyClientPropDeformation(train, state)
         if not istable(train.ClientEnts) then return end
 
-        for _, prop in pairs(train.ClientEnts) do
+        for name, prop in pairs(train.ClientEnts) do
             if not IsValid(prop) then continue end
+
+            -- Never move a visual control away from the exact coordinates used
+            -- by Metrostroi's ButtonMap hit testing. This includes panel models,
+            -- switches, buttons, gauges, touchscreens and their generated props.
+            if IsInteractiveProp(train, name) then
+                if prop.MEXDamageRenderOrigin then
+                    prop:SetRenderOrigin(nil)
+                    prop.MEXDamageRenderOrigin = nil
+                end
+                if prop.MEXDamageRenderAngles then
+                    prop:SetRenderAngles(nil)
+                    prop.MEXDamageRenderAngles = nil
+                end
+                if prop.MEXDamageMatrixApplied then
+                    prop:DisableMatrix("RenderMultiply")
+                    prop.MEXDamageMatrixApplied = nil
+                end
+                continue
+            end
 
             local basePos, baseAng = GetPropBaseLocalTransform(train, prop)
             local deformedPos = DeformLocalPoint(basePos, state)
@@ -1075,6 +1092,18 @@ if CLIENT then
                 ApplyClientPropDeformation(train, state)
             end
         end
+    end)
+
+    concommand.Add("mex_controls_restore", function()
+        for _, train in ipairs(ents.GetAll()) do
+            if IsSubwayTrain(train) then
+                RestoreButtonMap(train)
+                train.MEXDamageInteractiveProps = nil
+                ClearClientPropDeformation(train)
+            end
+        end
+
+        chat.AddText(Color(120,255,120), "[Metrostroi Expanded] Control panels restored.")
     end)
 
     ---------------------------------------------------------------------------
