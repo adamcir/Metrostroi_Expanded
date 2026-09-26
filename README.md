@@ -43,32 +43,30 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.3.1**
+Current damage-system module version: **0.4.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
 It currently provides:
 
-- front, rear, left-side and right-side damage zones
-- automatic crash detection from sudden velocity changes
-- support for `DMG_CRUSH` and blast damage
-- a **1000 ms spawn grace period** so Metrostroi initialization/coupling does not damage a newly spawned train
-- persistent per-zone structural damage while the train entity exists
-- simple client-side visual crumpling from the damaged direction
-- a unified deformation field shared by the **outer carbody, salon/interior, cab equipment, panels and controls**
-- Metrostroi `ButtonMap` is deliberately left untouched so all switches/buttons/touchscreens remain fully operable; interactive ClientEnts are kept on their original Metrostroi coordinates while the surrounding body/interior deformation continues
-- local impact-centered crumple/dent deformation instead of only scaling the whole wagon
-- `BuildBonePositions` deformation for train/interior models with multiple bones, allowing genuinely local bending where the existing MDL rig permits it
-- panels, buttons, gauges, handles and other small ClientEnts keep their rigid shape but remain attached to their deformed mounting point
-- the ButtonMap is cloned per wagon before deformation, so damaging one train cannot move controls on another train of the same class
-- non-accumulating client-prop transforms, so deformation stays stable instead of drifting farther every frame
+- front, rear, left-side and right-side structural damage zones
+- a **1000 ms spawn grace period** so Metrostroi initialization/coupling is never counted as a crash
+- primary crash detection from Garry's Mod `PhysicsCollide`, using the actual contact position and pre-impact relative velocity
+- velocity-change detection only as a fallback
+- no global whole-wagon `RenderMultiply` scaling
+- local front/rear crush and side-intrusion fields with a survival-space threshold: light impacts stay near the end/side structure, severe impacts can intrude deeper into the cab/salon
+- **bone-based mesh deformation** through `BuildBonePositions` + `SetBoneMatrix` wherever the existing MDL has usable weighted bones
+- the main train body and structural ClientEnt models use the same deformation field
+- full-length salon/interior shells remain at the train origin and may deform only through their own bones, so the entire interior cannot slide away from the carbody
+- localized parts such as cab shells, front masks, doors, lamps and similar pieces remain rigid but follow their deformed mounting point
+- interactive `ButtonMap` panels are shallow-cloned per wagon (nested Metrostroi runtime tables are not copied) and their generated buttons move with the same rigid panel transform, keeping controls usable
+- train lights follow their deformed mounting points
 - sparks, impact decals and smoke for harder impacts
-- structural-health state
-- basic electrical-damage state
-- basic left/right door-damage states
-- hooks/API that later modules can connect to real Metrostroi electrical, pneumatic and door systems
+- structural-health and generic electrical/door/equipment damage states
+- `mex_damage_bones` to inspect the actual bone structure of the selected train and its structural ClientEnt models
+- `mex_damage_debug 1` to show impact centres
 
-The damage renderer now uses one continuous local-space deformation for the visible carbody, interior and controls. Front/rear/side impacts have a local impact center, crush depth and falloff into the cabin/salon, so the interior follows the shell instead of visually separating from it. On MDLs with useful non-root bones, those bones are displaced with the local dent field as well. Source still keeps the original physics collision mesh; arbitrary per-vertex soft-body deformation of a compiled single-bone MDL is not available from ordinary Lua.
+The outer skin can only form a true local dent when the compiled Source model has vertices weighted to suitable bones. Garry's Mod can change existing bone matrices clientside, but it cannot add new bones/vertex weights to an already compiled MDL at runtime. On a single-root-bone shell, v0.4 deliberately leaves that shell rigid instead of producing the unrealistic stretched/cut-open wagon seen in the old global-scaling versions. For a full BeamNG-style skin on such a model, a locally prepared deformable MDL with additional deformation bones and weights is required.
 
 ### Damage test commands
 
