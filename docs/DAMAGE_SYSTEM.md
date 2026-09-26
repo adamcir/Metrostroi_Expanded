@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.6.0**
+Damage System version: **0.6.1**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -325,3 +325,43 @@ Many older Metrostroi trains do not expose cab windows as separate ClientEnt mod
 On reset, the original submaterial overrides are restored.
 
 If the glass is baked into the same opaque material/mesh as the surrounding metal and has no separable material/bodygroup, Lua cannot create a true local hole in that compiled MDL. Such models require a prepared damage variant for fully physical glazing loss.
+
+
+## Damage System 0.6.1
+
+### Authoritative dead controls
+
+A detached control now keeps two independent failure records:
+
+1. server-side blocked ButtonEvent/KeyMap IDs
+2. client-side dead ButtonMap hitboxes
+
+The exact client-resolved ButtonMap IDs are accepted after the server validates the physical detach request against the real model, local anchor and recent impact. This covers old mouse-only controls that are absent from KeyMap.
+
+Client hitboxes are not merely deleted. A private copy is replaced by a zero-size hitbox at an unreachable coordinate. This prevents temporary/cached Metrostroi references from keeping an invisible control interactive.
+
+### Glazing classification
+
+The embedded-glass fallback no longer treats every material containing the word `glass` as a window.
+
+Only explicit window-like material paths are eligible, for example:
+
+- window / windows
+- windscreen / windshield
+- stekl / stec
+
+Panel, lamp, gauge, meter, indicator, button, display and screen material names are excluded.
+
+Broken embedded glazing uses `tools/toolsnodraw`, avoiding the white opaque lenses produced by the former custom alpha material.
+
+Passenger side-window impacts are detected separately from cab-window impacts. Shared body/salon window material slots can therefore be removed after a hit in the passenger compartment. A true per-pane hole still requires separate per-window geometry/materials in the source MDL.
+
+### Detached door stability
+
+Door debris uses a centred physics box but now receives a deliberate off-centre tipping impulse along its longest body axis after mount failure. Two short delayed wake-up checks prevent a tall thin leaf from going to sleep while balanced on its lower edge.
+
+### Fallback local shell deformation
+
+When a localized structural ClientEnt is available but its MDL has insufficient child bones, 0.6.1 applies a small crush matrix only to that localized shell. This is restricted to structural cab/body/mask/interior pieces and excludes doors, controls, lamps and panels.
+
+No matrix is ever applied to scale the complete train entity.
