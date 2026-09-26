@@ -623,20 +623,124 @@ if SERVER then
             phys:SetMass(mass)
             phys:EnableGravity(true)
             phys:EnableMotion(true)
-            phys:SetVelocity(
-                train:GetVelocity()
-                + normal * (35 + seed * 55)
-                + train:GetUp() * (18 + seed * 22)
-            )
-            phys:AddAngleVelocity(Vector(
-                -110 + seed * 220,
-                70 - seed * 140,
-                -140 + seed * 280
-            ))
+
+            -- Keep the pre-detachment vehicle velocity. The actual release
+            -- impulse is applied later from the collision/blast event at the
+            -- real impact point, which produces physically meaningful torque.
+            phys:SetVelocity(train:GetVelocity())
             phys:Wake()
         end
 
         return debris
+    end
+
+    local function ApplyBreakawayImpulse(
+        train,
+        debris,
+        impact,
+        zone,
+        anchorLocal,
+        isDoor,
+        isControl,
+        ordinal
+    )
+        if not IsValid(debris) then return end
+
+        local phys = debris:GetPhysicsObject()
+        if not IsValid(phys) then return end
+
+        ordinal = tonumber(ordinal) or 1
+
+        local velocityImpulse = Vector(0, 0, 0)
+        local applicationPoint = debris:GetPos()
+
+        if istable(impact) then
+            if isvector(impact.localImpulse)
+                and impact.localImpulse:LengthSqr() > 1
+            then
+                velocityImpulse = LocalDirectionToWorld(
+                    train,
+                    impact.localImpulse
+                )
+            end
+
+            if isvector(impact.localPos) then
+                applicationPoint = train:LocalToWorld(impact.localPos)
+            end
+
+            if impact.blast then
+                -- A blast wave pushes approximately radially away from its
+                -- local pressure centre. Blend that radial impulse with the
+                -- Source DamageForce direction so an off-centre blast both
+                -- translates and rotates the released component.
+                local radialLocal = anchorLocal - impact.localPos
+
+                if radialLocal:LengthSqr() > 1 then
+                    radialLocal:Normalize()
+                    local radialWorld = LocalDirectionToWorld(
+                        train,
+                        radialLocal
+                    )
+
+                    local blastVelocity =
+                        42 + math.Clamp(impact.power or 0, 0, 2) * 92
+
+                    velocityImpulse =
+                        velocityImpulse * 0.45
+                        + radialWorld * blastVelocity
+                end
+            end
+        end
+
+        if velocityImpulse:LengthSqr() < 1 then
+            local severity = MEXD.GetZoneDamage(train, zone or "front")
+            velocityImpulse =
+                ZoneOutwardNormal(train, zone or "front")
+                    * (22 + severity * 62)
+        end
+
+        local typeScale =
+            isDoor and 1.28
+            or (isControl and 0.82 or 1.0)
+
+        velocityImpulse = velocityImpulse * typeScale
+
+        -- Split leaves need a tiny opposite shear so the two pieces do not
+        -- continue occupying the same visual volume after the mount fails.
+        if isDoor and ordinal > 1 then
+            velocityImpulse =
+                velocityImpulse
+                + train:GetForward()
+                    * ((ordinal % 2 == 0) and 22 or -22)
+        end
+
+        local mass = math.max(phys:GetMass(), 0.1)
+        local impulse = velocityImpulse * mass
+
+        -- Clamp the point to a useful lever arm around the debris centre.
+        local lever = applicationPoint - debris:GetPos()
+        local maxLever = math.max(
+            debris:OBBMaxs():Length() * 0.65,
+            8
+        )
+
+        if lever:Length() > maxLever then
+            lever:Normalize()
+            applicationPoint = debris:GetPos() + lever * maxLever
+        end
+
+        phys:ApplyForceOffset(impulse, applicationPoint)
+
+        local seed =
+            ((tonumber(util.CRC(debris:GetComponentName() or "")) or 0)
+                % 1000) / 1000
+
+        phys:AddAngleVelocity(Vector(
+            -18 + seed * 36,
+            12 - seed * 24,
+            -26 + seed * 52
+        ))
+        phys:Wake()
     end
 
     local PASSENGER_DOOR_FAMILIES = {
@@ -1582,7 +1686,7 @@ if SERVER then
         end
 
         ply.MEXDamageDetachCount = (ply.MEXDamageDetachCount or 0) + 1
-        if ply.MEXDamageDetachCount > 64 then return end
+        if ply.MEXDamageDetachCount > 192 then return end
 
         local detachedCount = table.Count(train.MEXDamageDetachedServer)
         if detachedCount >= 160 then return end
@@ -1625,9 +1729,20 @@ if SERVER then
             isDoor and 0.055
             or (isControl and 0.020 or 0.035)
 
-        local directMinimum =
-            isDoor and 0.20
-            or (isControl and 0.11 or 0.20)
+        local directMinimum
+
+        if directImpact and directImpact.blast then
+            -- Blast attachment failure is driven by impulse/movement. If the
+            -- mounting is displaced at all, fragile hardware should tear away
+            -- instead of elastically snapping back into the train.
+            directMinimum =
+                isDoor and 0.045
+                or (isControl and 0.018 or 0.035)
+        else
+            directMinimum =
+                isDoor and 0.20
+                or (isControl and 0.11 or 0.20)
+        end
 
         local structuralOK =
             zone ~= nil
@@ -1727,6 +1842,34 @@ if SERVER then
             )
 
             if not IsValid(debris) then return end
+        end
+
+        if not isGlass then
+            if istable(debrisList) and #debrisList > 0 then
+                for ordinal, released in ipairs(debrisList) do
+                    ApplyBreakawayImpulse(
+                        train,
+                        released,
+                        directImpact,
+                        zone,
+                        anchorLocal,
+                        isDoor,
+                        isControl,
+                        ordinal
+                    )
+                end
+            elseif IsValid(debris) then
+                ApplyBreakawayImpulse(
+                    train,
+                    debris,
+                    directImpact,
+                    zone,
+                    anchorLocal,
+                    isDoor,
+                    isControl,
+                    1
+                )
+            end
         end
 
         local validButtons = {}
