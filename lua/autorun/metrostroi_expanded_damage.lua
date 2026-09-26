@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.4.0"
+MEXD.Version = "0.4.1"
 
 local ZONES = {
     front = true,
@@ -1245,6 +1245,403 @@ if CLIENT then
         end
     end
 
+
+    ---------------------------------------------------------------------------
+    -- Breakaway components
+    --
+    -- Doors and small panel controls are separate Metrostroi ClientEnt models.
+    -- Once their mounting point receives enough local displacement, replace the
+    -- attached ClientEnt with a clientside physics prop. ents.CreateClientProp
+    -- is specifically intended for clientside props with optional physics.
+    ---------------------------------------------------------------------------
+
+    local DOOR_WORDS = {
+        "door", "dver", "doors",
+    }
+
+    local CONTROL_WORDS = {
+        "button", "switch", "tumbler", "toggle", "knob", "reverser",
+        "controller", "handle", "lever", "valve", "kran",
+    }
+
+    local function ContainsAnyWord(text, words)
+        text = string.lower(text or "")
+        for _, word in ipairs(words) do
+            if string.find(text, word, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
+    local function StableFraction(text)
+        local crc = tonumber(util.CRC(text or "")) or 0
+        return (crc % 1000) / 1000
+    end
+
+    local function IsDoorComponent(name, cached)
+        local text = (name or "") .. " " .. (cached.model or "")
+        if not ContainsAnyWord(text, DOOR_WORDS) then return false end
+
+        local s = cached.size
+        local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
+
+        -- Ignore tiny props whose model happens to contain "door".
+        return largest >= 22
+    end
+
+    local function IsSmallControlComponent(name, cached, panelName)
+        if not panelName then return false end
+
+        local s = cached.size
+        local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
+        if largest > 55 then return false end
+
+        local text = (name or "") .. " " .. (cached.model or "")
+
+        -- Generated ButtonMap props are controls even when their file name does
+        -- not literally contain "button".
+        return ContainsAnyWord(text, CONTROL_WORDS) or largest <= 28
+    end
+
+    local function GetPanelAttachedLocalTransform(train, cached, panelName)
+        local panel = train.ButtonMap and train.ButtonMap[panelName]
+        if not istable(panel) or not panel.MEXDamageBasePos then
+            return nil, nil
+        end
+
+        local relPos, relAng = WorldToLocal(
+            cached.basePos,
+            cached.baseAng,
+            panel.MEXDamageBasePos,
+            panel.MEXDamageBaseAng
+        )
+
+        return LocalToWorld(
+            relPos,
+            relAng,
+            panel.pos,
+            panel.ang
+        )
+    end
+
+    local function GetRigidAttachedLocalTransform(cached, state)
+        local desiredAnchor = DeformLocalPoint(cached.anchorPos, state)
+        local desiredAng = DeformLocalAngle(
+            cached.anchorPos,
+            cached.baseAng,
+            state
+        )
+
+        local desiredOrigin = OriginForAnchoredModel(
+            cached.obbCenter,
+            desiredAnchor,
+            desiredAng
+        )
+
+        return desiredOrigin, desiredAng
+    end
+
+    local function DisableDetachedPanelControl(train, panelName, propName)
+        if not panelName or not istable(train.ButtonMap) then return end
+
+        local panel = train.ButtonMap[panelName]
+        if not istable(panel) or not istable(panel.buttons) then return end
+
+        -- Make only the button-list table private. The button objects themselves
+        -- remain Metrostroi's originals; removing an entry only disables the
+        -- local hit target for this damaged wagon.
+        if not panel.MEXDamageButtonsPrivate then
+            local privateButtons = {}
+            for k, v in pairs(panel.buttons) do
+                privateButtons[k] = v
+            end
+            panel.buttons = privateButtons
+            panel.MEXDamageButtonsPrivate = true
+        end
+
+        for key, button in pairs(panel.buttons) do
+            if not istable(button) then continue end
+
+            local model = button.model
+            local generatedName = nil
+
+            if istable(model) then
+                generatedName = model.name or button.ID
+            end
+
+            local matches =
+                button.PropName == propName
+                or generatedName == propName
+                or (
+                    istable(model)
+                    and istable(model.lamp)
+                    and model.lamp.name == propName
+                )
+
+            if matches then
+                panel.buttons[key] = nil
+            end
+        end
+    end
+
+    local function CopyVisualState(source, debris)
+        if not IsValid(source) or not IsValid(debris) then return end
+
+        debris:SetSkin(source:GetSkin() or 0)
+        debris:SetColor(source:GetColor())
+        debris:SetMaterial(source:GetMaterial() or "")
+
+        local groups = source:GetNumBodyGroups() or 0
+        for id = 0, groups - 1 do
+            debris:SetBodygroup(id, source:GetBodygroup(id))
+        end
+    end
+
+    local function CreatePhysicsDebris(
+        train,
+        name,
+        prop,
+        cached,
+        state,
+        panelName,
+        isDoor
+    )
+        local model = cached.model
+        if not isstring(model) or model == "" or model == "models/error.mdl" then
+            return nil
+        end
+
+        local localPos, localAng
+
+        if panelName then
+            localPos, localAng = GetPanelAttachedLocalTransform(
+                train,
+                cached,
+                panelName
+            )
+        end
+
+        if not isvector(localPos) or not isangle(localAng) then
+            localPos, localAng = GetRigidAttachedLocalTransform(cached, state)
+        end
+
+        local debris = ents.CreateClientProp(model)
+        if not IsValid(debris) then return nil end
+
+        debris:SetPos(train:LocalToWorld(localPos))
+        debris:SetAngles(train:LocalToWorldAngles(localAng))
+        CopyVisualState(prop, debris)
+        debris:Spawn()
+        debris:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
+        debris:SetMoveType(MOVETYPE_VPHYSICS)
+
+        local phys = debris:GetPhysicsObject()
+
+        if not IsValid(phys) then
+            debris:PhysicsInit(SOLID_VPHYSICS)
+            phys = debris:GetPhysicsObject()
+        end
+
+        if not IsValid(phys) then
+            -- A number of Metrostroi detail/door MDLs have no dedicated
+            -- physics mesh. Give the detached visual a conservative box so it
+            -- still falls and collides instead of hovering.
+            local mins = prop:OBBMins()
+            local maxs = prop:OBBMaxs()
+
+            if isvector(mins) and isvector(maxs)
+                and (maxs - mins):LengthSqr() > 1
+            then
+                debris:PhysicsInitBox(mins * 0.92, maxs * 0.92)
+                phys = debris:GetPhysicsObject()
+            end
+        end
+
+        if IsValid(phys) then
+            local displacement = LocalDisplacement(cached.anchorPos, state)
+            local worldDisp =
+                train:LocalToWorld(cached.anchorPos + displacement)
+                - train:LocalToWorld(cached.anchorPos)
+
+            local direction
+            if worldDisp:LengthSqr() > 0.01 then
+                direction = worldDisp:GetNormalized()
+            else
+                direction = train:GetUp()
+            end
+
+            local seed = StableFraction(name)
+            local impulse =
+                direction * (isDoor and (45 + 40 * seed) or (85 + 75 * seed))
+                + train:GetUp() * (isDoor and 18 or 35)
+
+            phys:SetMass(isDoor and 38 or 1.5)
+            phys:SetVelocity(train:GetVelocity() + impulse)
+            phys:AddAngleVelocity(Vector(
+                -80 + seed * 160,
+                45 - seed * 90,
+                -110 + seed * 220
+            ))
+            phys:Wake()
+        end
+
+        debris.MEXDamageDebris = true
+        debris.MEXDamageSourceTrain = train
+
+        train.MEXDamageV4Debris = train.MEXDamageV4Debris or {}
+        table.insert(train.MEXDamageV4Debris, debris)
+
+        timer.Simple(isDoor and 90 or 60, function()
+            if IsValid(debris) then
+                debris:Remove()
+            end
+        end)
+
+        return debris
+    end
+
+    local function DetachClientComponent(
+        train,
+        name,
+        prop,
+        cached,
+        state,
+        panelName,
+        isDoor
+    )
+        train.MEXDamageV4Detached = train.MEXDamageV4Detached or {}
+
+        if train.MEXDamageV4Detached[name] then
+            prop:SetNoDraw(true)
+            return true
+        end
+
+        local debris = CreatePhysicsDebris(
+            train,
+            name,
+            prop,
+            cached,
+            state,
+            panelName,
+            isDoor
+        )
+
+        if not IsValid(debris) then return false end
+
+        train.MEXDamageV4Detached[name] = {
+            entity = prop,
+            debris = debris,
+            oldNoDraw = prop.GetNoDraw and prop:GetNoDraw() or false,
+            panelName = panelName,
+        }
+
+        prop:SetRenderOrigin(nil)
+        prop:SetRenderAngles(nil)
+        prop:DisableMatrix("RenderMultiply")
+        prop:SetNoDraw(true)
+
+        if panelName and not isDoor then
+            DisableDetachedPanelControl(train, panelName, name)
+        end
+
+        surface.PlaySound(
+            isDoor
+                and "physics/metal/metal_box_break2.wav"
+                or "physics/metal/metal_solid_impact_hard5.wav"
+        )
+
+        return true
+    end
+
+    local function MaybeDetachClientComponent(
+        train,
+        name,
+        prop,
+        cached,
+        state,
+        panelName
+    )
+        if not IsValid(prop) then return false end
+        if train.MEXDamageV4Detached
+            and train.MEXDamageV4Detached[name]
+        then
+            prop:SetNoDraw(true)
+            return true
+        end
+
+        -- Do not detach a variant ClientEnt which Metrostroi currently hides.
+        if prop.GetNoDraw and prop:GetNoDraw() then return false end
+        if prop:GetColor().a <= 5 then return false end
+
+        local displacement = LocalDisplacement(cached.anchorPos, state):Length()
+        if displacement <= 0.01 then return false end
+
+        local seed = StableFraction(name)
+        local isDoor = IsDoorComponent(name, cached)
+
+        if isDoor then
+            local threshold = 7.0 + seed * 5.0
+            if state.overall >= 0.48 and displacement >= threshold then
+                return DetachClientComponent(
+                    train,
+                    name,
+                    prop,
+                    cached,
+                    state,
+                    panelName,
+                    true
+                )
+            end
+
+            return false
+        end
+
+        if IsSmallControlComponent(name, cached, panelName) then
+            local threshold = 4.5 + seed * 5.5
+            if state.overall >= 0.62 and displacement >= threshold then
+                return DetachClientComponent(
+                    train,
+                    name,
+                    prop,
+                    cached,
+                    state,
+                    panelName,
+                    false
+                )
+            end
+        end
+
+        return false
+    end
+
+    local function RestoreDetachedComponents(train)
+        if not IsValid(train) then return end
+
+        if istable(train.MEXDamageV4Detached) then
+            for _, data in pairs(train.MEXDamageV4Detached) do
+                if IsValid(data.debris) then
+                    data.debris:Remove()
+                end
+
+                if IsValid(data.entity) then
+                    data.entity:SetNoDraw(data.oldNoDraw or false)
+                    data.entity:SetRenderOrigin(nil)
+                    data.entity:SetRenderAngles(nil)
+                end
+            end
+        end
+
+        if istable(train.MEXDamageV4Debris) then
+            for _, debris in ipairs(train.MEXDamageV4Debris) do
+                if IsValid(debris) then debris:Remove() end
+            end
+        end
+
+        train.MEXDamageV4Detached = nil
+        train.MEXDamageV4Debris = nil
+    end
+
     ---------------------------------------------------------------------------
     -- Bone deformation
     ---------------------------------------------------------------------------
@@ -1302,8 +1699,43 @@ if CLIENT then
         )
     end
 
+    local function CheckFrontBoneCapability(train)
+        if not IsValid(train) or train.MEXDamageV4BoneCapabilityChecked then return end
+
+        train.MEXDamageV4BoneCapabilityChecked = true
+        train:SetupBones()
+
+        local count = train:GetBoneCount() or 0
+        local frontBones = 0
+        local maxX = train:OBBMaxs().x
+
+        for bone = 1, math.max(count - 1, 0) do
+            if train:GetBoneName(bone) == "__INVALIDBONE__" then continue end
+
+            local matrix = train:GetBoneMatrix(bone)
+            if not matrix then continue end
+
+            local localPos = train:WorldToLocal(matrix:GetTranslation())
+            if localPos.x >= maxX - 140 then
+                frontBones = frontBones + 1
+            end
+        end
+
+        train.MEXDamageV4BodyBoneCount = count
+        train.MEXDamageV4FrontBoneCount = frontBones
+
+        if count <= 1 or frontBones == 0 then
+            print(string.format(
+                "[Metrostroi Expanded/Damage] %s: stock body model %s has no usable non-root bones near the front. True local front-sheet denting cannot be produced from Lua alone; separate front ClientEnt parts can still move/break away.",
+                train:GetClass(),
+                tostring(train:GetModel())
+            ))
+        end
+    end
+
     local function InstallTrainBoneField(train)
         if not IsValid(train) then return end
+        CheckFrontBoneCapability(train)
         InstallBoneField(train, train, true)
     end
 
@@ -1387,6 +1819,21 @@ if CLIENT then
             end
 
             local cached = CacheClientProp(train, name, prop)
+            local panelName = panelMap[name]
+
+            -- A sufficiently damaged mounting point can release a door or a
+            -- small panel control. Its original Metrostroi ClientEnt is hidden
+            -- and a physics debris copy takes over.
+            if MaybeDetachClientComponent(
+                train,
+                name,
+                prop,
+                cached,
+                state,
+                panelName
+            ) then
+                continue
+            end
 
             -- Existing bones deform the actual mesh instead of stretching the
             -- complete client entity. Root is skipped because it would move the
@@ -1395,7 +1842,6 @@ if CLIENT then
                 InstallBoneField(prop, train, true)
             end
 
-            local panelName = panelMap[name]
             if panelName and ApplyPanelAttachment(
                 train,
                 name,
@@ -1421,6 +1867,7 @@ if CLIENT then
     end
 
     local function ClearAllVisualDamage(train)
+        RestoreDetachedComponents(train)
         RestoreInteractivePanels(train)
         ApplyLightDeformation(train, nil)
 
@@ -1607,7 +2054,16 @@ if CLIENT then
         print("------------------------------------------------------------")
         print("[Metrostroi Expanded/Damage] Bone dump: " .. train:GetClass())
         print("model: " .. tostring(train:GetModel()))
+        CheckFrontBoneCapability(train)
         print("body bones: " .. tostring(train:GetBoneCount()))
+        print("front-region non-root bones: " .. tostring(train.MEXDamageV4FrontBoneCount or 0))
+
+        if (train.MEXDamageV4FrontBoneCount or 0) == 0 then
+            print("front sheet deformation: NOT AVAILABLE on this stock body MDL")
+            print("reason: no usable weighted front-region bone can be driven from Lua")
+        else
+            print("front sheet deformation: bone candidates exist (vertex weighting still determines the visible result)")
+        end
 
         for bone = 0, math.max(train:GetBoneCount() - 1, -1) do
             print(string.format(
@@ -1692,6 +2148,7 @@ if CLIENT then
 
     hook.Add("EntityRemoved", "MEX.Damage.V4Cleanup", function(ent)
         if not IsSubwayTrain(ent) then return end
+        RestoreDetachedComponents(ent)
         RestoreInteractivePanels(ent)
     end)
 end
