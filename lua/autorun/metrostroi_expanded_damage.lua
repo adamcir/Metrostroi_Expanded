@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.3"
+MEXD.Version = "0.6.4"
 
 local ZONES = {
     front = true,
@@ -3861,8 +3861,116 @@ if CLIENT then
         return out
     end
 
+    local function GetButtonPhysicalPropName(button)
+        if not istable(button) then return nil end
+
+        if isstring(button.PropName) and button.PropName ~= "" then
+            return button.PropName
+        end
+
+        local model = button.model
+        if istable(model) then
+            if isstring(model.name) and model.name ~= "" then
+                return model.name
+            end
+
+            if istable(model.lamp)
+                and isstring(model.lamp.name)
+                and model.lamp.name ~= ""
+            then
+                return model.lamp.name
+            end
+
+            if isstring(button.ID) and button.ID ~= "" then
+                return button.ID
+            end
+        end
+
+        return nil
+    end
+
+    local function ReconcileAttachedButtonHitboxes(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.ButtonMap)
+            or not istable(train.MEXDamageV4ButtonMapOriginal)
+        then
+            return
+        end
+
+        train.MEXDamageDisabledButtonIDs =
+            train.MEXDamageDisabledButtonIDs or {}
+
+        for panelName, panel in pairs(train.ButtonMap) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            local originalPanel =
+                train.MEXDamageV4ButtonMapOriginal[panelName]
+
+            if not istable(originalPanel)
+                or not istable(originalPanel.buttons)
+            then
+                continue
+            end
+
+            for key, originalButton in pairs(originalPanel.buttons) do
+                if not istable(originalButton)
+                    or not isstring(originalButton.ID)
+                then
+                    continue
+                end
+
+                local propName =
+                    GetButtonPhysicalPropName(originalButton)
+
+                if not propName then continue end
+
+                local prop = istable(train.ClientEnts)
+                    and train.ClientEnts[propName]
+                    or nil
+
+                -- Only reconcile buttons with a real visual ClientEnt. Pure
+                -- logical/standalone controls keep their server fail-safe.
+                if not IsValid(prop) then continue end
+
+                local detached =
+                    istable(train.MEXDamageV4ServerDetached)
+                    and train.MEXDamageV4ServerDetached[propName] ~= nil
+
+                local visiblyAttached =
+                    not detached
+                    and not prop:GetNoDraw()
+                    and prop:GetColor().a > 5
+
+                local id = originalButton.ID:gsub("^.+:", "")
+
+                if visiblyAttached then
+                    -- Physical truth wins: if the original component is still
+                    -- attached and visible, this exact control must work.
+                    train.MEXDamageDisabledButtonIDs[id] = nil
+
+                    local restored = {}
+                    for k, v in pairs(originalButton) do
+                        restored[k] = v
+                    end
+
+                    panel.buttons[key] = restored
+                elseif detached then
+                    train.MEXDamageDisabledButtonIDs[id] = true
+                end
+            end
+        end
+    end
+
     local function EnforceDisabledButtonHitboxes(train)
         if not IsSubwayTrain(train) then return end
+
+        ReconcileAttachedButtonHitboxes(train)
+
         if not istable(train.MEXDamageDisabledButtonIDs)
             or table.IsEmpty(train.MEXDamageDisabledButtonIDs)
         then
@@ -5254,6 +5362,9 @@ if CLIENT then
     hook.Add("PreDrawOpaqueRenderables", "MEX.Damage.V4OpaqueAttachments", function()
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
+
+            ReconcileAttachedButtonHitboxes(train)
+            EnforceDisabledButtonHitboxes(train)
 
             local state = BuildDamageState(train)
             if state then
