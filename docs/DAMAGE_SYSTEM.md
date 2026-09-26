@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.4.0**
+Damage System version: **0.4.2**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -101,3 +101,19 @@ mex_damage_debug 1
   - https://wiki.facepunch.com/gmod/Structures/CollisionData
 - 81-717/714 construction overview
   - https://nashemetro.ru/carriages/81-717/
+
+
+## Breakaway components
+
+Version 0.4.2 promotes detached components to real server-side physics entities:
+
+- detached doors, lamps, controls and other mounted ClientEnt parts become `mex_damage_debris`
+- debris is networked and can be manipulated with the Physgun and Gravity Gun
+- each component is evaluated at its own geometric anchor, not merely at the model origin
+- individual mounting thresholds allow one button to tear off while nearby controls remain attached
+- a detached control's server-side `ButtonEvent` IDs are blocked, which also blocks Metrostroi keyboard shortcuts
+- parking/manual brake controls explicitly block the common parking-brake button IDs when their physical wheel/handle tears off
+- detached light assemblies disable nearby client light sources
+- `mex_damage_reset` removes debris, clears blocked controls and restores the undamaged component state
+
+The server validates detach requests against the damaged zone near the component's actual geometry anchor and validates requested Button IDs against the train's KeyMap/systems before disabling them.
