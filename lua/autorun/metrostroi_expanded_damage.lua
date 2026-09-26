@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.1.0"
+MEXD.Version = "0.2.0"
 
 local ZONES = {
     front = true,
@@ -20,6 +20,7 @@ local ZONES = {
 }
 
 local SU_TO_KMH = 0.09144 -- Source units/s (inches/s) -> km/h
+local SPAWN_GRACE_SECONDS = 1.0
 
 local function IsSubwayTrain(ent)
     if not IsValid(ent) then return false end
@@ -108,6 +109,38 @@ end
 
 if SERVER then
     util.AddNetworkString("MEX.DamageImpact")
+
+    local function InitializeTrainDamage(train)
+        if not IsSubwayTrain(train) then return end
+        if train.MEXDamageInitialized then return end
+
+        train.MEXDamageInitialized = true
+        train.MEXDamageIgnoreUntil = CurTime() + SPAWN_GRACE_SECONDS
+        train.MEXDamageLastVelocity = train:GetVelocity()
+        train.MEXDamageLastPosition = train:GetPos()
+        train.MEXDamageLastSample = CurTime()
+        train.MEXDamagePreviousSpeedKmh = train:GetVelocity():Length() * SU_TO_KMH
+
+        train:SetNW2Bool("MEX.DamageReady", false)
+        train:SetNW2Float("MEX.DamageReadyAt", train.MEXDamageIgnoreUntil)
+
+        MEXD.Reset(train)
+
+        -- Metrostroi can move/reparent/settle a newly spawned wagon very
+        -- aggressively. Ignore all of that and take a fresh baseline exactly
+        -- one second after creation.
+        timer.Simple(SPAWN_GRACE_SECONDS, function()
+            if not IsSubwayTrain(train) then return end
+
+            MEXD.Reset(train)
+            train.MEXDamageLastVelocity = train:GetVelocity()
+            train.MEXDamageLastPosition = train:GetPos()
+            train.MEXDamageLastSample = CurTime()
+            train.MEXDamagePreviousSpeedKmh = train:GetVelocity():Length() * SU_TO_KMH
+            train.MEXDamageCrashCooldown = CurTime() + 0.10
+            train:SetNW2Bool("MEX.DamageReady", true)
+        end)
+    end
 
     function MEXD.Reset(train)
         if not IsValid(train) then return end
@@ -246,6 +279,9 @@ if SERVER then
 
     hook.Add("EntityTakeDamage", "MEX.Damage.FromEntityDamage", function(ent, dmginfo)
         if not IsSubwayTrain(ent) then return end
+
+        InitializeTrainDamage(ent)
+        if CurTime() < (ent.MEXDamageIgnoreUntil or 0) then return end
         if not (
             dmginfo:IsDamageType(DMG_CRUSH)
             or dmginfo:IsDamageType(DMG_BLAST)
@@ -290,6 +326,8 @@ if SERVER then
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
 
+            InitializeTrainDamage(train)
+
             local velocity = train:GetVelocity()
             local position = train:GetPos()
             local now = CurTime()
@@ -308,6 +346,13 @@ if SERVER then
             train.MEXDamageLastVelocity = velocity
             train.MEXDamageLastPosition = position
             train.MEXDamageLastSample = now
+            train.MEXDamagePreviousSpeedKmh = velocity:Length() * SU_TO_KMH
+
+            -- A newly created Metrostroi wagon receives several large position
+            -- and velocity corrections while bogeys, couplers and systems are
+            -- being initialized. Keep updating the baseline, but never turn
+            -- those corrections into crash damage.
+            if now < (train.MEXDamageIgnoreUntil or 0) then continue end
 
             -- Ignore teleports, respawns and physics reinitialisation.
             if dt <= 0 or dt > 0.25 or moved > 600 then continue end
@@ -316,8 +361,10 @@ if SERVER then
             if deltaKmh < 8 then continue end
             if (train.MEXDamageCrashCooldown or 0) > now then continue end
 
-            local previousSpeedKmh = train.MEXDamagePreviousSpeedKmh or 0
-            train.MEXDamagePreviousSpeedKmh = velocity:Length() * SU_TO_KMH
+            local previousSpeedKmh = math.max(
+                0,
+                (velocity - deltaVelocity):Length() * SU_TO_KMH
+            )
 
             -- A very low-speed train can receive a physics correction while
             -- spawning/coupling. Require either meaningful movement or a strong
@@ -345,8 +392,16 @@ if SERVER then
     hook.Add("OnEntityCreated", "MEX.Damage.InitializeTrain", function(ent)
         timer.Simple(0, function()
             if not IsSubwayTrain(ent) then return end
-            if ent:GetNW2Float("MEX.StructuralHealth", -1) < 0 then
-                MEXD.Reset(ent)
+            InitializeTrainDamage(ent)
+        end)
+    end)
+
+    hook.Add("InitPostEntity", "MEX.Damage.InitializeExistingTrains", function()
+        timer.Simple(0.25, function()
+            for _, train in ipairs(ents.GetAll()) do
+                if IsSubwayTrain(train) then
+                    InitializeTrainDamage(train)
+                end
             end
         end)
     end)
@@ -364,6 +419,12 @@ if SERVER then
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            return
+        end
+
+        InitializeTrainDamage(train)
+        if CurTime() < (train.MEXDamageIgnoreUntil or 0) then
+            print("[Metrostroi Expanded/Damage] Damage system is still in the 1000 ms spawn grace period.")
             return
         end
 
@@ -424,6 +485,10 @@ end
 
 if CLIENT then
     local function GetDeformationTransform(train)
+        if not train:GetNW2Bool("MEX.DamageReady", false) then
+            return nil
+        end
+
         local front = train:GetNW2Float("MEX.Damage.front", 0)
         local rear = train:GetNW2Float("MEX.Damage.rear", 0)
         local left = train:GetNW2Float("MEX.Damage.left", 0)
@@ -484,6 +549,11 @@ if CLIENT then
                     prop.MEXDamageRenderOrigin = nil
                 end
 
+                if prop.MEXDamageRenderAngles then
+                    prop:SetRenderAngles(nil)
+                    prop.MEXDamageRenderAngles = nil
+                end
+
                 if prop.MEXDamageMatrixApplied then
                     prop:DisableMatrix("RenderMultiply")
                     prop.MEXDamageMatrixApplied = nil
@@ -492,7 +562,7 @@ if CLIENT then
         end
     end
 
-    local function IsLargeAlignedClientProp(train, prop)
+    local function IsInteriorOrLargeClientProp(train, prop)
         if not IsValid(prop) then return false end
 
         local mins = prop:OBBMins()
@@ -500,17 +570,31 @@ if CLIENT then
         if not isvector(mins) or not isvector(maxs) then return false end
 
         local size = maxs - mins
+        local model = string.lower(prop:GetModel() or "")
 
-        -- Whole salon/interior shells, lamp strips and additional body shells
-        -- need to deform together with the body. Small rigid objects such as
-        -- switches, door handles and gauges should only move, not be squashed.
-        local large = math.abs(size.x) >= 220 or math.abs(size.y) >= 120
-        if not large then return false end
+        -- Full salon/cab shells are commonly separate Metrostroi ClientEnts.
+        -- Detect them by both geometry and conventional model naming.
+        local namedInterior =
+            string.find(model, "interior", 1, true)
+            or string.find(model, "salon", 1, true)
+            or string.find(model, "cabin", 1, true)
+            or string.find(model, "cabine", 1, true)
+            or string.find(model, "cab_", 1, true)
 
+        local large =
+            math.abs(size.x) >= 180
+            or math.abs(size.y) >= 110
+            or math.abs(size.z) >= 110
+
+        if not large and not namedInterior then return false end
+
+        -- RenderMultiply is in the prop's local axes. Use it only where those
+        -- axes are close enough to the train axes; all other props still get
+        -- their anchor point moved with the damaged structure.
         local forwardAlignment = math.abs(prop:GetForward():Dot(train:GetForward()))
         local rightAlignment = math.abs(prop:GetRight():Dot(train:GetRight()))
 
-        return forwardAlignment >= 0.94 and rightAlignment >= 0.94
+        return forwardAlignment >= 0.90 and rightAlignment >= 0.90
     end
 
     local function ApplyClientPropDeformation(train, transform)
@@ -519,9 +603,11 @@ if CLIENT then
         for name, prop in pairs(train.ClientEnts) do
             if not IsValid(prop) then continue end
 
-            -- GetPos is the real Metrostroi position. SetRenderOrigin below only
-            -- affects drawing, so this does not accumulate every frame and still
-            -- follows animated/moving client props.
+            -- ClientEnts include the salon/interior shell, cab equipment,
+            -- panels, switches, gauges, lamps and buttons. Metrostroi keeps
+            -- their real transform relative to the undeformed train. We only
+            -- override the render transform, so animations and button states
+            -- continue to work normally.
             local baseWorldPos = prop:GetPos()
             local baseLocalPos = train:WorldToLocal(baseWorldPos)
             local deformedLocalPos = DeformLocalPosition(baseLocalPos, transform)
@@ -530,7 +616,16 @@ if CLIENT then
             prop:SetRenderOrigin(deformedWorldPos)
             prop.MEXDamageRenderOrigin = true
 
-            if IsLargeAlignedClientProp(train, prop) then
+            -- Keep rigid detail props (buttons, handles, gauges...) rigid, but
+            -- move their attachment point with the same deformed panel/body.
+            -- This prevents switches from floating in the air after a crash.
+            local baseWorldAng = prop:GetAngles()
+            prop:SetRenderAngles(baseWorldAng)
+            prop.MEXDamageRenderAngles = true
+
+            -- Large salon/cab/interior shells are part of the structure and
+            -- therefore receive the same compression as the outer carbody.
+            if IsInteriorOrLargeClientProp(train, prop) then
                 local matrix = Matrix()
                 matrix:Scale(transform.scale)
                 prop:EnableMatrix("RenderMultiply", matrix)
@@ -563,9 +658,10 @@ if CLIENT then
         ApplyClientPropDeformation(train, transform)
     end
 
-    -- Use a render hook rather than Think: Metrostroi is free to update
-    -- ClientEnt positions/animations during the frame, then this hook applies
-    -- the crash transform immediately before they are rendered.
+    -- Use render hooks rather than Think. Metrostroi may update panel/button,
+    -- door and interior ClientEnt positions during Think; applying the damage
+    -- mapping immediately before rendering keeps every visible child attached
+    -- to the same deformed structure without fighting its animation code.
     hook.Add("PreDrawOpaqueRenderables", "MEX.Damage.UpdateVisualDeformation", function()
         for _, train in ipairs(ents.GetAll()) do
             if IsSubwayTrain(train) then
