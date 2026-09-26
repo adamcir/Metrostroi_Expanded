@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.5.2**
+Current damage-system module version: **0.6.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -183,3 +183,22 @@ Metrostroi Expanded's own source code is licensed under the **GNU General Public
 - adds an `OnKeyEvent` guard before Metrostroi can execute `OnKeyPress/OnKeyRelease`, fixing controls such as pneumatic F/R that could react before the existing `ButtonEvent` blocker
 - restricts geometry-nearest ButtonMap matching to standalone valve/controller hardware; arbitrary props no longer steal nearby large door hitboxes
 - explicitly excludes `FrontDoor`, `RearDoor`, `CabinDoor` and `PassengerDoor` from paired passenger-door leaf splitting; only true `doorNx0/doorNx1` side-door ClientEnts are eligible
+
+
+### Damage 0.6.0 – impulse/failure rewrite
+
+Damage 0.6.0 separates **structural deformation** from **component failure**.
+
+- detached components remain permanently hidden and non-interactive until `mex_damage_reset`, even when the hit did not create enough structural crush to keep a deformation state alive
+- disabled ButtonMap IDs are stored separately from the deformation field and are re-applied every client update, preventing an invisible control from becoming clickable again
+- older manual door props such as `door1` / `door2` can be associated with nearby `FrontDoor` / `RearDoor` / `CabinDoor` hit targets, but the spatial association is restricted to button IDs containing `Door` so it cannot steal unrelated controls
+- collision and explosion events now carry a local impulse vector in addition to damage/radius
+- released physics debris receives its impulse through `PhysObj:ApplyForceOffset` at the actual impact point, producing both translation and rotation instead of a generic random kick
+- split passenger-door leaves receive independent impulses so both leaves can physically separate
+- explosion damage uses radial distance falloff and a predicted relative movement threshold; if blast loading would move a mounted component even slightly, its mounting is considered failed and the component detaches
+- blast events can release many nearby components independently rather than using a tiny fixed detach count
+- separate glass ClientEnts still shatter normally; for glass baked into a larger cab/body model the addon now attempts to hide dedicated glass/window material slots with a client material override and emits glass impact/shard effects
+- front/rear deformation now includes a local crush-boundary buckle/crease, while side impacts include local wall creasing; explosion pressure adds a local directional displacement/wrinkle field
+- the solver still never globally scales the whole wagon
+
+The visual body deformation remains limited by the bones and vertex weights present in the compiled MDL. If a stock body uses only one root bone for a large sheet, Lua cannot create new local vertex weights at runtime.
