@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.6"
+MEXD.Version = "0.6.7"
 
 local ZONES = {
     front = true,
@@ -3034,6 +3034,21 @@ if CLIENT then
                     p[k] = v
                 end
 
+                -- IMPORTANT: the panel object may be shallow-copied, but its
+                -- buttons CONTAINER must be private. Keeping the same table
+                -- here meant that replacing one damaged button also replaced
+                -- the supposed "original" Metrostroi definition, making
+                -- restore/reconciliation impossible for every generated
+                -- control.
+                if istable(panel.buttons) then
+                    local privateButtons = {}
+                    for buttonKey, button in pairs(panel.buttons) do
+                        privateButtons[buttonKey] = button
+                    end
+                    p.buttons = privateButtons
+                    p.MEXDamageButtonsPrivate = true
+                end
+
                 p.MEXDamageBasePos = CopyVector(panel.pos)
                 p.MEXDamageBaseAng = isangle(panel.ang)
                     and CopyAngle(panel.ang)
@@ -3094,6 +3109,18 @@ if CLIENT then
                         local generatedName = config.name or button.ID
                         if isstring(generatedName) then
                             map[generatedName] = panelName
+                        end
+
+                        -- Old manual doors and a few other mechanisms have a
+                        -- logical ButtonMap ID (FrontDoor, RearDoor...) but
+                        -- animate a separately-authored ClientEnt through
+                        -- model.var (door1, door2...). If that ClientEnt
+                        -- exists, treat it as the physical provider.
+                        if isstring(config.var)
+                            and istable(train.ClientEnts)
+                            and IsValid(train.ClientEnts[config.var])
+                        then
+                            map[config.var] = panelName
                         end
 
                         if istable(config.lamp) then
@@ -3687,14 +3714,50 @@ if CLIENT then
         return result
     end
 
-    local function GetButtonPhysicalPropName(button)
+    local function GetButtonPhysicalPropName(train, button)
         if not istable(button) then return nil end
 
-        if isstring(button.PropName) and button.PropName ~= "" then
+        local function existingClientEnt(name)
+            return isstring(name)
+                and name ~= ""
+                and istable(train and train.ClientEnts)
+                and IsValid(train.ClientEnts[name])
+        end
+
+        if existingClientEnt(button.PropName) then
             return button.PropName
         end
 
         local model = button.model
+        if istable(model) then
+            if existingClientEnt(model.name) then
+                return model.name
+            end
+
+            if istable(model.lamp)
+                and existingClientEnt(model.lamp.name)
+            then
+                return model.lamp.name
+            end
+        end
+
+        -- Generated Metrostroi button props default to button.ID.
+        if existingClientEnt(button.ID) then
+            return button.ID
+        end
+
+        -- Legacy manual doors/mechanisms often have no generated model at all:
+        -- the ButtonMap event is FrontDoor but model.var animates door1.
+        if istable(model) and existingClientEnt(model.var) then
+            return model.var
+        end
+
+        -- Fallback for pre-generation mapping. It is only used as an identity
+        -- hint; exact physical binding still requires the ClientEnt later.
+        if isstring(button.PropName) and button.PropName ~= "" then
+            return button.PropName
+        end
+
         if istable(model) then
             if isstring(model.name) and model.name ~= "" then
                 return model.name
@@ -3715,12 +3778,12 @@ if CLIENT then
         return nil
     end
 
-    local function ButtonMatchesPhysicalProp(button, propName)
+    local function ButtonMatchesPhysicalProp(train, button, propName)
         if not istable(button) or not isstring(propName) then
             return false
         end
 
-        return GetButtonPhysicalPropName(button) == propName
+        return GetButtonPhysicalPropName(train, button) == propName
     end
 
     local function IsPhysicalPropAttached(train, propName)
@@ -3773,7 +3836,7 @@ if CLIENT then
                 local id = button.ID:gsub("^.+:", "")
                 if id ~= buttonID then continue end
 
-                local provider = GetButtonPhysicalPropName(button)
+                local provider = GetButtonPhysicalPropName(train, button)
 
                 if provider
                     and provider ~= excludedProp
@@ -3807,21 +3870,11 @@ if CLIENT then
                 for _, button in pairs(panel.buttons) do
                     if not istable(button) then continue end
 
-                    local model = button.model
-                    local generatedName = nil
-
-                    if istable(model) then
-                        generatedName = model.name or button.ID
-                    end
-
                     local matches =
-                        button.PropName == propName
-                        or generatedName == propName
-                        or (
-                            istable(model)
-                            and istable(model.lamp)
-                            and model.lamp.name == propName
-                        )
+                        GetButtonPhysicalPropName(
+                            train,
+                            button
+                        ) == propName
 
                     if matches and isstring(button.ID) then
                         exactPhysicalBinding = true
@@ -4041,6 +4094,60 @@ if CLIENT then
         return dead
     end
 
+    local function EnsureMetrostroiHiddenTables(train)
+        train.Hidden = train.Hidden or {}
+        train.Hidden.button = train.Hidden.button or {}
+    end
+
+    local function SetDamageNativeHidden(train, key, hidden)
+        if not IsSubwayTrain(train) or not isstring(key) or key == "" then
+            return
+        end
+
+        EnsureMetrostroiHiddenTables(train)
+
+        train.MEXDamageNativeHiddenOriginal =
+            train.MEXDamageNativeHiddenOriginal or {}
+
+        local record = train.MEXDamageNativeHiddenOriginal[key]
+
+        if hidden then
+            if not record then
+                record = {
+                    direct = train.Hidden[key],
+                    button = train.Hidden.button[key],
+                }
+                train.MEXDamageNativeHiddenOriginal[key] = record
+            end
+
+            -- findAimButton() in stock Metrostroi checks these tables directly
+            -- every frame. This is the authoritative way to remove tooltip and
+            -- mouse interaction for a physically missing control.
+            train.Hidden.button[key] = true
+        elseif record then
+            train.Hidden[key] = record.direct
+            train.Hidden.button[key] = record.button
+            train.MEXDamageNativeHiddenOriginal[key] = nil
+        end
+    end
+
+    local function RestoreDamageNativeHidden(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageNativeHiddenOriginal)
+        then
+            return
+        end
+
+        EnsureMetrostroiHiddenTables(train)
+
+        for key, record in pairs(train.MEXDamageNativeHiddenOriginal) do
+            train.Hidden[key] = record.direct
+            train.Hidden.button[key] = record.button
+        end
+
+        train.MEXDamageNativeHiddenOriginal = nil
+    end
+
     local function SetPhysicalPropBindingsDetached(
         train,
         propName,
@@ -4077,6 +4184,7 @@ if CLIENT then
 
             for key, originalButton in pairs(originalPanel.buttons) do
                 if not ButtonMatchesPhysicalProp(
+                    train,
                     originalButton,
                     propName
                 ) then
@@ -4087,10 +4195,36 @@ if CLIENT then
                     train.MEXDamageDeadBindings[panelName][key] = true
                     panel.buttons[key] =
                         MakeDeadButtonHitbox(originalButton)
+
+                    SetDamageNativeHidden(
+                        train,
+                        propName,
+                        true
+                    )
+                    if isstring(originalButton.ID) then
+                        SetDamageNativeHidden(
+                            train,
+                            originalButton.ID,
+                            true
+                        )
+                    end
                 else
                     train.MEXDamageDeadBindings[panelName][key] = nil
                     panel.buttons[key] =
                         CopyButtonDefinition(originalButton)
+
+                    SetDamageNativeHidden(
+                        train,
+                        propName,
+                        false
+                    )
+                    if isstring(originalButton.ID) then
+                        SetDamageNativeHidden(
+                            train,
+                            originalButton.ID,
+                            false
+                        )
+                    end
                 end
             end
         end
@@ -4166,7 +4300,7 @@ if CLIENT then
                 end
 
                 local propName =
-                    GetButtonPhysicalPropName(originalButton)
+                    GetButtonPhysicalPropName(train, originalButton)
 
                 if not propName then continue end
 
@@ -4209,6 +4343,11 @@ if CLIENT then
 
         ReconcileAttachedButtonHitboxes(train)
 
+        -- Exact physical bindings are independent from the global ID fallback
+        -- list. Always enforce them, even when MEXDamageDisabledButtonIDs is
+        -- empty (the common case for normal generated buttons).
+        EnforceDeadPhysicalBindings(train)
+
         if not istable(train.MEXDamageDisabledButtonIDs)
             or table.IsEmpty(train.MEXDamageDisabledButtonIDs)
         then
@@ -4223,8 +4362,6 @@ if CLIENT then
         end
 
         if not istable(train.ButtonMap) then return end
-
-        EnforceDeadPhysicalBindings(train)
 
         for _, panel in pairs(train.ButtonMap) do
             if not istable(panel) or not istable(panel.buttons) then continue end
@@ -5204,6 +5341,8 @@ if CLIENT then
                 end
             end
         end
+
+        RestoreDamageNativeHidden(train)
 
         train.MEXDamageV4ServerDetached = nil
         train.MEXDamageV4DetachPending = nil
