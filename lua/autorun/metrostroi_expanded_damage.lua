@@ -2309,18 +2309,10 @@ if CLIENT then
         "glass", "window", "stekl",
     }
 
-    local MEX_INVISIBLE_GLASS = CreateMaterial(
-        "mex_damage_invisible_glass_v1",
-        "VertexLitGeneric",
-        {
-            ["$basetexture"] = "color/white",
-            ["$translucent"] = "1",
-            ["$alpha"] = "0",
-            ["$nocull"] = "1",
-        }
-    )
-    local MEX_INVISIBLE_GLASS_NAME =
-        "!" .. MEX_INVISIBLE_GLASS:GetName()
+    -- Use Source's real nodraw material for broken embedded glazing.
+    -- A custom white/alpha material can still show as an opaque white lens on
+    -- some Metrostroi shaders, especially gauge/control glass.
+    local MEX_INVISIBLE_GLASS_NAME = "tools/toolsnodraw"
 
     local function CopyVector(v)
         return Vector(v.x, v.y, v.z)
@@ -3850,13 +3842,60 @@ if CLIENT then
         end
     end
 
-    local function MaterialPathLooksGlass(path)
+    local WINDOW_MATERIAL_WORDS = {
+        "window", "windows", "windscreen", "windshield",
+        "stekl", "stec",
+    }
+
+    local GLASS_CARRIER_EXCLUDED_WORDS = {
+        "lamp", "light", "indicator", "gauge", "meter", "manometer",
+        "button", "switch", "tumbler", "toggle", "display", "screen",
+        "speed", "volt", "amp", "pressure", "panel", "pult",
+    }
+
+    local function MaterialPathLooksWindow(path)
         path = string.lower(path or "")
 
-        return string.find(path, "glass", 1, true) ~= nil
-            or string.find(path, "window", 1, true) ~= nil
-            or string.find(path, "stekl", 1, true) ~= nil
-            or string.find(path, "stec", 1, true) ~= nil
+        for _, word in ipairs(GLASS_CARRIER_EXCLUDED_WORDS) do
+            if string.find(path, word, 1, true) then
+                return false
+            end
+        end
+
+        for _, word in ipairs(WINDOW_MATERIAL_WORDS) do
+            if string.find(path, word, 1, true) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function LooksLikeWindowCarrier(name, cached, mode)
+        local text = string.lower(
+            (name or "") .. " " .. ((cached and cached.model) or "")
+        )
+
+        for _, word in ipairs(GLASS_CARRIER_EXCLUDED_WORDS) do
+            if string.find(text, word, 1, true) then
+                return false
+            end
+        end
+
+        if cached and cached.glass then return true end
+
+        if mode == "passenger" then
+            return string.find(text, "salon", 1, true) ~= nil
+                or string.find(text, "interior", 1, true) ~= nil
+                or string.find(text, "body", 1, true) ~= nil
+                or string.find(text, "window", 1, true) ~= nil
+        end
+
+        return string.find(text, "cabin", 1, true) ~= nil
+            or string.find(text, "cabine", 1, true) ~= nil
+            or string.find(text, "mask", 1, true) ~= nil
+            or string.find(text, "body", 1, true) ~= nil
+            or string.find(text, "window", 1, true) ~= nil
     end
 
     local function HideGlassSubMaterials(train, ent)
@@ -3875,7 +3914,10 @@ if CLIENT then
         end
 
         for materialIndex, path in ipairs(materials) do
-            if not MaterialPathLooksGlass(path) then continue end
+            -- Embedded fallback only touches materials that are explicitly
+            -- window/windscreen-like. Generic "glass" is intentionally not
+            -- enough because many old panels use it for indicator lenses.
+            if not MaterialPathLooksWindow(path) then continue end
 
             local subIndex = materialIndex - 1
 
@@ -3903,7 +3945,7 @@ if CLIENT then
                 if isstring(previous) and previous ~= "" then
                     ent:SetSubMaterial(subIndex, previous)
                 else
-                    ent:SetSubMaterial(subIndex, nil)
+                    ent:SetSubMaterial(subIndex, "")
                 end
             end
         end
@@ -3922,42 +3964,62 @@ if CLIENT then
         end
 
         power = tonumber(power) or 0
-        if power < 0.38 then return false end
+        if power < 0.30 then return false end
 
         local shattered = 0
-        local state = BuildDamageState(train)
         local mins = train:OBBMins()
         local maxs = train:OBBMaxs()
         local center = (mins + maxs) * 0.5
         local halfLength = math.max((maxs.x - mins.x) * 0.5, 1)
-        local endness = math.abs(hitLocal.x - center.x) / halfLength
+        local halfWidth = math.max((maxs.y - mins.y) * 0.5, 1)
+        local halfHeight = math.max((maxs.z - mins.z) * 0.5, 1)
 
-        -- Head-end/cab windows are frequently baked into the main carbody MDL
-        -- rather than represented as a separate ClientEnt. If the body has a
-        -- dedicated glass material slot, remove that slot as a fallback.
-        if endness >= 0.62 then
-            shattered = shattered + HideGlassSubMaterials(train, train)
+        local endness =
+            math.abs(hitLocal.x - center.x) / halfLength
+        local sideness =
+            math.abs(hitLocal.y - center.y) / halfWidth
+        local height01 =
+            (hitLocal.z - mins.z) / math.max(maxs.z - mins.z, 1)
+
+        local cabHit =
+            endness >= 0.58
+            and height01 >= 0.42
+
+        local passengerWindowHit =
+            endness < 0.82
+            and sideness >= 0.58
+            and height01 >= 0.42
+
+        if not cabHit and not passengerWindowHit then
+            return false
         end
+
+        -- Many stock bodies (for example older 81-717 derivatives) keep
+        -- passenger/cab glazing in a dedicated *windows*.vmt slot on the main
+        -- body. Hiding that slot is safe; generic glass materials are excluded.
+        shattered = shattered + HideGlassSubMaterials(train, train)
 
         if istable(train.ClientEnts) then
             for name, prop in pairs(train.ClientEnts) do
                 if not IsValid(prop) then continue end
 
                 local cached = CacheClientProp(train, name, prop)
+                local mode = passengerWindowHit and "passenger" or "cab"
+
+                if not LooksLikeWindowCarrier(name, cached, mode) then
+                    continue
+                end
+
                 local distance = cached.anchorPos:Distance(hitLocal)
 
-                local relevant =
-                    cached.glass
-                    or (
-                        cached.cabin
-                        and endness >= 0.50
-                    )
-                    or (
-                        distance <= math.max(radius or 0, 18) + 28
-                        and cached.structural
-                    )
-
-                if not relevant then continue end
+                -- Full-length salon/interior shells often have their model
+                -- origin at the wagon origin, so do not require their anchor to
+                -- be close. Local window/cab pieces still use distance gating.
+                if not cached.fullLength
+                    and distance > math.max(radius or 0, 24) + 65
+                then
+                    continue
+                end
 
                 shattered = shattered
                     + HideGlassSubMaterials(train, prop)
@@ -3968,8 +4030,8 @@ if CLIENT then
             local worldPos = train:LocalToWorld(hitLocal)
             local effect = EffectData()
             effect:SetOrigin(worldPos)
-            effect:SetScale(math.Clamp(power, 0.5, 2))
-            effect:SetMagnitude(2)
+            effect:SetScale(math.Clamp(power, 0.5, 2.4))
+            effect:SetMagnitude(3)
             util.Effect("GlassImpact", effect)
 
             surface.PlaySound(
