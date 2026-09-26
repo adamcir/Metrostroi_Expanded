@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.2.0**
+Current damage-system module version: **0.3.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -55,8 +55,12 @@ It currently provides:
 - a **1000 ms spawn grace period** so Metrostroi initialization/coupling does not damage a newly spawned train
 - persistent per-zone structural damage while the train entity exists
 - simple client-side visual crumpling from the damaged direction
-- deformation of the outer carbody **and Metrostroi ClientEnt interior/cab/salon shells**
-- panels, buttons, gauges, handles and other small ClientEnts keep their rigid shape but their attachment point follows the deformed body/panel
+- a unified deformation field shared by the **outer carbody, salon/interior, cab equipment, panels and controls**
+- Metrostroi `ButtonMap` positions/angles/scales are deformed together with the visible panel, so buttons remain clickable after a crash
+- local impact-centered crumple/dent deformation instead of only scaling the whole wagon
+- `BuildBonePositions` deformation for train/interior models with multiple bones, allowing genuinely local bending where the existing MDL rig permits it
+- panels, buttons, gauges, handles and other small ClientEnts keep their rigid shape but remain attached to their deformed mounting point
+- the ButtonMap is cloned per wagon before deformation, so damaging one train cannot move controls on another train of the same class
 - non-accumulating client-prop transforms, so deformation stays stable instead of drifting farther every frame
 - sparks, impact decals and smoke for harder impacts
 - structural-health state
@@ -64,7 +68,7 @@ It currently provides:
 - basic left/right door-damage states
 - hooks/API that later modules can connect to real Metrostroi electrical, pneumatic and door systems
 
-The visual deformation is intentionally conservative. Source still uses the original collision mesh, so this version deforms the rendered carbody and the Metrostroi client-side interior/controls together without pretending that the underlying Source collision model is a BeamNG-style soft body. Small controls stay rigid but move with their panel instead of remaining at the undeformed coordinates.
+The damage renderer now uses one continuous local-space deformation for the visible carbody, interior and controls. Front/rear/side impacts have a local impact center, crush depth and falloff into the cabin/salon, so the interior follows the shell instead of visually separating from it. On MDLs with useful non-root bones, those bones are displaced with the local dent field as well. Source still keeps the original physics collision mesh; arbitrary per-vertex soft-body deformation of a compiled single-bone MDL is not available from ordinary Lua.
 
 ### Damage test commands
 
