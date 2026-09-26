@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.4.3**
+Damage System version: **0.4.4**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -135,3 +135,36 @@ For low-energy local hits, the detach budget is normally one component. Large cr
 Small controls have priority over a backing panel/case occupying the same area, so hitting one button should not detach the full dashboard panel.
 
 Structural deformation also uses much lower individual mounting thresholds for fragile controls. This prevents the old failure mode where a complete group of buttons could stay rigidly attached to a deformed `ButtonMap` and move across the cab as one cluster.
+
+
+### Passenger-door leaf separation
+
+The current 81-717 Metrostroi release renders each passenger doorway as one combined ClientEnt model (`81-717_doors_pos*.mdl`). Older individual leaf models (`door_right_spb.mdl` and `door_left_spb.mdl`) still exist in the content but their original ClientProp creation code is commented out upstream.
+
+Damage System 0.4.4 uses those individual leaf models when a combined 81-717 passenger door tears off. The combined attached ClientEnt is hidden and two separate server-side debris entities are spawned with independent impulses and angular velocities.
+
+If an installation does not contain the individual leaf models, the system falls back to detaching the combined door model instead of silently refusing the failure.
+
+### Debris origin and animation
+
+Metrostroi ClientEnt models may be authored with their model origin far away from the actual visible geometry. Damage debris therefore:
+
+- places the physics entity at the real visual-geometry centre,
+- creates a centred, slightly reduced box collision around the model extents,
+- renders the MDL with an inverse model-centre offset,
+- captures the current sequence, cycle and `position` pose parameter at detachment,
+- freezes playback after detachment.
+
+This keeps the visible debris aligned with its physics body and prevents detached controls/doors from continuing normal Metrostroi animation.
+
+### Functional controller failures
+
+Certain standalone ClientEnts do not have their own ButtonMap entry even though keyboard shortcuts operate the same physical device.
+
+0.4.4 adds explicit functional mappings:
+
+- KV/GRKV controller: `KVUp`, `KVDown`, unlock and direct KV positions are disabled when the physical controller detaches.
+- driver brake valve/crane: `PneumaticBrakeUp`, `PneumaticBrakeDown`, direct brake positions and emergency braking input are disabled when the physical brake-valve model detaches.
+- parking brake and disconnect valves retain their existing explicit mappings.
+
+All of these are enforced by the server-side `ButtonEvent` guard, not only by hiding the clickable ClientEnt.
