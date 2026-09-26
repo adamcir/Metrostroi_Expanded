@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.1.0**
+Current damage-system module version: **0.2.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -52,15 +52,19 @@ It currently provides:
 - front, rear, left-side and right-side damage zones
 - automatic crash detection from sudden velocity changes
 - support for `DMG_CRUSH` and blast damage
+- a **1000 ms spawn grace period** so Metrostroi initialization/coupling does not damage a newly spawned train
 - persistent per-zone structural damage while the train entity exists
 - simple client-side visual crumpling from the damaged direction
+- deformation of the outer carbody **and Metrostroi ClientEnt interior/cab/salon shells**
+- panels, buttons, gauges, handles and other small ClientEnts keep their rigid shape but their attachment point follows the deformed body/panel
+- non-accumulating client-prop transforms, so deformation stays stable instead of drifting farther every frame
 - sparks, impact decals and smoke for harder impacts
 - structural-health state
 - basic electrical-damage state
 - basic left/right door-damage states
 - hooks/API that later modules can connect to real Metrostroi electrical, pneumatic and door systems
 
-The visual deformation is intentionally conservative. Source still uses the original collision mesh and Metrostroi child props, so this first version deforms the rendered carbody without pretending that the underlying Source collision model is a BeamNG-style soft body.
+The visual deformation is intentionally conservative. Source still uses the original collision mesh, so this version deforms the rendered carbody and the Metrostroi client-side interior/controls together without pretending that the underlying Source collision model is a BeamNG-style soft body. Small controls stay rigid but move with their panel instead of remaining at the undeformed coordinates.
 
 ### Damage test commands
 
