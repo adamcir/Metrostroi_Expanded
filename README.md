@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.1**
+Current damage-system module version: **0.6.2**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -214,3 +214,11 @@ The visual body deformation remains limited by the bones and vertex weights pres
 - passenger-compartment side window hits are now detected independently from cab-window hits and can remove shared passenger-window material slots on the body/salon shell
 - detached doors receive an off-centre tipping moment plus short wake-up checks so tall leaves do not remain balanced upright on their bottom edge
 - localized structural ClientEnt shells such as cab masks/body shells get a small per-piece crush matrix when the underlying stock MDL does not expose enough useful deformation bones; the whole wagon is still never globally scaled
+
+
+### Damage 0.6.2 hotfix
+
+- fixes a Lua lexical-scope crash where `ApplyBreakawayImpulse` referenced `LocalDirectionToWorld` before its local declaration
+- fixes the same class of bug in `ApplyLocalStructuralCrushMatrix`, which referenced later-local `ContainsAnyWord` / breakaway word tables
+- direction-conversion helpers now live before their first use and the local structural-crush filter no longer depends on later declarations
+- a full-file scan for local-function calls before declaration found no remaining forward-reference hazards except an intentionally nested local helper
