@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.5.1**
+Current damage-system module version: **0.5.2**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -176,3 +176,10 @@ Original Metrostroi code, train models, textures and other assets are not redist
 ## License
 
 Metrostroi Expanded's own source code is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
+
+
+### Damage 0.5.2 fixes
+
+- adds an `OnKeyEvent` guard before Metrostroi can execute `OnKeyPress/OnKeyRelease`, fixing controls such as pneumatic F/R that could react before the existing `ButtonEvent` blocker
+- restricts geometry-nearest ButtonMap matching to standalone valve/controller hardware; arbitrary props no longer steal nearby large door hitboxes
+- explicitly excludes `FrontDoor`, `RearDoor`, `CabinDoor` and `PassengerDoor` from paired passenger-door leaf splitting; only true `doorNx0/doorNx1` side-door ClientEnts are eligible
