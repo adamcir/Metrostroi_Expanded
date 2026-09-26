@@ -17,6 +17,8 @@ local ZONES = {
     rear = true,
     left = true,
     right = true,
+    roof = true,
+    floor = true,
 }
 
 local SU_TO_KMH = 0.09144 -- Source units/s (inches/s) -> km/h
@@ -47,7 +49,9 @@ function MEXD.GetOverallDamage(train)
         MEXD.GetZoneDamage(train, "front"),
         MEXD.GetZoneDamage(train, "rear"),
         MEXD.GetZoneDamage(train, "left"),
-        MEXD.GetZoneDamage(train, "right")
+        MEXD.GetZoneDamage(train, "right"),
+        MEXD.GetZoneDamage(train, "roof"),
+        MEXD.GetZoneDamage(train, "floor")
     )
 end
 
@@ -68,6 +72,10 @@ local function ZoneLocalImpactPoint(train, zone)
         return Vector(center.x, -math.max(math.abs(mins.y), math.abs(maxs.y)), center.z)
     elseif zone == "right" then
         return Vector(center.x, math.max(math.abs(mins.y), math.abs(maxs.y)), center.z)
+    elseif zone == "roof" then
+        return Vector(center.x, center.y, maxs.z)
+    elseif zone == "floor" then
+        return Vector(center.x, center.y, mins.z)
     end
 
     return center
@@ -78,6 +86,8 @@ local function ZoneOutwardNormal(train, zone)
     if zone == "rear" then return -train:GetForward() end
     if zone == "left" then return -train:GetRight() end
     if zone == "right" then return train:GetRight() end
+    if zone == "roof" then return train:GetUp() end
+    if zone == "floor" then return -train:GetUp() end
     return train:GetUp()
 end
 
@@ -88,7 +98,9 @@ local function UpdateDamageState(train)
     local rear = MEXD.GetZoneDamage(train, "rear")
     local left = MEXD.GetZoneDamage(train, "left")
     local right = MEXD.GetZoneDamage(train, "right")
-    local overall = math.max(front, rear, left, right)
+    local roof = MEXD.GetZoneDamage(train, "roof")
+    local floor = MEXD.GetZoneDamage(train, "floor")
+    local overall = math.max(front, rear, left, right, roof, floor)
 
     train:SetNW2Float("MEX.Damage.overall", overall)
     train:SetNW2Float("MEX.StructuralHealth", 1 - overall)
@@ -220,6 +232,7 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.electrical", 0)
         train:SetNW2Float("MEX.Damage.overall", 0)
         train:SetNW2Float("MEX.StructuralHealth", 1)
+        train:SetNW2Float("MEX.Damage.LastImpactKmh", 0)
 
         train:SetNW2Bool("MEX.Damage.Moderate", false)
         train:SetNW2Bool("MEX.Damage.Heavy", false)
@@ -332,14 +345,20 @@ if SERVER then
     ClassifyFromWorldDeltaVelocity = function(train, deltaVelocity)
         local x = deltaVelocity:Dot(train:GetForward())
         local y = deltaVelocity:Dot(train:GetRight())
+        local z = deltaVelocity:Dot(train:GetUp())
 
-        if math.abs(x) >= math.abs(y) then
+        local ax, ay, az = math.abs(x), math.abs(y), math.abs(z)
+
+        if ax >= ay and ax >= az then
             -- A front impact pushes/decelerates the train towards -local X.
             return x < 0 and "front" or "rear"
+        elseif ay >= az then
+            -- A hit on the right side pushes the train towards -local Y.
+            return y < 0 and "right" or "left"
         end
 
-        -- A hit on the right side pushes the train towards -local Y.
-        return y < 0 and "right" or "left"
+        -- Roof contact pushes down; floor contact pushes up.
+        return z < 0 and "roof" or "floor"
     end
 
     ClassifyFromWorldPosition = function(train, worldPos)
@@ -351,15 +370,19 @@ if SERVER then
 
         local centerX = (mins.x + maxs.x) * 0.5
         local centerY = (mins.y + maxs.y) * 0.5
+        local centerZ = (mins.z + maxs.z) * 0.5
 
         local nx = math.abs(localPos.x - centerX) / math.max((maxs.x - mins.x) * 0.5, 1)
         local ny = math.abs(localPos.y - centerY) / math.max((maxs.y - mins.y) * 0.5, 1)
+        local nz = math.abs(localPos.z - centerZ) / math.max((maxs.z - mins.z) * 0.5, 1)
 
-        if nx >= ny then
+        if nx >= ny and nx >= nz then
             return localPos.x >= centerX and "front" or "rear"
+        elseif ny >= nz then
+            return localPos.y >= centerY and "right" or "left"
         end
 
-        return localPos.y >= centerY and "right" or "left"
+        return localPos.z >= centerZ and "roof" or "floor"
     end
 
     hook.Add("EntityTakeDamage", "MEX.Damage.FromEntityDamage", function(ent, dmginfo)
@@ -515,7 +538,7 @@ if SERVER then
 
         local zone = string.lower(args[1] or "front")
         if not ZONES[zone] then
-            print("[Metrostroi Expanded/Damage] Zone must be: front, rear, left or right.")
+            print("[Metrostroi Expanded/Damage] Zone must be: front, rear, left, right, roof or floor.")
             return
         end
 
@@ -555,12 +578,14 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
             MEXD.GetZoneDamage(train, "left"),
             MEXD.GetZoneDamage(train, "right"),
+            MEXD.GetZoneDamage(train, "roof"),
+            MEXD.GetZoneDamage(train, "floor"),
             train:GetNW2Float("MEX.StructuralHealth", 1),
             train:GetNW2Float("MEX.Damage.electrical", 0),
             train:GetNW2Float("MEX.Damage.LastImpactKmh", 0)
@@ -629,6 +654,10 @@ if CLIENT then
             return Vector(center.x, mins.y, center.z)
         elseif zone == "right" then
             return Vector(center.x, maxs.y, center.z)
+        elseif zone == "roof" then
+            return Vector(center.x, center.y, maxs.z)
+        elseif zone == "floor" then
+            return Vector(center.x, center.y, mins.z)
         end
 
         return center
@@ -652,7 +681,9 @@ if CLIENT then
         local rear = train:GetNW2Float("MEX.Damage.rear", 0)
         local left = train:GetNW2Float("MEX.Damage.left", 0)
         local right = train:GetNW2Float("MEX.Damage.right", 0)
-        local overall = math.max(front, rear, left, right)
+        local roof = train:GetNW2Float("MEX.Damage.roof", 0)
+        local floor = train:GetNW2Float("MEX.Damage.floor", 0)
+        local overall = math.max(front, rear, left, right, roof, floor)
 
         if overall <= 0.001 then return nil end
 
@@ -665,6 +696,8 @@ if CLIENT then
             rear = rear,
             left = left,
             right = right,
+            roof = roof,
+            floor = floor,
             overall = overall,
             mins = mins,
             maxs = maxs,
@@ -677,6 +710,8 @@ if CLIENT then
                 rear = ReadHitLocal(train, "rear"),
                 left = ReadHitLocal(train, "left"),
                 right = ReadHitLocal(train, "right"),
+                roof = ReadHitLocal(train, "roof"),
+                floor = ReadHitLocal(train, "floor"),
             },
         }
     end
@@ -787,6 +822,37 @@ if CLIENT then
             * (0.030 + damage * 0.040) * influence
     end
 
+    local function AddVerticalIntrusion(offset, localPos, state, zone, damage, inwardSign)
+        if damage <= 0.001 then return end
+
+        local hit = state.hits[zone]
+        local surfaceZ = zone == "roof" and state.maxs.z or state.mins.z
+        local depth = zone == "roof"
+            and (surfaceZ - localPos.z)
+            or (localPos.z - surfaceZ)
+
+        local severe = math.max(damage - 0.55, 0) / 0.45
+        local reach = 34 + damage * 42 + severe * 48
+        if depth < -7 or depth > reach then return end
+
+        local inward = Smooth01(1 - math.Clamp(depth / reach, 0, 1))
+        local radiusX = 62 + damage * 80
+        local radiusY = 34 + damage * 42
+
+        local dx = (localPos.x - hit.x) / radiusX
+        local dy = (localPos.y - hit.y) / radiusY
+        local radial = Smooth01(1 - math.Clamp(dx * dx + dy * dy, 0, 1))
+        local influence = inward * radial
+        if influence <= 0.0001 then return end
+
+        local intrusion = (3 + damage * 18 + severe * 20) * influence
+        offset.z = offset.z + inwardSign * intrusion
+        offset.x = offset.x + (hit.x - localPos.x)
+            * (0.025 + damage * 0.04) * influence
+        offset.y = offset.y + (hit.y - localPos.y)
+            * (0.025 + damage * 0.04) * influence
+    end
+
     local function DeformLocalPoint(localPos, state)
         if not state then return CopyVector(localPos) end
 
@@ -799,6 +865,10 @@ if CLIENT then
         -- Positive Y = right side, negative Y = left side.
         AddSideIntrusion(offset, localPos, state, "right", state.right, -1)
         AddSideIntrusion(offset, localPos, state, "left", state.left, 1)
+
+        -- Roof impact goes down; floor/underframe impact goes up.
+        AddVerticalIntrusion(offset, localPos, state, "roof", state.roof, -1)
+        AddVerticalIntrusion(offset, localPos, state, "floor", state.floor, 1)
 
         return localPos + offset
     end
@@ -1599,9 +1669,11 @@ if CLIENT then
                 rear = Color(255, 170, 70),
                 left = Color(80, 180, 255),
                 right = Color(170, 100, 255),
+                roof = Color(255, 235, 90),
+                floor = Color(80, 255, 150),
             }
 
-            for _, zone in ipairs({"front", "rear", "left", "right"}) do
+            for _, zone in ipairs({"front", "rear", "left", "right", "roof", "floor"}) do
                 local amount = state[zone]
                 if amount <= 0.001 then continue end
 
