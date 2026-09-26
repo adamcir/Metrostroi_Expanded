@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.4.2"
+MEXD.Version = "0.4.3"
 
 local ZONES = {
     front = true,
@@ -126,6 +126,7 @@ if SERVER then
     util.AddNetworkString("MEX.DetachRequest")
     util.AddNetworkString("MEX.ComponentDetached")
     util.AddNetworkString("MEX.DetachReset")
+    util.AddNetworkString("MEX.ComponentImpact")
 
     local ClassifyFromWorldDeltaVelocity
     local ClassifyFromWorldPosition
@@ -391,6 +392,136 @@ if SERVER then
         return debris
     end
 
+    local COMPONENT_IMPACT_LIFETIME = 0.90
+
+    local function PruneComponentImpacts(train)
+        if not istable(train.MEXDamageComponentImpacts) then
+            train.MEXDamageComponentImpacts = {}
+            return
+        end
+
+        local now = CurTime()
+
+        for i = #train.MEXDamageComponentImpacts, 1, -1 do
+            local impact = train.MEXDamageComponentImpacts[i]
+            if not istable(impact)
+                or impact.expires <= now
+                or impact.remaining <= 0
+            then
+                table.remove(train.MEXDamageComponentImpacts, i)
+            end
+        end
+    end
+
+    local function SendComponentImpact(
+        train,
+        worldPos,
+        power,
+        radius,
+        maxDetach,
+        source
+    )
+        if not IsSubwayTrain(train) or not isvector(worldPos) then return end
+
+        power = math.Clamp(tonumber(power) or 0, 0.05, 1.5)
+        radius = math.Clamp(tonumber(radius) or 20, 8, 180)
+        maxDetach = math.Clamp(math.floor(tonumber(maxDetach) or 1), 1, 12)
+
+        PruneComponentImpacts(train)
+
+        train.MEXDamageComponentImpactSerial =
+            (train.MEXDamageComponentImpactSerial or 0) + 1
+
+        local impact = {
+            id = train.MEXDamageComponentImpactSerial,
+            localPos = train:WorldToLocal(worldPos),
+            power = power,
+            radius = radius,
+            remaining = maxDetach,
+            source = source or "unknown",
+            expires = CurTime() + COMPONENT_IMPACT_LIFETIME,
+        }
+
+        table.insert(train.MEXDamageComponentImpacts, impact)
+
+        net.Start("MEX.ComponentImpact")
+            net.WriteEntity(train)
+            net.WriteUInt(impact.id % 65536, 16)
+            net.WriteVector(impact.localPos)
+            net.WriteFloat(power)
+            net.WriteFloat(radius)
+            net.WriteUInt(maxDetach, 4)
+        net.Broadcast()
+    end
+
+    local function FindRecentComponentImpact(train, anchorLocal)
+        if not IsSubwayTrain(train) or not isvector(anchorLocal) then
+            return nil
+        end
+
+        PruneComponentImpacts(train)
+
+        local best = nil
+        local bestScore = 0
+
+        for _, impact in ipairs(train.MEXDamageComponentImpacts or {}) do
+            if impact.remaining <= 0 then continue end
+
+            local distance = anchorLocal:Distance(impact.localPos)
+            if distance > impact.radius then continue end
+
+            local falloff = 1 - distance / math.max(impact.radius, 1)
+            local score = falloff * impact.power
+
+            if score > bestScore then
+                best = impact
+                bestScore = score
+            end
+        end
+
+        return best, bestScore
+    end
+
+    local function DamageImpactWorldPosition(train, dmginfo)
+        local pos = dmginfo:GetDamagePosition()
+
+        if isvector(pos) and pos ~= vector_origin then
+            return pos
+        end
+
+        local attacker = dmginfo:GetAttacker()
+
+        if IsValid(attacker) and attacker:IsPlayer() then
+            local startPos = attacker:GetShootPos()
+            local trace = util.TraceLine({
+                start = startPos,
+                endpos = startPos + attacker:GetAimVector() * 160,
+                filter = attacker,
+            })
+
+            if trace.Entity == train and trace.Hit then
+                return trace.HitPos
+            end
+        end
+
+        if IsValid(attacker) then
+            return train:NearestPoint(attacker:GetPos())
+        end
+
+        return train:GetPos()
+    end
+
+    local function IsComponentDamageType(dmginfo)
+        return
+            dmginfo:IsDamageType(DMG_BULLET)
+            or dmginfo:IsDamageType(DMG_BUCKSHOT)
+            or dmginfo:IsDamageType(DMG_CLUB)
+            or dmginfo:IsDamageType(DMG_SLASH)
+            or dmginfo:IsDamageType(DMG_CRUSH)
+            or dmginfo:IsDamageType(DMG_BLAST)
+            or dmginfo:IsDamageType(DMG_VEHICLE)
+    end
+
     local function InitializeTrainDamage(train)
         if not IsSubwayTrain(train) then return end
         if train.MEXDamageInitialized then return end
@@ -456,6 +587,15 @@ if SERVER then
                 ent.MEXDamageCrashCooldown = CurTime() + 0.12
                 ent:SetNW2Float("MEX.Damage.LastImpactKmh", impactKmh)
 
+                SendComponentImpact(
+                    ent,
+                    hitPos,
+                    math.Clamp(impactKmh / 42, 0.15, 1.5),
+                    math.Clamp(16 + impactKmh * 1.45, 20, 150),
+                    math.Clamp(1 + math.floor(impactKmh / 16), 1, 10),
+                    "physics"
+                )
+
                 MEXD.ApplyDamage(
                     ent,
                     zone,
@@ -500,6 +640,7 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.overall", 0)
         train:SetNW2Float("MEX.StructuralHealth", 1)
         train:SetNW2Float("MEX.Damage.LastImpactKmh", 0)
+        train.MEXDamageComponentImpacts = {}
 
         train:SetNW2Bool("MEX.Damage.Moderate", false)
         train:SetNW2Bool("MEX.Damage.Heavy", false)
@@ -731,15 +872,40 @@ if SERVER then
 
         local zone, localScore = FindNearestDamagedZone(train, anchorLocal)
         local overall = MEXD.GetOverallDamage(train)
+        local directImpact, directScore =
+            FindRecentComponentImpact(train, anchorLocal)
 
-        -- The client chooses the exact mounting failure from its visible
-        -- ClientEnt geometry, but the server independently requires meaningful
-        -- structural damage close to that mounting point.
-        local minimumScore = isDoor and 0.10 or (isControl and 0.08 or 0.12)
-        local minimumOverall = isDoor and 0.42 or (isControl and 0.50 or 0.56)
+        -- A mounting can fail either from accumulated structural deformation
+        -- or from a direct local hit (crowbar, bullet, local collision).
+        -- Direct hits are intentionally local and consume one slot from that
+        -- impact so a pistol shot does not detach an entire dashboard.
+        local structuralMinimum =
+            isDoor and 0.055
+            or (isControl and 0.020 or 0.035)
 
-        if not zone or localScore < minimumScore or overall < minimumOverall then
+        local directMinimum =
+            isDoor and 0.62
+            or (isControl and 0.11 or 0.20)
+
+        local structuralOK =
+            zone ~= nil
+            and localScore >= structuralMinimum
+            and overall >= (isDoor and 0.18 or 0.08)
+
+        local directOK =
+            directImpact ~= nil
+            and directScore >= directMinimum
+
+        if not structuralOK and not directOK then
             return
+        end
+
+        if directOK then
+            directImpact.remaining = math.max(0, directImpact.remaining - 1)
+            zone = zone or ClassifyFromWorldPosition(
+                train,
+                train:LocalToWorld(anchorLocal)
+            )
         end
 
         local debris = SpawnDetachedPhysicsProp(
@@ -805,6 +971,45 @@ if SERVER then
 
         InitializeTrainDamage(ent)
         if CurTime() < (ent.MEXDamageIgnoreUntil or 0) then return end
+
+        local rawDamage = math.max(dmginfo:GetDamage(), 0)
+
+        if IsComponentDamageType(dmginfo) and rawDamage > 0 then
+            local componentPos = DamageImpactWorldPosition(ent, dmginfo)
+            local isBlast = dmginfo:IsDamageType(DMG_BLAST)
+            local isBuckshot = dmginfo:IsDamageType(DMG_BUCKSHOT)
+            local isCrush = dmginfo:IsDamageType(DMG_CRUSH)
+                or dmginfo:IsDamageType(DMG_VEHICLE)
+
+            local radius
+            local maxDetach
+
+            if isBlast then
+                radius = math.Clamp(38 + rawDamage * 0.75, 45, 150)
+                maxDetach = math.Clamp(2 + math.floor(rawDamage / 24), 2, 10)
+            elseif isCrush then
+                radius = math.Clamp(22 + rawDamage * 0.45, 24, 105)
+                maxDetach = math.Clamp(1 + math.floor(rawDamage / 32), 1, 7)
+            elseif isBuckshot then
+                radius = math.Clamp(25 + rawDamage * 0.22, 26, 55)
+                maxDetach = math.Clamp(1 + math.floor(rawDamage / 35), 1, 4)
+            else
+                -- Crowbar/pistol/rifle: a very local hit. Normally only the
+                -- nearest mounted object loses its attachment.
+                radius = math.Clamp(13 + rawDamage * 0.18, 14, 30)
+                maxDetach = 1
+            end
+
+            SendComponentImpact(
+                ent,
+                componentPos,
+                math.Clamp(0.32 + rawDamage / 40, 0.32, 1.35),
+                radius,
+                maxDetach,
+                "damageinfo"
+            )
+        end
+
         if not (
             dmginfo:IsDamageType(DMG_CRUSH)
             or dmginfo:IsDamageType(DMG_BLAST)
@@ -812,7 +1017,6 @@ if SERVER then
             return
         end
 
-        local rawDamage = dmginfo:GetDamage()
         if rawDamage <= 1 then return end
 
         local pos = dmginfo:GetDamagePosition()
@@ -2191,9 +2395,9 @@ if CLIENT then
         )
 
         if isDoor then
-            local threshold = 6.5 + seed * 5.5
-            if state.overall >= 0.46 and displacement >= threshold then
-                RequestServerDetach(
+            local threshold = 2.2 + seed * 2.8
+            if displacement >= threshold then
+                local requested = RequestServerDetach(
                     train,
                     name,
                     prop,
@@ -2203,14 +2407,21 @@ if CLIENT then
                     true,
                     false
                 )
+
+                if requested then
+                    ClearClientPropRenderTransform(prop)
+                    return true
+                end
             end
             return false
         end
 
         if isControl then
-            local threshold = 3.8 + seed * 6.2
-            if state.overall >= 0.56 and displacement >= threshold then
-                RequestServerDetach(
+            -- Small controls should not ride metres away together with a bent
+            -- ButtonMap. Their mounts fail after only a small local movement.
+            local threshold = 0.45 + seed * 1.05
+            if displacement >= threshold then
+                local requested = RequestServerDetach(
                     train,
                     name,
                     prop,
@@ -2220,14 +2431,19 @@ if CLIENT then
                     false,
                     true
                 )
+
+                if requested then
+                    ClearClientPropRenderTransform(prop)
+                    return true
+                end
             end
             return false
         end
 
         if isBreakaway then
-            local threshold = 5.5 + seed * 9.5
-            if state.overall >= 0.62 and displacement >= threshold then
-                RequestServerDetach(
+            local threshold = 1.0 + seed * 2.4
+            if displacement >= threshold then
+                local requested = RequestServerDetach(
                     train,
                     name,
                     prop,
@@ -2237,6 +2453,11 @@ if CLIENT then
                     false,
                     false
                 )
+
+                if requested then
+                    ClearClientPropRenderTransform(prop)
+                    return true
+                end
             end
         end
 
