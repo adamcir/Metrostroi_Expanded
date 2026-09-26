@@ -112,6 +112,9 @@ end
 if SERVER then
     util.AddNetworkString("MEX.DamageImpact")
 
+    local ClassifyFromWorldDeltaVelocity
+    local ClassifyFromWorldPosition
+
     local function InitializeTrainDamage(train)
         if not IsSubwayTrain(train) then return end
         if train.MEXDamageInitialized then return end
@@ -325,9 +328,6 @@ if SERVER then
 
         return new
     end
-
-    local ClassifyFromWorldDeltaVelocity
-    local ClassifyFromWorldPosition
 
     ClassifyFromWorldDeltaVelocity = function(train, deltaVelocity)
         local x = deltaVelocity:Dot(train:GetForward())
