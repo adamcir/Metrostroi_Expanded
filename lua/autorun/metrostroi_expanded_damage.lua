@@ -1906,6 +1906,100 @@ if CLIENT then
         return true
     end
 
+    local function EnsureDamagedLightGuard(train)
+        if train.MEXDamageOriginalSetLightPower then return end
+        if not isfunction(train.SetLightPower) then return end
+
+        train.MEXDamageOriginalSetLightPower = train.SetLightPower
+        train.MEXDamageDisabledLights = train.MEXDamageDisabledLights or {}
+
+        train.SetLightPower = function(self, index, power, brightness)
+            if self.MEXDamageDisabledLights
+                and self.MEXDamageDisabledLights[index]
+            then
+                return self.MEXDamageOriginalSetLightPower(
+                    self,
+                    index,
+                    false,
+                    0
+                )
+            end
+
+            return self.MEXDamageOriginalSetLightPower(
+                self,
+                index,
+                power,
+                brightness
+            )
+        end
+    end
+
+    local function DisableLightsForDetachedComponent(
+        train,
+        name,
+        cached
+    )
+        if not istable(train.Lights) or not cached then return end
+
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+
+        local isLamp =
+            string.find(text, "lamp", 1, true)
+            or string.find(text, "light", 1, true)
+            or string.find(text, "headlight", 1, true)
+
+        if not isLamp then return end
+
+        EnsureDamagedLightGuard(train)
+
+        local candidates = {}
+        for index, light in pairs(train.Lights) do
+            if not istable(light) or not isvector(light[2]) then continue end
+
+            local distance = cached.anchorPos:Distance(light[2])
+            candidates[#candidates + 1] = {
+                index = index,
+                distance = distance,
+            }
+        end
+
+        table.sort(candidates, function(a, b)
+            return a.distance < b.distance
+        end)
+
+        local radius =
+            string.find(text, "headlight", 1, true) and 135 or 75
+
+        local disabled = 0
+        for _, candidate in ipairs(candidates) do
+            if candidate.distance > radius then continue end
+
+            train.MEXDamageDisabledLights[candidate.index] = true
+            train:MEXDamageOriginalSetLightPower(
+                candidate.index,
+                false,
+                0
+            )
+            disabled = disabled + 1
+        end
+
+        -- Some Metrostroi lamp group models are authored around train origin,
+        -- while their visible mesh sits at the front. In that case the cached
+        -- model anchor and the light definition may not be close enough. For a
+        -- clearly named headlight group, disable the nearest light as a safe
+        -- fallback.
+        if disabled == 0
+            and string.find(text, "headlight", 1, true)
+            and candidates[1]
+        then
+            local index = candidates[1].index
+            train.MEXDamageDisabledLights[index] = true
+            train:MEXDamageOriginalSetLightPower(index, false, 0)
+        end
+    end
+
     local function MarkDetachedClient(train, name, debris)
         train.MEXDamageV4ServerDetached =
             train.MEXDamageV4ServerDetached or {}
@@ -1930,6 +2024,16 @@ if CLIENT then
                 if previous.oldNoDraw == nil then
                     previous.oldNoDraw = prop:GetNoDraw()
                 end
+
+                local cached = CacheClientProp(train, name, prop)
+                previous.anchorPos = cached and cached.anchorPos or nil
+                previous.model = cached and cached.model or nil
+
+                DisableLightsForDetachedComponent(
+                    train,
+                    name,
+                    cached
+                )
 
                 prop:SetRenderOrigin(nil)
                 prop:SetRenderAngles(nil)
@@ -2047,6 +2151,7 @@ if CLIENT then
 
         train.MEXDamageV4ServerDetached = nil
         train.MEXDamageV4DetachPending = nil
+        train.MEXDamageDisabledLights = {}
     end
 
     net.Receive("MEX.ComponentDetached", function()
