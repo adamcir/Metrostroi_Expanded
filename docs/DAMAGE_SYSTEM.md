@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.6.1**
+Damage System version: **0.6.2**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -365,3 +365,12 @@ Door debris uses a centred physics box but now receives a deliberate off-centre 
 When a localized structural ClientEnt is available but its MDL has insufficient child bones, 0.6.1 applies a small crush matrix only to that localized shell. This is restricted to structural cab/body/mask/interior pieces and excludes doors, controls, lamps and panels.
 
 No matrix is ever applied to scale the complete train entity.
+
+
+## Damage System 0.6.2
+
+Hotfix for Lua lexical scoping introduced during the 0.6.x rewrite.
+
+`ApplyBreakawayImpulse` was defined before the local `LocalDirectionToWorld` declaration, so Lua resolved the name as a global inside that closure. The same issue affected `ApplyLocalStructuralCrushMatrix` and the later `ContainsAnyWord` helper/word tables.
+
+The helpers/dependencies are now ordered before their first use (or made self-contained), eliminating the runtime `attempt to call global ... (a nil value)` errors.
