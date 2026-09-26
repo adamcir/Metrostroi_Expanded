@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.6.2**
+Damage System version: **0.6.3**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -374,3 +374,16 @@ Hotfix for Lua lexical scoping introduced during the 0.6.x rewrite.
 `ApplyBreakawayImpulse` was defined before the local `LocalDirectionToWorld` declaration, so Lua resolved the name as a global inside that closure. The same issue affected `ApplyLocalStructuralCrushMatrix` and the later `ContainsAnyWord` helper/word tables.
 
 The helpers/dependencies are now ordered before their first use (or made self-contained), eliminating the runtime `attempt to call global ... (a nil value)` errors.
+
+
+## Damage System 0.6.3
+
+### Physical control state is authoritative
+
+A control is considered usable while its original physical ClientEnt is attached and visible.
+
+For generated ButtonMap controls, the damage system first resolves an exact physical binding using `PropName`, generated model name, or lamp prop name. If an exact binding exists, no spatial-neighbour inference is performed.
+
+Only after `MEX.ComponentDetached` confirms that exact component has become independent debris are its ButtonMap hitbox and related server-side keyboard aliases disabled.
+
+Legacy standalone hardware such as driver valves/controllers may still require spatial association because upstream Metrostroi does not expose a direct ButtonMap prop link. That fallback now uses only the nearest candidate, preventing one detached item from disabling multiple neighbouring controls that remain physically attached.
