@@ -782,11 +782,21 @@ if CLIENT then
     ---------------------------------------------------------------------------
 
     local function RestoreButtonMap(train)
-        if not istable(train.ButtonMap) then return end
+        if not IsValid(train) then return end
 
         if train.MEXDamageButtonMapOriginal then
             train.ButtonMap = train.MEXDamageButtonMapOriginal
             train.MEXDamageButtonMapOriginal = nil
+        elseif train.MEXDamagePrivateButtonMap then
+            -- v0.3.0 created a private copy without retaining an explicit
+            -- original pointer. Recover the untouched ButtonMap from the
+            -- registered Metrostroi entity class so already-running trains can
+            -- be repaired without a respawn/map restart.
+            local stored = scripted_ents.GetStored(train:GetClass())
+            local original = stored and stored.t and stored.t.ButtonMap
+            if istable(original) then
+                train.ButtonMap = original
+            end
         end
 
         train.MEXDamagePrivateButtonMap = nil
