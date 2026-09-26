@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.3.1"
+MEXD.Version = "0.4.0"
 
 local ZONES = {
     front = true,
@@ -21,6 +21,8 @@ local ZONES = {
 
 local SU_TO_KMH = 0.09144 -- Source units/s (inches/s) -> km/h
 local SPAWN_GRACE_SECONDS = 1.0
+local MIN_CRASH_SPEED_KMH = 6.0
+local MAX_CRASH_SPEED_KMH = 65.0
 
 local function IsSubwayTrain(ent)
     if not IsValid(ent) then return false end
@@ -123,6 +125,67 @@ if SERVER then
 
         train:SetNW2Bool("MEX.DamageReady", false)
         train:SetNW2Float("MEX.DamageReadyAt", train.MEXDamageIgnoreUntil)
+
+        -- PhysicsCollide gives us the real contact point and pre-impact
+        -- velocities. This is the primary crash detector in v0.4; the old
+        -- velocity-change detector remains only as a fallback for collisions
+        -- that Source does not report to the scripted train entity.
+        if not train.MEXDamagePhysicsCallback then
+            train.MEXDamagePhysicsCallback = train:AddCallback("PhysicsCollide", function(ent, data)
+                if not IsSubwayTrain(ent) then return end
+                if CurTime() < (ent.MEXDamageIgnoreUntil or 0) then return end
+                if (ent.MEXDamageCrashCooldown or 0) > CurTime() then return end
+                if not istable(data) then return end
+
+                local ourOld = isvector(data.OurOldVelocity) and data.OurOldVelocity or ent:GetVelocity()
+                local theirOld = isvector(data.TheirOldVelocity) and data.TheirOldVelocity or vector_origin
+                local relativeVelocity = ourOld - theirOld
+
+                local hitNormal = isvector(data.HitNormal) and data.HitNormal or vector_origin
+                local normalSpeed = 0
+                if hitNormal:LengthSqr() > 0.001 then
+                    normalSpeed = math.abs(relativeVelocity:Dot(hitNormal))
+                end
+
+                local relativeSpeed = relativeVelocity:Length()
+                local impactSpeedSU = math.max(normalSpeed, relativeSpeed * 0.45)
+
+                if isvector(data.HitSpeed) then
+                    impactSpeedSU = math.max(impactSpeedSU, data.HitSpeed:Length())
+                end
+
+                local impactKmh = impactSpeedSU * SU_TO_KMH
+                if impactKmh < MIN_CRASH_SPEED_KMH then return end
+
+                local hitPos = isvector(data.HitPos) and data.HitPos or ent:GetPos()
+                local zone = ClassifyFromWorldPosition and ClassifyFromWorldPosition(ent, hitPos) or nil
+                if not zone then
+                    zone = ClassifyFromWorldDeltaVelocity and ClassifyFromWorldDeltaVelocity(ent, relativeVelocity) or "front"
+                end
+
+                local severity = math.Clamp(
+                    (impactKmh - MIN_CRASH_SPEED_KMH)
+                    / (MAX_CRASH_SPEED_KMH - MIN_CRASH_SPEED_KMH),
+                    0.015,
+                    0.90
+                )
+
+                -- Repeated sub-crash contacts in one physical impact arrive in
+                -- consecutive physics steps. Count the first one and let the
+                -- deformation accumulator handle later distinct impacts.
+                ent.MEXDamageCrashCooldown = CurTime() + 0.12
+                ent:SetNW2Float("MEX.Damage.LastImpactKmh", impactKmh)
+
+                MEXD.ApplyDamage(
+                    ent,
+                    zone,
+                    severity,
+                    hitPos,
+                    ZoneOutwardNormal(ent, zone),
+                    "physics"
+                )
+            end)
+        end
 
         MEXD.Reset(train)
 
@@ -263,7 +326,10 @@ if SERVER then
         return new
     end
 
-    local function ClassifyFromWorldDeltaVelocity(train, deltaVelocity)
+    local ClassifyFromWorldDeltaVelocity
+    local ClassifyFromWorldPosition
+
+    ClassifyFromWorldDeltaVelocity = function(train, deltaVelocity)
         local x = deltaVelocity:Dot(train:GetForward())
         local y = deltaVelocity:Dot(train:GetRight())
 
@@ -276,7 +342,7 @@ if SERVER then
         return y < 0 and "right" or "left"
     end
 
-    local function ClassifyFromWorldPosition(train, worldPos)
+    ClassifyFromWorldPosition = function(train, worldPos)
         if not isvector(worldPos) then return nil end
 
         local localPos = train:WorldToLocal(worldPos)
@@ -377,7 +443,7 @@ if SERVER then
             if dt <= 0 or dt > 0.25 or moved > 600 then continue end
 
             local deltaKmh = deltaVelocity:Length() * SU_TO_KMH
-            if deltaKmh < 8 then continue end
+            if deltaKmh < 12 then continue end
             if (train.MEXDamageCrashCooldown or 0) > now then continue end
 
             local previousSpeedKmh = math.max(
@@ -393,7 +459,7 @@ if SERVER then
             train.MEXDamageCrashCooldown = now + 0.22
 
             local zone = ClassifyFromWorldDeltaVelocity(train, deltaVelocity)
-            local amount = math.Clamp((deltaKmh - 8) / 55, 0.02, 0.75)
+            local amount = math.Clamp((deltaKmh - 12) / 65, 0.015, 0.55)
             local localImpact = ZoneLocalImpactPoint(train, zone)
             local worldImpact = train:LocalToWorld(localImpact)
 
@@ -489,14 +555,15 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f | structural health %.2f | electrical %.2f",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
             MEXD.GetZoneDamage(train, "left"),
             MEXD.GetZoneDamage(train, "right"),
             train:GetNW2Float("MEX.StructuralHealth", 1),
-            train:GetNW2Float("MEX.Damage.electrical", 0)
+            train:GetNW2Float("MEX.Damage.electrical", 0),
+            train:GetNW2Float("MEX.Damage.LastImpactKmh", 0)
         ))
     end)
 end
