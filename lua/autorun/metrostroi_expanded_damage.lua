@@ -663,6 +663,50 @@ if SERVER then
             end
         end
 
+        -- Generic addon fallback. A lot of Metrostroi-derived trains keep the
+        -- same naming convention even when their class is not part of the
+        -- stock repository. Try common individual-leaf names beside a
+        -- *_doors_posN.mdl combined model.
+        local base = string.match(
+            lowerModel,
+            "^(.*)doors_pos%d+%.mdl$"
+        )
+
+        if not base then return nil end
+
+        local dir = string.match(lowerModel, "^(.*[/])") or ""
+
+        local pairsToTry = {
+            {
+                base .. "door_right.mdl",
+                base .. "door_left.mdl",
+            },
+            {
+                base .. "door_l.mdl",
+                base .. "door_r.mdl",
+            },
+            {
+                dir .. "door_right.mdl",
+                dir .. "door_left.mdl",
+            },
+            {
+                dir .. "door_l.mdl",
+                dir .. "door_r.mdl",
+            },
+        }
+
+        for _, pair in ipairs(pairsToTry) do
+            if util.IsValidModel(pair[1])
+                and util.IsValidModel(pair[2])
+            then
+                return {
+                    leafA = pair[1],
+                    leafB = pair[2],
+                    generic = true,
+                }
+            end
+        end
+
         return nil
     end
 
@@ -670,6 +714,8 @@ if SERVER then
         train,
         name,
         model,
+        originalLocalPos,
+        originalLocalAng,
         zone,
         skin,
         color,
@@ -688,18 +734,39 @@ if SERVER then
 
         if not i or not k then return nil end
 
-        local specs = {
-            {
-                suffix = "a",
-                model = family.leafA,
-                pos = family.position(i, k, 1),
-            },
-            {
-                suffix = "b",
-                model = family.leafB,
-                pos = family.position(i, k, 2),
-            },
-        }
+        local specs
+
+        if family.generic then
+            local basePos = isvector(originalLocalPos)
+                and originalLocalPos
+                or Vector(0, 0, 0)
+
+            specs = {
+                {
+                    suffix = "a",
+                    model = family.leafA,
+                    pos = basePos + Vector(-0.12, 0, 0),
+                },
+                {
+                    suffix = "b",
+                    model = family.leafB,
+                    pos = basePos + Vector(0.12, 0, 0),
+                },
+            }
+        else
+            specs = {
+                {
+                    suffix = "a",
+                    model = family.leafA,
+                    pos = family.position(i, k, 1),
+                },
+                {
+                    suffix = "b",
+                    model = family.leafB,
+                    pos = family.position(i, k, 2),
+                },
+            }
+        end
 
         local leaves = {}
 
@@ -716,7 +783,11 @@ if SERVER then
                 name .. ":" .. spec.suffix,
                 spec.model,
                 spec.pos,
-                Angle(0, 90 + 180 * k, 0),
+                family.generic and (
+                    isangle(originalLocalAng)
+                        and originalLocalAng
+                        or Angle(0, 90 + 180 * k, 0)
+                ) or Angle(0, 90 + 180 * k, 0),
                 nil,
                 nil,
                 skin,
@@ -1417,6 +1488,8 @@ if SERVER then
                 train,
                 name,
                 model,
+                localPos,
+                localAng,
                 zone,
                 skin,
                 color,
