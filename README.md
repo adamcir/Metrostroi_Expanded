@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.0**
+Current damage-system module version: **0.6.1**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -202,3 +202,15 @@ Damage 0.6.0 separates **structural deformation** from **component failure**.
 - the solver still never globally scales the whole wagon
 
 The visual body deformation remains limited by the bones and vertex weights present in the compiled MDL. If a stock body uses only one root bone for a large sheet, Lua cannot create new local vertex weights at runtime.
+
+
+### Damage 0.6.1 fixes
+
+- exact mouse-only ButtonMap IDs from a server-verified detached component are blocked even when they do not exist in the server KeyMap
+- disabled client hitboxes are replaced with private zero-size dead hitboxes at an unreachable panel coordinate, so cached Metrostroi button references cannot remain clickable
+- detach requests can carry up to 48 resolved button IDs instead of 16
+- embedded glazing now uses `tools/toolsnodraw`; the old custom white transparent material was removed
+- embedded-glass fallback only targets explicit window/windscreen/stekl material names and excludes panel/light/gauge/indicator/display materials, preventing broken indicator lenses from turning white
+- passenger-compartment side window hits are now detected independently from cab-window hits and can remove shared passenger-window material slots on the body/salon shell
+- detached doors receive an off-centre tipping moment plus short wake-up checks so tall leaves do not remain balanced upright on their bottom edge
+- localized structural ClientEnt shells such as cab masks/body shells get a small per-piece crush matrix when the underlying stock MDL does not expose enough useful deformation bones; the whole wagon is still never globally scaled
