@@ -1815,8 +1815,18 @@ if CLIENT then
 
     local STRUCTURAL_WORDS = {
         "body", "interior", "salon", "cabin", "cabine", "mask",
-        "pult", "panel", "door", "window", "glass", "seat", "couch",
-        "handler", "handrail", "lamp", "headlight", "frame", "roof",
+        "pult", "panel", "door", "window", "glass", "stekl",
+        "seat", "couch", "handler", "handrail", "lamp", "headlight",
+        "frame", "roof",
+    }
+
+    local CABIN_WORDS = {
+        "cabin", "cabine", "cab_", "cab-", "pult", "panel",
+        "controller", "brake_valve", "crane", "driver",
+    }
+
+    local GLASS_WORDS = {
+        "glass", "window", "stekl",
     }
 
     local function CopyVector(v)
@@ -2102,6 +2112,88 @@ if CLIENT then
         return forward:AngleEx(up)
     end
 
+    local function DeformLocalPointStrength(localPos, state, strength)
+        strength = tonumber(strength) or 1
+
+        if not state or math.abs(strength - 1) < 0.001 then
+            return DeformLocalPoint(localPos, state)
+        end
+
+        local base = DeformLocalPoint(localPos, state)
+        return localPos + (base - localPos) * strength
+    end
+
+    local function DeformLocalAngleStrength(
+        localPos,
+        localAng,
+        state,
+        strength
+    )
+        strength = tonumber(strength) or 1
+
+        if not state or math.abs(strength - 1) < 0.001 then
+            return DeformLocalAngle(localPos, localAng, state)
+        end
+
+        local step = 5
+        local p0 = DeformLocalPointStrength(
+            localPos,
+            state,
+            strength
+        )
+        local pf = DeformLocalPointStrength(
+            localPos + localAng:Forward() * step,
+            state,
+            strength
+        )
+        local pu = DeformLocalPointStrength(
+            localPos + localAng:Up() * step,
+            state,
+            strength
+        )
+
+        local forward = pf - p0
+        local up = pu - p0
+
+        if forward:LengthSqr() < 0.001 or up:LengthSqr() < 0.001 then
+            return CopyAngle(localAng)
+        end
+
+        forward:Normalize()
+        up:Normalize()
+
+        local side = forward:Cross(up)
+        if side:LengthSqr() < 0.001 then
+            return CopyAngle(localAng)
+        end
+
+        side:Normalize()
+        up = side:Cross(forward)
+        up:Normalize()
+
+        return forward:AngleEx(up)
+    end
+
+    local function CabStrengthAtPoint(localPos, state)
+        if not state then return 1 end
+
+        local endness = math.Clamp(
+            math.abs(localPos.x - state.center.x)
+                / math.max(state.halfLength, 1),
+            0,
+            1
+        )
+
+        if endness < 0.45 then return 1 end
+
+        local endDamage =
+            localPos.x >= state.center.x and state.front or state.rear
+
+        return 1 + Smooth01((endness - 0.45) / 0.55)
+            * math.Clamp(endDamage, 0, 1)
+            * 0.35
+    end
+
     local function LocalDisplacement(localPos, state)
         return DeformLocalPoint(localPos, state) - localPos
     end
@@ -2265,11 +2357,21 @@ if CLIENT then
         for _, panel in pairs(train.ButtonMap) do
             if not istable(panel) or not panel.MEXDamageBasePos then continue end
 
-            panel.pos = DeformLocalPoint(panel.MEXDamageBasePos, state)
-            panel.ang = DeformLocalAngle(
+            local strength = CabStrengthAtPoint(
+                panel.MEXDamageBasePos,
+                state
+            )
+
+            panel.pos = DeformLocalPointStrength(
+                panel.MEXDamageBasePos,
+                state,
+                strength
+            )
+            panel.ang = DeformLocalAngleStrength(
                 panel.MEXDamageBasePos,
                 panel.MEXDamageBaseAng,
-                state
+                state,
+                strength
             )
 
             -- Keep the 2D coordinate system unchanged. It means the visual
@@ -2292,6 +2394,26 @@ if CLIENT then
         end
 
         return false
+    end
+
+    local function ModelMatchesWords(name, model, words)
+        local text = string.lower((name or "") .. " " .. (model or ""))
+
+        for _, word in ipairs(words) do
+            if string.find(text, word, 1, true) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function ModelLooksCabin(name, model)
+        return ModelMatchesWords(name, model, CABIN_WORDS)
+    end
+
+    local function ModelLooksGlass(name, model)
+        return ModelMatchesWords(name, model, GLASS_WORDS)
     end
 
     local function GetStaticClientPropTransform(train, name, prop)
@@ -2356,6 +2478,8 @@ if CLIENT then
             size = size,
             model = model,
             structural = ModelLooksStructural(name, model),
+            cabin = ModelLooksCabin(name, model),
+            glass = ModelLooksGlass(name, model),
 
             -- A full saloon/interior shell must not be translated as one rigid
             -- object. Its ends should move only through its bones.
@@ -2379,11 +2503,20 @@ if CLIENT then
     end
 
     local function ApplyRigidAttachment(train, prop, cached, state)
-        local desiredAnchor = DeformLocalPoint(cached.anchorPos, state)
-        local desiredAng = DeformLocalAngle(
+        local strength = cached.cabin
+            and math.max(1.18, CabStrengthAtPoint(cached.anchorPos, state))
+            or 1
+
+        local desiredAnchor = DeformLocalPointStrength(
+            cached.anchorPos,
+            state,
+            strength
+        )
+        local desiredAng = DeformLocalAngleStrength(
             cached.anchorPos,
             cached.baseAng,
-            state
+            state,
+            strength
         )
 
         local desiredOrigin = OriginForAnchoredModel(
@@ -2487,6 +2620,16 @@ if CLIENT then
     local function StableFraction(text)
         local crc = tonumber(util.CRC(text or "")) or 0
         return (crc % 1000) / 1000
+    end
+
+    local function IsGlassComponent(name, cached)
+        if cached.glass then return true end
+
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+
+        return ContainsAnyWord(text, GLASS_WORDS)
     end
 
     local function IsDoorComponent(name, cached)
@@ -2858,7 +3001,9 @@ if CLIENT then
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
 
-        if isDoor then
+        if cached.glass then
+            return math.Clamp(largest * 0.18, 5, 24)
+        elseif isDoor then
             return math.Clamp(largest * 0.22, 8, 30)
         elseif isControl then
             return math.Clamp(largest * 0.38, 3, 12)
@@ -2910,6 +3055,7 @@ if CLIENT then
             local cached = CacheClientProp(train, name, prop)
             local panelName = panelMap[name]
 
+            local isGlass = IsGlassComponent(name, cached)
             local isDoor = IsDoorComponent(name, cached)
             local isControl = IsSmallControlComponent(
                 name,
@@ -2922,7 +3068,11 @@ if CLIENT then
                 panelName
             )
 
-            if not isDoor and not isControl and not isBreakaway then
+            if not isGlass
+                and not isDoor
+                and not isControl
+                and not isBreakaway
+            then
                 continue
             end
 
@@ -2941,11 +3091,13 @@ if CLIENT then
 
             local falloff = 1 - edgeDistance / math.max(radius, 1)
             local score = falloff * power
-            local threshold = DirectImpactMountThreshold(
-                name,
-                isDoor,
-                isControl
-            )
+            local threshold = isGlass
+                and (0.018 + StableFraction(name) * 0.035)
+                or DirectImpactMountThreshold(
+                    name,
+                    isDoor,
+                    isControl
+                )
 
             if score < threshold then continue end
 
@@ -2954,12 +3106,14 @@ if CLIENT then
                 prop = prop,
                 cached = cached,
                 panelName = panelName,
+                isGlass = isGlass,
                 isDoor = isDoor,
                 isControl = isControl,
                 score = score,
                 edgeDistance = edgeDistance,
                 priority =
-                    isControl and 3
+                    isGlass and 4
+                    or (isControl and 3)
                     or (isDoor and 1 or 2),
             }
         end
@@ -3202,6 +3356,7 @@ if CLIENT then
         if displacement <= 0.01 then return false end
 
         local seed = StableFraction(name)
+        local isGlass = IsGlassComponent(name, cached)
         local isDoor = IsDoorComponent(name, cached)
         local isControl = IsSmallControlComponent(name, cached, panelName)
         local isBreakaway = IsGeneralBreakawayComponent(
@@ -3209,6 +3364,28 @@ if CLIENT then
             cached,
             panelName
         )
+
+        if isGlass then
+            local threshold = 0.20 + seed * 0.45
+            if displacement >= threshold then
+                local requested = RequestServerDetach(
+                    train,
+                    name,
+                    prop,
+                    cached,
+                    state,
+                    panelName,
+                    false,
+                    false
+                )
+
+                if requested then
+                    ClearClientPropRenderTransform(prop)
+                    return true
+                end
+            end
+            return false
+        end
 
         if isDoor then
             local threshold = 2.2 + seed * 2.8
@@ -3341,8 +3518,14 @@ if CLIENT then
         return localAng
     end
 
-    local function InstallBoneField(modelEnt, train, skipRoot)
+    local function InstallBoneField(
+        modelEnt,
+        train,
+        skipRoot,
+        strength
+    )
         if not IsValid(modelEnt) or not IsValid(train) then return end
+        strength = tonumber(strength) or 1
         if modelEnt.MEXDamageV4BoneCallback then return end
 
         modelEnt.MEXDamageV4BoneCallback = modelEnt:AddCallback(
@@ -3364,16 +3547,22 @@ if CLIENT then
                     if not IsFiniteVector(worldPos) then continue end
 
                     local trainLocalPos = train:WorldToLocal(worldPos)
-                    local displacement = LocalDisplacement(trainLocalPos, state)
+                    local baseDeformed = DeformLocalPointStrength(
+                        trainLocalPos,
+                        state,
+                        strength
+                    )
+                    local displacement = baseDeformed - trainLocalPos
                     if displacement:LengthSqr() < 0.0025 then continue end
 
                     local worldAng = matrix:GetAngles()
                     local trainLocalAng = ToTrainLocalAngle(train, worldAng)
                     local deformedPos = trainLocalPos + displacement
-                    local deformedAng = DeformLocalAngle(
+                    local deformedAng = DeformLocalAngleStrength(
                         trainLocalPos,
                         trainLocalAng,
-                        state
+                        state,
+                        strength
                     )
 
                     matrix:SetTranslation(train:LocalToWorld(deformedPos))
@@ -3531,7 +3720,19 @@ if CLIENT then
             -- complete client entity. Root is skipped because it would move the
             -- whole full-length shell.
             if cached.structural then
-                InstallBoneField(prop, train, true)
+                local boneStrength = cached.cabin
+                    and math.max(
+                        1.22,
+                        CabStrengthAtPoint(cached.anchorPos, state)
+                    )
+                    or 1
+
+                InstallBoneField(
+                    prop,
+                    train,
+                    true,
+                    boneStrength
+                )
             end
 
             if panelName and ApplyPanelAttachment(
