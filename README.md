@@ -42,7 +42,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Development installation
 
-On Linux:
+### Linux
 
 ```bash
 git clone https://github.com/adamcir/Metrostroi_Expanded.git
@@ -51,7 +51,7 @@ chmod +x tools/install.sh
 ./tools/install.sh
 ```
 
-The installer automatically checks common Steam locations, including:
+The Linux installer automatically checks common Steam locations, including:
 
 ```text
 ~/.steam/steam/steamapps/common/GarrysMod
@@ -70,7 +70,30 @@ or:
 GMOD_DIR=/path/to/GarrysMod ./tools/install.sh
 ```
 
-The addon is copied to:
+
+### Windows
+
+Clone the repository and run:
+
+```bat
+tools\install.bat
+```
+
+The Windows installer checks the usual Steam installation, Steam registry entries and additional Steam libraries from `libraryfolders.vdf`.
+
+You can also pass the Garry's Mod directory explicitly:
+
+```bat
+tools\install.bat "D:\SteamLibrary\steamapps\common\GarrysMod"
+```
+
+Or run the PowerShell installer directly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\install.ps1 "D:\SteamLibrary\steamapps\common\GarrysMod"
+```
+
+Both installers copy the addon to:
 
 ```text
 garrysmod/addons/metrostroi-expanded
