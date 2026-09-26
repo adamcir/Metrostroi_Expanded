@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.5.1"
+MEXD.Version = "0.5.2"
 
 local ZONES = {
     front = true,
@@ -198,6 +198,72 @@ if SERVER then
                     self,
                     button,
                     ply
+                )
+            end
+        end
+
+        -- Metrostroi calls OnKeyPress/OnKeyRelease before it forwards the
+        -- KeyMap entry into ButtonEvent. Some train classes therefore react to
+        -- F/R or other controls before ButtonEvent can reject the destroyed
+        -- device. Guard the keyboard path one level earlier.
+        if isfunction(train.OnKeyEvent)
+            and not train.MEXDamageOriginalOnKeyEvent
+        then
+            train.MEXDamageOriginalOnKeyEvent = train.OnKeyEvent
+
+            local function keyEntryBlocked(self, entry, depth)
+                depth = depth or 0
+                if depth > 5 then return false end
+
+                if isstring(entry) then
+                    local id = entry:gsub("^.+:", "")
+                    return blocked(self, id)
+                end
+
+                if not istable(entry) then return false end
+
+                for key, value in pairs(entry) do
+                    if key ~= "helper" and key ~= "def"
+                        and keyEntryBlocked(self, value, depth + 1)
+                    then
+                        return true
+                    end
+                end
+
+                if isstring(entry.helper)
+                    and keyEntryBlocked(self, entry.helper, depth + 1)
+                then
+                    return true
+                end
+
+                if isstring(entry.def)
+                    and keyEntryBlocked(self, entry.def, depth + 1)
+                then
+                    return true
+                end
+
+                return false
+            end
+
+            train.OnKeyEvent = function(self, key, state, ply, helper)
+                local keyMap = self.KeyMap
+                local entry = istable(keyMap) and keyMap[key] or nil
+
+                if keyEntryBlocked(self, entry, 0) then
+                    -- Clear any stale held-key state so the control cannot stay
+                    -- electrically latched after its hardware was torn off.
+                    if istable(self.KeyBuffer) then
+                        self.KeyBuffer[key] = nil
+                    end
+                    return false
+                end
+
+                return self.MEXDamageOriginalOnKeyEvent(
+                    self,
+                    key,
+                    state,
+                    ply,
+                    helper
                 )
             end
         end
@@ -699,6 +765,16 @@ if SERVER then
     }
 
     local function GetPassengerDoorFamily(name, model)
+        local lowerName = string.lower(name or "")
+
+        if string.find(lowerName, "frontdoor", 1, true)
+            or string.find(lowerName, "reardoor", 1, true)
+            or string.find(lowerName, "cabindoor", 1, true)
+            or string.find(lowerName, "passengerdoor", 1, true)
+        then
+            return nil
+        end
+
         if not string.match(name or "", "^door%d+x[01]$") then
             return nil
         end
@@ -2802,10 +2878,13 @@ if CLIENT then
         local text = (name or "") .. " " .. (cached.model or "")
         if not ContainsAnyWord(text, DOOR_WORDS) then return false end
 
+        local model = string.lower(cached.model or "")
+        if model == "" or model == "models/error.mdl" then return false end
+
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
 
-        -- Ignore tiny props whose model happens to contain "door".
+        -- Ignore tiny handles/labels whose name merely contains "door".
         return largest >= 22
     end
 
@@ -3007,16 +3086,30 @@ if CLIENT then
             end
         end
 
-        -- Standalone hardware may not have PropName/model-name
-        -- linkage to ButtonMap. Pull in nearby 3D hit targets as a second,
-        -- geometry-based association.
-        for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
-            add(nearbyID)
-        end
-
         local text = string.lower(
             (propName or "") .. " " .. (cached.model or "")
         )
+
+        -- Spatial ButtonMap association is intentionally restricted to
+        -- standalone mechanical/electro-pneumatic hardware. Applying this to
+        -- arbitrary props (especially doors) can steal a nearby large
+        -- FrontDoor/RearDoor hitbox and make an unrelated door stop behaving.
+        local needsSpatialAssociation =
+            string.find(text, "brake_valve", 1, true)
+            or string.find(text, "disconnect", 1, true)
+            or string.find(text, "valve", 1, true)
+            or string.find(text, "cran", 1, true)
+            or string.find(text, "kran", 1, true)
+            or string.find(text, "controller", 1, true)
+            or string.find(text, "grkv", 1, true)
+            or string.find(text, "/334", 1, true)
+            or string.find(text, "/013", 1, true)
+
+        if needsSpatialAssociation then
+            for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
+                add(nearbyID)
+            end
+        end
 
         -- Some older trains render the manual/parking-brake mechanism as a
         -- standalone ClientEnt while keyboard bindings operate its ButtonEvent
