@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.4.4**
+Damage System version: **0.5.0**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -168,3 +168,66 @@ Certain standalone ClientEnts do not have their own ButtonMap entry even though 
 - parking brake and disconnect valves retain their existing explicit mappings.
 
 All of these are enforced by the server-side `ButtonEvent` guard, not only by hiding the clickable ClientEnt.
+
+
+## Damage System 0.5.0
+
+### Door coverage across trains
+
+Passenger-door splitting is no longer specific to 81-717.
+
+Known stock combined-door families are resolved to their original individual leaf assets for:
+
+- 81-710 / Ezh / Em family
+- 81-502 family
+- 81-702 family
+- 81-703 family
+- 81-717 / 81-714 family
+- 81-718 / 81-719 family
+- 81-720 / 81-721 family
+- 81-722 / 81-723 / 81-724 family
+
+For Metrostroi-derived addon trains, the damage system also probes common sibling asset naming conventions next to a `*_doors_posN.mdl` model:
+
+- `door_right.mdl` / `door_left.mdl`
+- `door_l.mdl` / `door_r.mdl`
+
+When no split leaf assets exist, the combined door still detaches as one physical object.
+
+### Cab deformation
+
+Cab/cabine/pult/panel models are tagged as cab structure and receive a stronger local deformation multiplier near a damaged vehicle end.
+
+- existing weighted bones use the stronger local deformation field
+- local cab shells and equipment mounts follow the stronger attachment displacement
+- ButtonMap planes near a damaged cab end follow the same stronger deformation
+- full-length salon shells still stay at the train origin and deform only through existing bones
+
+This still cannot invent new bones or vertex weights in a compiled MDL.
+
+### Glass
+
+Separate glass/window ClientEnts are treated as fragile components.
+
+A local hit can:
+
+- remove/hide the intact glass ClientEnt
+- emit a GlassImpact effect
+- play a large-sheet glass break sound
+- spawn short-lived networked physics glass shards
+
+Controls such as `GlassWasher` and `GlassCleaner` are explicitly excluded from glass detection.
+
+When a window is baked directly into the main carbody MDL/material and is not a separate ClientEnt/bodygroup, Lua cannot remove only that local pane without a prepared model/material variant.
+
+### Keyboard shortcut failure
+
+Generated Metrostroi button props use `config.name` or `button.ID`. The damage system maps a detached prop back to its ButtonMap ID and then expands related aliases from the train KeyMap.
+
+Examples:
+
+- `KDLSet` -> `KDL`
+- `PneumaticBrakeSet1..7` -> the same pneumatic-brake control family
+- Toggle/Set/Up/Down/Left/Right/On/Off variants are normalized into one control family
+
+All matched events are server-blocked through the train's `ButtonEvent` wrapper, so a detached physical control cannot be operated by a keyboard shortcut.
