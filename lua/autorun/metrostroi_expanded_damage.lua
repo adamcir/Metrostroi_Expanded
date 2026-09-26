@@ -454,7 +454,11 @@ if SERVER then
         net.Broadcast()
     end
 
-    local function FindRecentComponentImpact(train, anchorLocal)
+    local function FindRecentComponentImpact(
+        train,
+        anchorLocal,
+        componentRadius
+    )
         if not IsSubwayTrain(train) or not isvector(anchorLocal) then
             return nil
         end
@@ -467,7 +471,11 @@ if SERVER then
         for _, impact in ipairs(train.MEXDamageComponentImpacts or {}) do
             if impact.remaining <= 0 then continue end
 
-            local distance = anchorLocal:Distance(impact.localPos)
+            local distance = math.max(
+                0,
+                anchorLocal:Distance(impact.localPos)
+                    - math.max(componentRadius or 0, 0)
+            )
             if distance > impact.radius then continue end
 
             local falloff = 1 - distance / math.max(impact.radius, 1)
@@ -853,9 +861,16 @@ if SERVER then
 
         train.MEXDamageDetachedServer = train.MEXDamageDetachedServer or {}
 
-        ply.MEXDamageDetachNext = ply.MEXDamageDetachNext or 0
-        if ply.MEXDamageDetachNext > CurTime() then return end
-        ply.MEXDamageDetachNext = CurTime() + 0.015
+        local now = CurTime()
+        if not ply.MEXDamageDetachWindow
+            or now - ply.MEXDamageDetachWindow >= 1
+        then
+            ply.MEXDamageDetachWindow = now
+            ply.MEXDamageDetachCount = 0
+        end
+
+        ply.MEXDamageDetachCount = (ply.MEXDamageDetachCount or 0) + 1
+        if ply.MEXDamageDetachCount > 64 then return end
 
         local detachedCount = table.Count(train.MEXDamageDetachedServer)
         if detachedCount >= 160 then return end
@@ -872,8 +887,23 @@ if SERVER then
 
         local zone, localScore = FindNearestDamagedZone(train, anchorLocal)
         local overall = MEXD.GetOverallDamage(train)
+        local componentSize = maxs - mins
+        local componentRadius = math.Clamp(
+            math.max(
+                math.abs(componentSize.x),
+                math.abs(componentSize.y),
+                math.abs(componentSize.z)
+            ) * 0.30,
+            3,
+            isDoor and 34 or 20
+        )
+
         local directImpact, directScore =
-            FindRecentComponentImpact(train, anchorLocal)
+            FindRecentComponentImpact(
+                train,
+                anchorLocal,
+                componentRadius
+            )
 
         -- A mounting can fail either from accumulated structural deformation
         -- or from a direct local hit (crowbar, bullet, local collision).
