@@ -40,6 +40,45 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 - `mps_debug_seats 1` — show passenger-seat interaction positions
 - `mps_debug_seats 0` — hide debug positions
 
+
+## Damage System
+
+Current damage-system module version: **0.1.0**
+
+Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
+
+It currently provides:
+
+- front, rear, left-side and right-side damage zones
+- automatic crash detection from sudden velocity changes
+- support for `DMG_CRUSH` and blast damage
+- persistent per-zone structural damage while the train entity exists
+- simple client-side visual crumpling from the damaged direction
+- sparks, impact decals and smoke for harder impacts
+- structural-health state
+- basic electrical-damage state
+- basic left/right door-damage states
+- hooks/API that later modules can connect to real Metrostroi electrical, pneumatic and door systems
+
+The visual deformation is intentionally conservative. Source still uses the original collision mesh and Metrostroi child props, so this first version deforms the rendered carbody without pretending that the underlying Source collision model is a BeamNG-style soft body.
+
+### Damage test commands
+
+Aim at a Metrostroi train and use:
+
+```text
+mex_damage_test front 0.25
+mex_damage_test rear 0.25
+mex_damage_test left 0.25
+mex_damage_test right 0.25
+mex_damage_status
+mex_damage_reset
+```
+
+The amount is from `0.01` to `1.0`.
+
+The module also exposes the `MetrostroiExpandedTrainDamaged` hook so future electrical, pneumatic, bogey and door-failure modules can react to the same crash event.
+
 ## Development installation
 
 ### Linux
