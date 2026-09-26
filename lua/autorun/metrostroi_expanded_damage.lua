@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.4"
+MEXD.Version = "0.6.5"
 
 local ZONES = {
     front = true,
@@ -3687,6 +3687,106 @@ if CLIENT then
         return result
     end
 
+    local function GetButtonPhysicalPropName(button)
+        if not istable(button) then return nil end
+
+        if isstring(button.PropName) and button.PropName ~= "" then
+            return button.PropName
+        end
+
+        local model = button.model
+        if istable(model) then
+            if isstring(model.name) and model.name ~= "" then
+                return model.name
+            end
+
+            if istable(model.lamp)
+                and isstring(model.lamp.name)
+                and model.lamp.name ~= ""
+            then
+                return model.lamp.name
+            end
+
+            if isstring(button.ID) and button.ID ~= "" then
+                return button.ID
+            end
+        end
+
+        return nil
+    end
+
+    local function ButtonMatchesPhysicalProp(button, propName)
+        if not istable(button) or not isstring(propName) then
+            return false
+        end
+
+        return GetButtonPhysicalPropName(button) == propName
+    end
+
+    local function IsPhysicalPropAttached(train, propName)
+        if not IsSubwayTrain(train)
+            or not isstring(propName)
+            or not istable(train.ClientEnts)
+        then
+            return false
+        end
+
+        if istable(train.MEXDamageV4ServerDetached)
+            and train.MEXDamageV4ServerDetached[propName]
+        then
+            return false
+        end
+
+        local prop = train.ClientEnts[propName]
+        return IsValid(prop)
+            and not prop:GetNoDraw()
+            and prop:GetColor().a > 5
+    end
+
+    local function HasOtherAttachedProvider(
+        train,
+        buttonID,
+        excludedProp
+    )
+        if not IsSubwayTrain(train) or not isstring(buttonID) then
+            return false
+        end
+
+        local sourceMap =
+            train.MEXDamageV4ButtonMapOriginal
+            or train.ButtonMap
+
+        if not istable(sourceMap) then return false end
+
+        buttonID = buttonID:gsub("^.+:", "")
+
+        for _, panel in pairs(sourceMap) do
+            if not istable(panel) or not istable(panel.buttons) then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                if not istable(button) or not isstring(button.ID) then
+                    continue
+                end
+
+                local id = button.ID:gsub("^.+:", "")
+                if id ~= buttonID then continue end
+
+                local provider = GetButtonPhysicalPropName(button)
+
+                if provider
+                    and provider ~= excludedProp
+                    and IsPhysicalPropAttached(train, provider)
+                then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
     local function GetButtonIDsForProp(train, panelName, propName, cached)
         local out = {}
         local seen = {}
@@ -3737,7 +3837,19 @@ if CLIENT then
         -- button's own ID is sent to the server; related keyboard aliases are
         -- expanded there after the detach is confirmed.
         if exactPhysicalBinding then
-            return out
+            local serverIDs = {}
+
+            for _, id in ipairs(out) do
+                if not HasOtherAttachedProvider(
+                    train,
+                    id,
+                    propName
+                ) then
+                    serverIDs[#serverIDs + 1] = id
+                end
+            end
+
+            return serverIDs, true
         end
 
         local text = string.lower(
@@ -3901,35 +4013,123 @@ if CLIENT then
             add("PneumaticBrakeSet7")
         end
 
-        return out
+        local filtered = {}
+        for _, id in ipairs(out) do
+            if not HasOtherAttachedProvider(train, id, propName) then
+                filtered[#filtered + 1] = id
+            end
+        end
+
+        return filtered, false
     end
 
-    local function GetButtonPhysicalPropName(button)
-        if not istable(button) then return nil end
+    local function CopyButtonDefinition(button)
+        local copy = {}
+        for k, v in pairs(button or {}) do
+            copy[k] = v
+        end
+        return copy
+    end
 
-        if isstring(button.PropName) and button.PropName ~= "" then
-            return button.PropName
+    local function MakeDeadButtonHitbox(button)
+        local dead = CopyButtonDefinition(button)
+        dead.x = 100000000
+        dead.y = 100000000
+        dead.w = 0
+        dead.h = 0
+        dead.radius = 0
+        dead.tooltip = ""
+        dead.MEXDamageDeadHitbox = true
+        return dead
+    end
+
+    local function SetPhysicalPropBindingsDetached(
+        train,
+        propName,
+        detached
+    )
+        if not IsSubwayTrain(train) or not isstring(propName) then return end
+        if not CloneInteractivePanels(train) then return end
+
+        train.MEXDamageDeadBindings =
+            train.MEXDamageDeadBindings or {}
+
+        local sourceMap = train.MEXDamageV4ButtonMapOriginal
+        if not istable(sourceMap) or not istable(train.ButtonMap) then
+            return
         end
 
-        local model = button.model
-        if istable(model) then
-            if isstring(model.name) and model.name ~= "" then
-                return model.name
-            end
-
-            if istable(model.lamp)
-                and isstring(model.lamp.name)
-                and model.lamp.name ~= ""
+        for panelName, originalPanel in pairs(sourceMap) do
+            if panelName == "BaseClass"
+                or not istable(originalPanel)
+                or not istable(originalPanel.buttons)
             then
-                return model.lamp.name
+                continue
             end
 
-            if isstring(button.ID) and button.ID ~= "" then
-                return button.ID
+            local panel = train.ButtonMap[panelName]
+            if not istable(panel) then continue end
+
+            if not istable(panel.buttons) then
+                panel.buttons = {}
+            end
+
+            train.MEXDamageDeadBindings[panelName] =
+                train.MEXDamageDeadBindings[panelName] or {}
+
+            for key, originalButton in pairs(originalPanel.buttons) do
+                if not ButtonMatchesPhysicalProp(
+                    originalButton,
+                    propName
+                ) then
+                    continue
+                end
+
+                if detached then
+                    train.MEXDamageDeadBindings[panelName][key] = true
+                    panel.buttons[key] =
+                        MakeDeadButtonHitbox(originalButton)
+                else
+                    train.MEXDamageDeadBindings[panelName][key] = nil
+                    panel.buttons[key] =
+                        CopyButtonDefinition(originalButton)
+                end
             end
         end
+    end
 
-        return nil
+    local function EnforceDeadPhysicalBindings(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageDeadBindings)
+            or not istable(train.MEXDamageV4ButtonMapOriginal)
+            or not istable(train.ButtonMap)
+        then
+            return
+        end
+
+        for panelName, keys in pairs(train.MEXDamageDeadBindings) do
+            local panel = train.ButtonMap[panelName]
+            local originalPanel =
+                train.MEXDamageV4ButtonMapOriginal[panelName]
+
+            if not istable(panel)
+                or not istable(panel.buttons)
+                or not istable(originalPanel)
+                or not istable(originalPanel.buttons)
+            then
+                continue
+            end
+
+            for key, dead in pairs(keys) do
+                if not dead then continue end
+
+                local originalButton = originalPanel.buttons[key]
+                if istable(originalButton) then
+                    panel.buttons[key] =
+                        MakeDeadButtonHitbox(originalButton)
+                end
+            end
+        end
     end
 
     local function ReconcileAttachedButtonHitboxes(train)
@@ -3989,21 +4189,18 @@ if CLIENT then
                     and not prop:GetNoDraw()
                     and prop:GetColor().a > 5
 
-                local id = originalButton.ID:gsub("^.+:", "")
-
                 if visiblyAttached then
-                    -- Physical truth wins: if the original component is still
-                    -- attached and visible, this exact control must work.
-                    train.MEXDamageDisabledButtonIDs[id] = nil
-
-                    local restored = {}
-                    for k, v in pairs(originalButton) do
-                        restored[k] = v
-                    end
-
-                    panel.buttons[key] = restored
+                    SetPhysicalPropBindingsDetached(
+                        train,
+                        propName,
+                        false
+                    )
                 elseif detached then
-                    train.MEXDamageDisabledButtonIDs[id] = true
+                    SetPhysicalPropBindingsDetached(
+                        train,
+                        propName,
+                        true
+                    )
                 end
             end
         end
@@ -4028,6 +4225,8 @@ if CLIENT then
         end
 
         if not istable(train.ButtonMap) then return end
+
+        EnforceDeadPhysicalBindings(train)
 
         for _, panel in pairs(train.ButtonMap) do
             if not istable(panel) or not istable(panel.buttons) then continue end
@@ -4131,54 +4330,20 @@ if CLIENT then
         return desiredOrigin, desiredAng
     end
 
-    local function DisableDetachedPanelControl(train, panelName, propName)
-        if not panelName or not istable(train.ButtonMap) then return end
+    local function DisableDetachedPanelControl(
+        train,
+        panelName,
+        propName
+    )
+        if not panelName or not isstring(propName) then return end
 
-        local panel = train.ButtonMap[panelName]
-        if not istable(panel) or not istable(panel.buttons) then return end
-
-        -- Make only the button-list table private. The button objects themselves
-        -- remain Metrostroi's originals; removing an entry only disables the
-        -- local hit target for this damaged wagon.
-        if not panel.MEXDamageButtonsPrivate then
-            local privateButtons = {}
-            for k, v in pairs(panel.buttons) do
-                privateButtons[k] = v
-            end
-            panel.buttons = privateButtons
-            panel.MEXDamageButtonsPrivate = true
-        end
-
-        for key, button in pairs(panel.buttons) do
-            if not istable(button) then continue end
-
-            local model = button.model
-            local generatedName = nil
-
-            if istable(model) then
-                generatedName = model.name or button.ID
-            end
-
-            local matches =
-                button.PropName == propName
-                or generatedName == propName
-                or (
-                    istable(model)
-                    and istable(model.lamp)
-                    and model.lamp.name == propName
-                )
-
-            if matches then
-                if isstring(button.ID) then
-                    DisableDetachedButtonIDs(
-                        train,
-                        {button.ID:gsub("^.+:", "")}
-                    )
-                else
-                    panel.buttons[key] = nil
-                end
-            end
-        end
+        -- Exact generated controls are disabled by their physical binding slot,
+        -- not by a global ButtonEvent ID shared with other attached controls.
+        SetPhysicalPropBindingsDetached(
+            train,
+            propName,
+            true
+        )
     end
 
     local function CopyVisualState(source, debris)
@@ -4864,13 +5029,26 @@ if CLIENT then
                     cached
                 )
 
-                local mappedButtons = GetButtonIDsForProp(
-                    train,
-                    panelName,
-                    name,
-                    cached
-                )
-                DisableDetachedButtonIDs(train, mappedButtons)
+                local mappedButtons, exactBinding =
+                    GetButtonIDsForProp(
+                        train,
+                        panelName,
+                        name,
+                        cached
+                    )
+
+                if exactBinding then
+                    SetPhysicalPropBindingsDetached(
+                        train,
+                        name,
+                        true
+                    )
+                else
+                    DisableDetachedButtonIDs(
+                        train,
+                        mappedButtons
+                    )
+                end
 
                 prop:SetRenderOrigin(nil)
                 prop:SetRenderAngles(nil)
@@ -5033,6 +5211,7 @@ if CLIENT then
         train.MEXDamageV4DetachPending = nil
         train.MEXDamageDisabledLights = {}
         train.MEXDamageDisabledButtonIDs = {}
+        train.MEXDamageDeadBindings = {}
     end
 
     net.Receive("MEX.ComponentDetached", function()
