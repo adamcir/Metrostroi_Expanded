@@ -2461,6 +2461,54 @@ if CLIENT then
         offset.z = offset.z + (hit.z - localPos.z)
             * (0.040 + damage * 0.055) * influence
 
+        -- Real carbody collapse develops folds/crippling near the boundary
+        -- between the crushed end and the still-stiff survival structure.
+        -- Reproduce that with an inward shell buckle instead of stretching the
+        -- whole wagon. This only becomes pronounced after a substantial hit.
+        if damage >= 0.34 then
+            local creaseCenter = reach * (0.34 + damage * 0.18)
+            local creaseWidth = math.max(reach * 0.16, 12)
+            local crease =
+                math.exp(
+                    -((depth - creaseCenter) / creaseWidth)
+                    * ((depth - creaseCenter) / creaseWidth)
+                )
+                * radial
+                * math.Clamp((damage - 0.30) / 0.70, 0, 1)
+
+            local yNorm = math.Clamp(
+                (localPos.y - state.center.y) / state.halfWidth,
+                -1,
+                1
+            )
+            local zNorm = math.Clamp(
+                (localPos.z - state.center.z) / state.halfHeight,
+                -1,
+                1
+            )
+
+            -- Side posts and roof/floor edges bow into the occupied volume as
+            -- the end frame loses column stability.
+            offset.y = offset.y
+                - yNorm * crease * (4 + damage * 10)
+            offset.z = offset.z
+                - zNorm * crease * (3 + damage * 8)
+
+            -- A small alternating longitudinal ripple approximates sheet-metal
+            -- folding where multiple deformation bones are available.
+            local ripple = math.sin(
+                math.Clamp(depth / math.max(reach, 1), 0, 1)
+                * math.pi * 3
+            )
+
+            offset.x = offset.x
+                + inwardSign
+                    * ripple
+                    * crease
+                    * damage
+                    * 4.5
+        end
+
         -- Severe off-centre impacts also bend the occupied structure slightly.
         if survivalIntrusion > 0 then
             local offY = math.Clamp(
@@ -2512,6 +2560,30 @@ if CLIENT then
             * (0.035 + damage * 0.055) * influence
         offset.z = offset.z + (hit.z - localPos.z)
             * (0.030 + damage * 0.040) * influence
+
+        if damage >= 0.38 then
+            local crease =
+                math.exp(
+                    -((depth - reach * 0.42) / math.max(reach * 0.19, 10))
+                    ^ 2
+                )
+                * radial
+                * math.Clamp((damage - 0.34) / 0.66, 0, 1)
+
+            local xNorm = math.Clamp(
+                (localPos.x - hit.x) / math.max(radiusX, 1),
+                -1,
+                1
+            )
+            local zNorm = math.Clamp(
+                (localPos.z - state.center.z) / state.halfHeight,
+                -1,
+                1
+            )
+
+            offset.x = offset.x - xNorm * crease * (4 + damage * 8)
+            offset.z = offset.z - zNorm * crease * (3 + damage * 7)
+        end
     end
 
     local function AddVerticalIntrusion(offset, localPos, state, zone, damage, inwardSign)
@@ -2545,6 +2617,51 @@ if CLIENT then
             * (0.025 + damage * 0.04) * influence
     end
 
+    local function AddBlastDeformation(offset, localPos, state)
+        local blast = state and state.blast
+        if not istable(blast) or (blast.strength or 0) <= 0.001 then return end
+        if not isvector(blast.localPos) then return end
+
+        local radius = math.max(blast.radius or 0, 1)
+        local delta = localPos - blast.localPos
+        local distance = delta:Length()
+
+        if distance > radius then return end
+
+        local falloff = Smooth01(
+            1 - math.Clamp(distance / radius, 0, 1)
+        )
+        if falloff <= 0.0001 then return end
+
+        local dir = blast.impulse
+        if not isvector(dir) or dir:LengthSqr() < 0.001 then
+            dir = delta
+        end
+
+        if dir:LengthSqr() < 0.001 then return end
+        dir = dir:GetNormalized()
+
+        -- Blast loading is very local: nearby sheet/panel structure is kicked
+        -- in the pressure-wave direction, then rapidly decays with distance.
+        local strength = math.Clamp(blast.strength or 0, 0, 1.25)
+        local push = (3 + strength * 18) * falloff
+
+        offset:Add(dir * push)
+
+        -- Thin sheet-metal wrinkling around the blast footprint. The ripple is
+        -- deliberately small compared with the primary impulse and only shows
+        -- where the MDL has enough weighted bones/independent ClientEnts.
+        local radialDir = delta
+        if radialDir:LengthSqr() > 0.001 then
+            radialDir:Normalize()
+            local wrinkle = math.sin(distance * 0.11)
+                * falloff
+                * strength
+                * 2.8
+            offset:Add(radialDir * wrinkle)
+        end
+    end
+
     local function DeformLocalPoint(localPos, state)
         if not state then return CopyVector(localPos) end
 
@@ -2561,6 +2678,8 @@ if CLIENT then
         -- Roof impact goes down; floor/underframe impact goes up.
         AddVerticalIntrusion(offset, localPos, state, "roof", state.roof, -1)
         AddVerticalIntrusion(offset, localPos, state, "floor", state.floor, 1)
+
+        AddBlastDeformation(offset, localPos, state)
 
         return localPos + offset
     end
@@ -4366,7 +4485,7 @@ if CLIENT then
     local function InstallTrainBoneField(train)
         if not IsValid(train) then return end
         CheckFrontBoneCapability(train)
-        InstallBoneField(train, train, true)
+        InstallBoneField(train, train, true, 1.12)
     end
 
     ---------------------------------------------------------------------------
