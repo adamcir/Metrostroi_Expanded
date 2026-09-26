@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.4.1"
+MEXD.Version = "0.4.2"
 
 local ZONES = {
     front = true,
@@ -123,15 +123,230 @@ end
 
 if SERVER then
     util.AddNetworkString("MEX.DamageImpact")
+    util.AddNetworkString("MEX.DetachRequest")
+    util.AddNetworkString("MEX.ComponentDetached")
+    util.AddNetworkString("MEX.DetachReset")
 
     local ClassifyFromWorldDeltaVelocity
     local ClassifyFromWorldPosition
+
+    local function EnsureButtonEventGuard(train)
+        if not IsSubwayTrain(train) then return end
+        if train.MEXDamageOriginalButtonEvent then return end
+        if not isfunction(train.ButtonEvent) then return end
+
+        train.MEXDamageOriginalButtonEvent = train.ButtonEvent
+        train.MEXDamageBlockedButtons = train.MEXDamageBlockedButtons or {}
+
+        train.ButtonEvent = function(self, button, state, ply)
+            if self.MEXDamageBlockedButtons
+                and self.MEXDamageBlockedButtons[button]
+            then
+                return false
+            end
+
+            return self.MEXDamageOriginalButtonEvent(
+                self,
+                button,
+                state,
+                ply
+            )
+        end
+    end
+
+    local function BlockDetachedButton(train, button)
+        if not IsSubwayTrain(train) or not isstring(button) or button == "" then
+            return
+        end
+
+        EnsureButtonEventGuard(train)
+
+        button = button:gsub("^.+:", "")
+        train.MEXDamageBlockedButtons = train.MEXDamageBlockedButtons or {}
+
+        -- Release the input once before disabling it. If a key/button happened
+        -- to be held during the crash, it must not remain electrically stuck.
+        if not train.MEXDamageBlockedButtons[button]
+            and train.MEXDamageOriginalButtonEvent
+        then
+            pcall(
+                train.MEXDamageOriginalButtonEvent,
+                train,
+                button,
+                false,
+                nil
+            )
+        end
+
+        train.MEXDamageBlockedButtons[button] = true
+    end
+
+    local function ClearDetachedButtons(train)
+        if not IsSubwayTrain(train) then return end
+        train.MEXDamageBlockedButtons = {}
+    end
+
+    local function FindNearestDamagedZone(train, localPos)
+        local bestZone = nil
+        local bestScore = 0
+
+        for zone in pairs(ZONES) do
+            local amount = MEXD.GetZoneDamage(train, zone)
+            if amount <= 0.001 then continue end
+
+            local hit = train:GetNW2Vector(
+                "MEX.Damage.HitLocal." .. zone,
+                ZoneLocalImpactPoint(train, zone)
+            )
+
+            local radius =
+                (zone == "front" or zone == "rear") and 235
+                or (zone == "left" or zone == "right") and 180
+                or 150
+
+            local distance = localPos:Distance(hit)
+            local score = amount * math.Clamp(1 - distance / radius, 0, 1)
+
+            if score > bestScore then
+                bestScore = score
+                bestZone = zone
+            end
+        end
+
+        return bestZone, bestScore
+    end
+
+    local function BroadcastDetachedComponent(train, name, debris, receiver)
+        if not IsSubwayTrain(train) or not isstring(name) then return end
+
+        net.Start("MEX.ComponentDetached")
+            net.WriteEntity(train)
+            net.WriteString(name)
+            net.WriteEntity(IsValid(debris) and debris or NULL)
+
+        if IsValid(receiver) then
+            net.Send(receiver)
+        else
+            net.Broadcast()
+        end
+    end
+
+    local function RemoveDetachedServerComponents(train, broadcastReset)
+        if not IsSubwayTrain(train) then return end
+
+        if istable(train.MEXDamageDetachedServer) then
+            for _, data in pairs(train.MEXDamageDetachedServer) do
+                if IsValid(data.debris) then
+                    data.debris:Remove()
+                end
+            end
+        end
+
+        train.MEXDamageDetachedServer = {}
+        ClearDetachedButtons(train)
+
+        if broadcastReset then
+            net.Start("MEX.DetachReset")
+                net.WriteEntity(train)
+            net.Broadcast()
+        end
+    end
+
+    local function SpawnDetachedPhysicsProp(
+        train,
+        name,
+        model,
+        localPos,
+        localAng,
+        mins,
+        maxs,
+        skin,
+        color,
+        material,
+        bodygroups,
+        isDoor,
+        isControl,
+        zone
+    )
+        if not util.IsValidModel(model) then return nil end
+
+        local debris = ents.Create("mex_damage_debris")
+        if not IsValid(debris) then return nil end
+
+        debris:SetModel(model)
+        debris.MEXFallbackMins = mins
+        debris.MEXFallbackMaxs = maxs
+        debris:SetPos(train:LocalToWorld(localPos))
+        debris:SetAngles(train:LocalToWorldAngles(localAng))
+        debris:SetSourceTrain(train)
+        debris:SetComponentName(name)
+        debris:Spawn()
+
+        if not IsValid(debris) then return nil end
+
+        debris:SetSkin(math.max(0, skin or 0))
+        debris:SetColor(color or color_white)
+
+        if isstring(material) and material ~= "" then
+            debris:SetMaterial(material)
+        end
+
+        if istable(bodygroups) then
+            for id, value in pairs(bodygroups) do
+                if isnumber(id) and isnumber(value) then
+                    debris:SetBodygroup(id, value)
+                end
+            end
+        end
+
+        debris.MEXDamageDebris = true
+        debris.MEXDamageIsDoor = isDoor
+        debris.MEXDamageIsControl = isControl
+
+        local owner = train.CPPIGetOwner and train:CPPIGetOwner() or nil
+        if IsValid(owner) and debris.CPPISetOwner then
+            debris:CPPISetOwner(owner)
+        end
+
+        local phys = debris:GetPhysicsObject()
+        if IsValid(phys) then
+            local normal = ZoneOutwardNormal(train, zone or "front")
+            local seed = (tonumber(util.CRC(name)) or 0) % 1000 / 1000
+
+            local mass
+            if isDoor then
+                mass = 42
+            elseif isControl then
+                mass = 1.8
+            else
+                local size = maxs - mins
+                local volume = math.abs(size.x * size.y * size.z)
+                mass = math.Clamp(volume / 6500, 2.5, 28)
+            end
+
+            phys:SetMass(mass)
+            phys:SetVelocity(
+                train:GetVelocity()
+                + normal * (35 + seed * 55)
+                + train:GetUp() * (18 + seed * 22)
+            )
+            phys:AddAngleVelocity(Vector(
+                -110 + seed * 220,
+                70 - seed * 140,
+                -140 + seed * 280
+            ))
+            phys:Wake()
+        end
+
+        return debris
+    end
 
     local function InitializeTrainDamage(train)
         if not IsSubwayTrain(train) then return end
         if train.MEXDamageInitialized then return end
 
         train.MEXDamageInitialized = true
+        EnsureButtonEventGuard(train)
         train.MEXDamageIgnoreUntil = CurTime() + SPAWN_GRACE_SECONDS
         train.MEXDamageLastVelocity = train:GetVelocity()
         train.MEXDamageLastPosition = train:GetPos()
@@ -222,6 +437,8 @@ if SERVER then
 
     function MEXD.Reset(train)
         if not IsValid(train) then return end
+
+        RemoveDetachedServerComponents(train, train.MEXDamageInitialized == true)
 
         for zone in pairs(ZONES) do
             train:SetNW2Float(DamageKey(zone), 0)
@@ -384,6 +601,137 @@ if SERVER then
 
         return localPos.z >= centerZ and "roof" or "floor"
     end
+
+    net.Receive("MEX.DetachRequest", function(_, ply)
+        local train = net.ReadEntity()
+        local name = net.ReadString()
+        local model = net.ReadString()
+        local localPos = net.ReadVector()
+        local localAng = net.ReadAngle()
+        local mins = net.ReadVector()
+        local maxs = net.ReadVector()
+        local isDoor = net.ReadBool()
+        local isControl = net.ReadBool()
+        local skin = net.ReadUInt(8)
+        local color = net.ReadColor()
+        local material = net.ReadString()
+
+        local bodygroups = {}
+        local bodygroupCount = math.min(net.ReadUInt(5), 31)
+        for _ = 1, bodygroupCount do
+            local id = net.ReadUInt(5)
+            local value = net.ReadUInt(8)
+            bodygroups[id] = value
+        end
+
+        local buttonIDs = {}
+        local buttonCount = math.min(net.ReadUInt(5), 16)
+        for _ = 1, buttonCount do
+            local id = net.ReadString()
+            if #id <= 96 and id ~= "" then
+                buttonIDs[#buttonIDs + 1] = id:gsub("^.+:", "")
+            end
+        end
+
+        if not IsSubwayTrain(train) then return end
+        InitializeTrainDamage(train)
+        if CurTime() < (train.MEXDamageIgnoreUntil or 0) then return end
+
+        if not isstring(name) or name == "" or #name > 128 then return end
+        if not isstring(model) or #model > 192 then return end
+        if string.sub(string.lower(model), 1, 7) ~= "models/" then return end
+        if not util.IsValidModel(model) then return end
+        if not isvector(localPos) or not isangle(localAng) then return end
+        if not isvector(mins) or not isvector(maxs) then return end
+        if not isstring(material) or #material > 160 then return end
+
+        local obbMins = train:OBBMins() - Vector(100, 100, 100)
+        local obbMaxs = train:OBBMaxs() + Vector(100, 100, 100)
+
+        if localPos.x < obbMins.x or localPos.x > obbMaxs.x
+            or localPos.y < obbMins.y or localPos.y > obbMaxs.y
+            or localPos.z < obbMins.z or localPos.z > obbMaxs.z
+        then
+            return
+        end
+
+        train.MEXDamageDetachedServer = train.MEXDamageDetachedServer or {}
+        if train.MEXDamageDetachedServer[name] then
+            BroadcastDetachedComponent(
+                train,
+                name,
+                train.MEXDamageDetachedServer[name].debris,
+                ply
+            )
+            return
+        end
+
+        local zone, localScore = FindNearestDamagedZone(train, localPos)
+        local overall = MEXD.GetOverallDamage(train)
+
+        -- The client chooses the exact mounting failure from its visible
+        -- ClientEnt geometry, but the server independently requires meaningful
+        -- structural damage close to that mounting point.
+        local minimumScore = isDoor and 0.10 or (isControl and 0.08 or 0.12)
+        local minimumOverall = isDoor and 0.42 or (isControl and 0.50 or 0.56)
+
+        if not zone or localScore < minimumScore or overall < minimumOverall then
+            return
+        end
+
+        local debris = SpawnDetachedPhysicsProp(
+            train,
+            name,
+            model,
+            localPos,
+            localAng,
+            mins,
+            maxs,
+            skin,
+            color,
+            material,
+            bodygroups,
+            isDoor,
+            isControl,
+            zone
+        )
+
+        if not IsValid(debris) then return end
+
+        for _, button in ipairs(buttonIDs) do
+            BlockDetachedButton(train, button)
+        end
+
+        train.MEXDamageDetachedServer[name] = {
+            debris = debris,
+            buttons = buttonIDs,
+        }
+
+        BroadcastDetachedComponent(train, name, debris)
+    end)
+
+    hook.Add("PlayerInitialSpawn", "MEX.Damage.SyncDetachedComponents", function(ply)
+        timer.Simple(2, function()
+            if not IsValid(ply) then return end
+
+            for _, train in ipairs(ents.GetAll()) do
+                if not IsSubwayTrain(train)
+                    or not istable(train.MEXDamageDetachedServer)
+                then
+                    continue
+                end
+
+                for name, data in pairs(train.MEXDamageDetachedServer) do
+                    BroadcastDetachedComponent(
+                        train,
+                        name,
+                        data.debris,
+                        ply
+                    )
+                end
+            end
+        end)
+    end)
 
     hook.Add("EntityTakeDamage", "MEX.Damage.FromEntityDamage", function(ent, dmginfo)
         if not IsSubwayTrain(ent) then return end
@@ -732,7 +1080,7 @@ if CLIENT then
         -- A light crash mainly damages the end structure. Only heavy damage
         -- reaches deep into the cab/saloon survival space.
         local survivalIntrusion = math.max(damage - 0.48, 0) / 0.52
-        local reach = 78 + damage * 82 + survivalIntrusion * 105
+        local reach = 92 + damage * 104 + survivalIntrusion * 128
 
         if depth < -8 or depth > reach then return end
 
@@ -756,8 +1104,8 @@ if CLIENT then
         local influence = axial * radial
         if influence <= 0.0001 then return end
 
-        local primaryCrush = 5 + damage * 31
-        local deepIntrusion = survivalIntrusion * 42
+        local primaryCrush = 7 + damage * 39
+        local deepIntrusion = survivalIntrusion * 56
         local crush = (primaryCrush + deepIntrusion) * influence * frameFactor
 
         offset.x = offset.x + inwardSign * crush
@@ -800,7 +1148,7 @@ if CLIENT then
             or (localPos.y - surfaceY)
 
         local severe = math.max(damage - 0.52, 0) / 0.48
-        local reach = 44 + damage * 48 + severe * 58
+        local reach = 52 + damage * 62 + severe * 76
         if depth < -7 or depth > reach then return end
 
         local inward = Smooth01(1 - math.Clamp(depth / reach, 0, 1))
@@ -813,7 +1161,7 @@ if CLIENT then
         local influence = inward * radial
         if influence <= 0.0001 then return end
 
-        local intrusion = (4 + damage * 23 + severe * 25) * influence
+        local intrusion = (5 + damage * 30 + severe * 35) * influence
         offset.y = offset.y + inwardSign * intrusion
 
         offset.x = offset.x + (hit.x - localPos.x)
@@ -832,7 +1180,7 @@ if CLIENT then
             or (localPos.z - surfaceZ)
 
         local severe = math.max(damage - 0.55, 0) / 0.45
-        local reach = 34 + damage * 42 + severe * 48
+        local reach = 40 + damage * 52 + severe * 62
         if depth < -7 or depth > reach then return end
 
         local inward = Smooth01(1 - math.Clamp(depth / reach, 0, 1))
@@ -845,7 +1193,7 @@ if CLIENT then
         local influence = inward * radial
         if influence <= 0.0001 then return end
 
-        local intrusion = (3 + damage * 18 + severe * 20) * influence
+        local intrusion = (4 + damage * 23 + severe * 27) * influence
         offset.z = offset.z + inwardSign * intrusion
         offset.x = offset.x + (hit.x - localPos.x)
             * (0.025 + damage * 0.04) * influence
@@ -1261,7 +1609,17 @@ if CLIENT then
 
     local CONTROL_WORDS = {
         "button", "switch", "tumbler", "toggle", "knob", "reverser",
-        "controller", "handle", "lever", "valve", "kran",
+        "controller", "handle", "lever", "valve", "kran", "wheel",
+        "parking", "manualbrake", "brake",
+    }
+
+    local BREAKAWAY_WORDS = {
+        "lamp", "light", "headlight", "mirror", "sign", "cover", "cap",
+        "box", "case", "guard", "panel", "seat", "couch", "handrail",
+        "handler", "wiper", "meter", "gauge", "indicator", "display",
+        "wheel", "brake", "parking", "button", "switch", "tumbler",
+        "toggle", "knob", "reverser", "controller", "handle", "lever",
+        "valve", "kran", "door", "dver",
     }
 
     local function ContainsAnyWord(text, words)
@@ -1302,6 +1660,82 @@ if CLIENT then
         -- Generated ButtonMap props are controls even when their file name does
         -- not literally contain "button".
         return ContainsAnyWord(text, CONTROL_WORDS) or largest <= 28
+    end
+
+    local function IsGeneralBreakawayComponent(name, cached)
+        if cached.fullLength then return false end
+
+        local s = cached.size
+        local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
+        if largest > 150 then return false end
+
+        local text = (name or "") .. " " .. (cached.model or "")
+
+        return ContainsAnyWord(text, BREAKAWAY_WORDS)
+            or (
+                cached.localPiece
+                and largest <= 75
+            )
+    end
+
+    local function GetButtonIDsForProp(train, panelName, propName, cached)
+        local out = {}
+        local seen = {}
+
+        local function add(id)
+            if not isstring(id) or id == "" then return end
+            id = id:gsub("^.+:", "")
+            if seen[id] then return end
+            seen[id] = true
+            out[#out + 1] = id
+        end
+
+        if panelName and istable(train.ButtonMap) then
+            local panel = train.ButtonMap[panelName]
+            if istable(panel) and istable(panel.buttons) then
+                for _, button in pairs(panel.buttons) do
+                    if not istable(button) then continue end
+
+                    local model = button.model
+                    local generatedName = nil
+
+                    if istable(model) then
+                        generatedName = model.name or button.ID
+                    end
+
+                    local matches =
+                        button.PropName == propName
+                        or generatedName == propName
+                        or (
+                            istable(model)
+                            and istable(model.lamp)
+                            and model.lamp.name == propName
+                        )
+
+                    if matches then
+                        add(button.ID)
+                    end
+                end
+            end
+        end
+
+        local text = string.lower(
+            (propName or "") .. " " .. (cached.model or "")
+        )
+
+        -- Some older trains render the manual/parking-brake mechanism as a
+        -- standalone ClientEnt while keyboard bindings operate its ButtonEvent
+        -- IDs. Add those well-known IDs as a fallback so the physical wheel
+        -- cannot be bypassed with a shortcut after it tears off.
+        if string.find(text, "parking", 1, true)
+            or string.find(text, "manualbrake", 1, true)
+        then
+            add("ParkingBrakeToggle")
+            add("ParkingBrakeLeft")
+            add("ParkingBrakeRight")
+        end
+
+        return out
     end
 
     local function GetPanelAttachedLocalTransform(train, cached, panelName)
@@ -1398,19 +1832,21 @@ if CLIENT then
         end
     end
 
-    local function CreatePhysicsDebris(
+    local function RequestServerDetach(
         train,
         name,
         prop,
         cached,
         state,
         panelName,
-        isDoor
+        isDoor,
+        isControl
     )
-        local model = cached.model
-        if not isstring(model) or model == "" or model == "models/error.mdl" then
-            return nil
-        end
+        train.MEXDamageV4DetachPending = train.MEXDamageV4DetachPending or {}
+
+        local nextAllowed = train.MEXDamageV4DetachPending[name] or 0
+        if nextAllowed > CurTime() then return false end
+        train.MEXDamageV4DetachPending[name] = CurTime() + 1.0
 
         local localPos, localAng
 
@@ -1426,132 +1862,88 @@ if CLIENT then
             localPos, localAng = GetRigidAttachedLocalTransform(cached, state)
         end
 
-        local debris = ents.CreateClientProp(model)
-        if not IsValid(debris) then return nil end
-
-        debris:SetPos(train:LocalToWorld(localPos))
-        debris:SetAngles(train:LocalToWorldAngles(localAng))
-        CopyVisualState(prop, debris)
-        debris:Spawn()
-        debris:SetCollisionGroup(COLLISION_GROUP_DEBRIS)
-        debris:SetMoveType(MOVETYPE_VPHYSICS)
-
-        local phys = debris:GetPhysicsObject()
-
-        if not IsValid(phys) then
-            debris:PhysicsInit(SOLID_VPHYSICS)
-            phys = debris:GetPhysicsObject()
+        if not isvector(localPos) or not isangle(localAng) then
+            return false
         end
 
-        if not IsValid(phys) then
-            -- A number of Metrostroi detail/door MDLs have no dedicated
-            -- physics mesh. Give the detached visual a conservative box so it
-            -- still falls and collides instead of hovering.
-            local mins = prop:OBBMins()
-            local maxs = prop:OBBMaxs()
-
-            if isvector(mins) and isvector(maxs)
-                and (maxs - mins):LengthSqr() > 1
-            then
-                debris:PhysicsInitBox(mins * 0.92, maxs * 0.92)
-                phys = debris:GetPhysicsObject()
-            end
-        end
-
-        if IsValid(phys) then
-            local displacement = LocalDisplacement(cached.anchorPos, state)
-            local worldDisp =
-                train:LocalToWorld(cached.anchorPos + displacement)
-                - train:LocalToWorld(cached.anchorPos)
-
-            local direction
-            if worldDisp:LengthSqr() > 0.01 then
-                direction = worldDisp:GetNormalized()
-            else
-                direction = train:GetUp()
-            end
-
-            local seed = StableFraction(name)
-            local impulse =
-                direction * (isDoor and (45 + 40 * seed) or (85 + 75 * seed))
-                + train:GetUp() * (isDoor and 18 or 35)
-
-            phys:SetMass(isDoor and 38 or 1.5)
-            phys:SetVelocity(train:GetVelocity() + impulse)
-            phys:AddAngleVelocity(Vector(
-                -80 + seed * 160,
-                45 - seed * 90,
-                -110 + seed * 220
-            ))
-            phys:Wake()
-        end
-
-        debris.MEXDamageDebris = true
-        debris.MEXDamageSourceTrain = train
-
-        train.MEXDamageV4Debris = train.MEXDamageV4Debris or {}
-        table.insert(train.MEXDamageV4Debris, debris)
-
-        timer.Simple(isDoor and 90 or 60, function()
-            if IsValid(debris) then
-                debris:Remove()
-            end
-        end)
-
-        return debris
-    end
-
-    local function DetachClientComponent(
-        train,
-        name,
-        prop,
-        cached,
-        state,
-        panelName,
-        isDoor
-    )
-        train.MEXDamageV4Detached = train.MEXDamageV4Detached or {}
-
-        if train.MEXDamageV4Detached[name] then
-            prop:SetNoDraw(true)
-            return true
-        end
-
-        local debris = CreatePhysicsDebris(
+        local buttons = GetButtonIDsForProp(
             train,
-            name,
-            prop,
-            cached,
-            state,
             panelName,
-            isDoor
+            name,
+            cached
         )
 
-        if not IsValid(debris) then return false end
+        net.Start("MEX.DetachRequest")
+            net.WriteEntity(train)
+            net.WriteString(name)
+            net.WriteString(cached.model)
+            net.WriteVector(localPos)
+            net.WriteAngle(localAng)
+            net.WriteVector(prop:OBBMins())
+            net.WriteVector(prop:OBBMaxs())
+            net.WriteBool(isDoor)
+            net.WriteBool(isControl)
+            net.WriteUInt(math.Clamp(prop:GetSkin() or 0, 0, 255), 8)
+            net.WriteColor(prop:GetColor())
+            net.WriteString(prop:GetMaterial() or "")
 
-        train.MEXDamageV4Detached[name] = {
-            entity = prop,
-            debris = debris,
-            oldNoDraw = prop.GetNoDraw and prop:GetNoDraw() or false,
-            panelName = panelName,
-        }
+            local bodygroupCount = math.min(prop:GetNumBodyGroups() or 0, 31)
+            net.WriteUInt(bodygroupCount, 5)
+            for id = 0, bodygroupCount - 1 do
+                net.WriteUInt(id, 5)
+                net.WriteUInt(
+                    math.Clamp(prop:GetBodygroup(id) or 0, 0, 255),
+                    8
+                )
+            end
 
-        prop:SetRenderOrigin(nil)
-        prop:SetRenderAngles(nil)
-        prop:DisableMatrix("RenderMultiply")
-        prop:SetNoDraw(true)
-
-        if panelName and not isDoor then
-            DisableDetachedPanelControl(train, panelName, name)
-        end
-
-        surface.PlaySound(
-            isDoor
-                and "physics/metal/metal_box_break2.wav"
-                or "physics/metal/metal_solid_impact_hard5.wav"
-        )
+            net.WriteUInt(math.min(#buttons, 16), 5)
+            for i = 1, math.min(#buttons, 16) do
+                net.WriteString(buttons[i])
+            end
+        net.SendToServer()
 
         return true
+    end
+
+    local function MarkDetachedClient(train, name, debris)
+        train.MEXDamageV4ServerDetached =
+            train.MEXDamageV4ServerDetached or {}
+
+        local previous = train.MEXDamageV4ServerDetached[name]
+
+        if not previous then
+            previous = {
+                debris = debris,
+                oldNoDraw = false,
+            }
+
+            train.MEXDamageV4ServerDetached[name] = previous
+        else
+            previous.debris = debris
+        end
+
+        if istable(train.ClientEnts) then
+            local prop = train.ClientEnts[name]
+
+            if IsValid(prop) then
+                if previous.oldNoDraw == nil then
+                    previous.oldNoDraw = prop:GetNoDraw()
+                end
+
+                prop:SetRenderOrigin(nil)
+                prop:SetRenderAngles(nil)
+                prop:DisableMatrix("RenderMultiply")
+                prop:SetNoDraw(true)
+            end
+        end
+
+        local panelMap = train.MEXDamageV4PanelProps or BuildPanelPropMap(train)
+        local panelName = panelMap[name]
+
+        if panelName then
+            DisableDetachedPanelControl(train, panelName, name)
+        end
     end
 
     local function MaybeDetachClientComponent(
@@ -1563,14 +1955,16 @@ if CLIENT then
         panelName
     )
         if not IsValid(prop) then return false end
-        if train.MEXDamageV4Detached
-            and train.MEXDamageV4Detached[name]
+
+        if train.MEXDamageV4ServerDetached
+            and train.MEXDamageV4ServerDetached[name]
         then
             prop:SetNoDraw(true)
             return true
         end
 
-        -- Do not detach a variant ClientEnt which Metrostroi currently hides.
+        -- Do not request a hidden variant which Metrostroi is not currently
+        -- displaying.
         if prop.GetNoDraw and prop:GetNoDraw() then return false end
         if prop:GetColor().a <= 5 then return false end
 
@@ -1579,34 +1973,54 @@ if CLIENT then
 
         local seed = StableFraction(name)
         local isDoor = IsDoorComponent(name, cached)
+        local isControl = IsSmallControlComponent(name, cached, panelName)
+        local isBreakaway = IsGeneralBreakawayComponent(name, cached)
 
         if isDoor then
-            local threshold = 7.0 + seed * 5.0
-            if state.overall >= 0.48 and displacement >= threshold then
-                return DetachClientComponent(
+            local threshold = 6.5 + seed * 5.5
+            if state.overall >= 0.46 and displacement >= threshold then
+                RequestServerDetach(
                     train,
                     name,
                     prop,
                     cached,
                     state,
                     panelName,
-                    true
+                    true,
+                    false
                 )
             end
-
             return false
         end
 
-        if IsSmallControlComponent(name, cached, panelName) then
-            local threshold = 4.5 + seed * 5.5
-            if state.overall >= 0.62 and displacement >= threshold then
-                return DetachClientComponent(
+        if isControl then
+            local threshold = 3.8 + seed * 6.2
+            if state.overall >= 0.56 and displacement >= threshold then
+                RequestServerDetach(
                     train,
                     name,
                     prop,
                     cached,
                     state,
                     panelName,
+                    false,
+                    true
+                )
+            end
+            return false
+        end
+
+        if isBreakaway then
+            local threshold = 5.5 + seed * 9.5
+            if state.overall >= 0.62 and displacement >= threshold then
+                RequestServerDetach(
+                    train,
+                    name,
+                    prop,
+                    cached,
+                    state,
+                    panelName,
+                    false,
                     false
                 )
             end
@@ -1618,29 +2032,48 @@ if CLIENT then
     local function RestoreDetachedComponents(train)
         if not IsValid(train) then return end
 
-        if istable(train.MEXDamageV4Detached) then
-            for _, data in pairs(train.MEXDamageV4Detached) do
-                if IsValid(data.debris) then
-                    data.debris:Remove()
-                end
-
-                if IsValid(data.entity) then
-                    data.entity:SetNoDraw(data.oldNoDraw or false)
-                    data.entity:SetRenderOrigin(nil)
-                    data.entity:SetRenderAngles(nil)
+        if istable(train.MEXDamageV4ServerDetached) then
+            for name, data in pairs(train.MEXDamageV4ServerDetached) do
+                if istable(train.ClientEnts) then
+                    local prop = train.ClientEnts[name]
+                    if IsValid(prop) then
+                        prop:SetNoDraw(data.oldNoDraw or false)
+                        prop:SetRenderOrigin(nil)
+                        prop:SetRenderAngles(nil)
+                    end
                 end
             end
         end
 
-        if istable(train.MEXDamageV4Debris) then
-            for _, debris in ipairs(train.MEXDamageV4Debris) do
-                if IsValid(debris) then debris:Remove() end
-            end
-        end
-
-        train.MEXDamageV4Detached = nil
-        train.MEXDamageV4Debris = nil
+        train.MEXDamageV4ServerDetached = nil
+        train.MEXDamageV4DetachPending = nil
     end
+
+    net.Receive("MEX.ComponentDetached", function()
+        local train = net.ReadEntity()
+        local name = net.ReadString()
+        local debris = net.ReadEntity()
+
+        if not IsSubwayTrain(train) or not isstring(name) then return end
+
+        MarkDetachedClient(train, name, debris)
+
+        surface.PlaySound(
+            "physics/metal/metal_solid_impact_hard5.wav"
+        )
+    end)
+
+    net.Receive("MEX.DetachReset", function()
+        local train = net.ReadEntity()
+        if not IsSubwayTrain(train) then return end
+
+        RestoreDetachedComponents(train)
+
+        -- Rebuild a clean per-wagon panel copy on the next damage update.
+        RestoreInteractivePanels(train)
+        train.MEXDamageV4PanelProps = nil
+        train.MEXDamageV4PropCache = nil
+    end)
 
     ---------------------------------------------------------------------------
     -- Bone deformation
@@ -1813,6 +2246,13 @@ if CLIENT then
         for name, prop in pairs(train.ClientEnts) do
             if not IsValid(prop) then continue end
 
+            if train.MEXDamageV4ServerDetached
+                and train.MEXDamageV4ServerDetached[name]
+            then
+                prop:SetNoDraw(true)
+                continue
+            end
+
             if not state then
                 ClearClientPropRenderTransform(prop)
                 continue
@@ -1867,7 +2307,6 @@ if CLIENT then
     end
 
     local function ClearAllVisualDamage(train)
-        RestoreDetachedComponents(train)
         RestoreInteractivePanels(train)
         ApplyLightDeformation(train, nil)
 
@@ -2038,7 +2477,7 @@ if CLIENT then
 
         chat.AddText(
             Color(120, 255, 120),
-            "[Metrostroi Expanded] Control layout restored."
+            "[Metrostroi Expanded] Visual control layout restored. Detached server components stay disabled until mex_damage_reset."
         )
     end)
 
