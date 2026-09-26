@@ -740,6 +740,99 @@ if SERVER then
             12 - seed * 24,
             -26 + seed * 52
         ))
+
+        if isDoor then
+            local mins = debris:OBBMins()
+            local maxs = debris:OBBMaxs()
+            local size = maxs - mins
+
+            local longAxis
+            local longHalf
+
+            if math.abs(size.z) >= math.abs(size.x)
+                and math.abs(size.z) >= math.abs(size.y)
+            then
+                longAxis = debris:GetUp()
+                longHalf = math.abs(size.z) * 0.5
+            elseif math.abs(size.y) >= math.abs(size.x) then
+                longAxis = debris:GetRight()
+                longHalf = math.abs(size.y) * 0.5
+            else
+                longAxis = debris:GetForward()
+                longHalf = math.abs(size.x) * 0.5
+            end
+
+            local sideways =
+                train:GetRight()
+                + train:GetForward() * (seed > 0.5 and 0.45 or -0.45)
+
+            if sideways:LengthSqr() > 0.001 then
+                sideways:Normalize()
+            end
+
+            -- Door leaves are tall thin bodies. Without an explicit hinge-fail
+            -- moment Source can leave a perfectly vertical box balanced on its
+            -- lower edge. Apply force away from COM near the long edge so the
+            -- released leaf must tumble.
+            local tipPoint =
+                debris:GetPos()
+                + longAxis * math.max(longHalf * 0.72, 14)
+
+            phys:ApplyForceOffset(
+                sideways * mass * (75 + seed * 45),
+                tipPoint
+            )
+            phys:AddAngleVelocity(
+                sideways * (115 + seed * 95)
+            )
+
+            local tipDirection = Vector(
+                sideways.x,
+                sideways.y,
+                sideways.z
+            )
+            local lever = math.max(longHalf * 0.68, 14)
+
+            for _, delay in ipairs({0.10, 0.34}) do
+                timer.Simple(delay, function()
+                    if not IsValid(debris) then return end
+
+                    local p = debris:GetPhysicsObject()
+                    if not IsValid(p) then return end
+
+                    p:Wake()
+
+                    -- If the leaf is still suspiciously upright / nearly
+                    -- motionless, give gravity a lever arm instead of letting
+                    -- the VPhysics box sleep on its bottom edge.
+                    if p:GetVelocity():Length() < 95 then
+                        local currentLongAxis
+
+                        if math.abs(size.z) >= math.abs(size.x)
+                            and math.abs(size.z) >= math.abs(size.y)
+                        then
+                            currentLongAxis = debris:GetUp()
+                        elseif math.abs(size.y) >= math.abs(size.x) then
+                            currentLongAxis = debris:GetRight()
+                        else
+                            currentLongAxis = debris:GetForward()
+                        end
+
+                        if math.abs(currentLongAxis:Dot(vector_up)) > 0.48 then
+                            p:ApplyForceOffset(
+                                tipDirection * p:GetMass() * 62,
+                                debris:GetPos()
+                                    + currentLongAxis * lever
+                            )
+                            p:AddAngleVelocity(
+                                tipDirection * 95
+                            )
+                        end
+                    end
+                end)
+            end
+        end
+
         phys:Wake()
     end
 
@@ -3157,6 +3250,94 @@ if CLIENT then
         return desiredAnchor - rotated
     end
 
+    local function ApplyLocalStructuralCrushMatrix(
+        name,
+        prop,
+        cached,
+        state
+    )
+        if not IsValid(prop)
+            or not cached
+            or not cached.structural
+            or not cached.localPiece
+            or not state
+        then
+            return
+        end
+
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+
+        if ContainsAnyWord(text, DOOR_WORDS)
+            or ContainsAnyWord(text, CONTROL_WORDS)
+            or string.find(text, "panel", 1, true)
+            or string.find(text, "pult", 1, true)
+            or string.find(text, "lamp", 1, true)
+            or string.find(text, "light", 1, true)
+        then
+            return
+        end
+
+        local structuralShell =
+            cached.cabin
+            or string.find(text, "mask", 1, true)
+            or string.find(text, "body", 1, true)
+            or string.find(text, "shell", 1, true)
+            or string.find(text, "interior", 1, true)
+
+        if not structuralShell then return end
+
+        local size = cached.size
+        local largest = math.max(
+            math.abs(size.x),
+            math.abs(size.y),
+            math.abs(size.z)
+        )
+
+        if largest < 42 then return end
+
+        local displacement =
+            DeformLocalPoint(cached.anchorPos, state)
+            - cached.anchorPos
+
+        if displacement:LengthSqr() < 0.16 then
+            prop:DisableMatrix("RenderMultiply")
+            prop.MEXDamageMatrixApplied = nil
+            return
+        end
+
+        local sx = 1 - math.Clamp(
+            math.abs(displacement.x)
+                / math.max(math.abs(size.x), 28)
+                * 0.42,
+            0,
+            0.24
+        )
+        local sy = 1 - math.Clamp(
+            math.abs(displacement.y)
+                / math.max(math.abs(size.y), 28)
+                * 0.34,
+            0,
+            0.18
+        )
+        local sz = 1 - math.Clamp(
+            math.abs(displacement.z)
+                / math.max(math.abs(size.z), 28)
+                * 0.30,
+            0,
+            0.15
+        )
+
+        local matrix = Matrix()
+        matrix:Translate(cached.obbCenter)
+        matrix:Scale(Vector(sx, sy, sz))
+        matrix:Translate(-cached.obbCenter)
+
+        prop:EnableMatrix("RenderMultiply", matrix)
+        prop.MEXDamageMatrixApplied = true
+    end
+
     local function ApplyRigidAttachment(train, prop, cached, state)
         local strength = cached.cabin
             and math.max(1.18, CabStrengthAtPoint(cached.anchorPos, state))
@@ -4952,6 +5133,12 @@ if CLIENT then
                 -- localized panel bodies etc. remain rigid but follow the
                 -- deformed mounting point. Their own child bones can still bend.
                 ApplyRigidAttachment(train, prop, cached, state)
+                ApplyLocalStructuralCrushMatrix(
+                    name,
+                    prop,
+                    cached,
+                    state
+                )
             else
                 -- Full saloon/interior models are kept at the train origin.
                 -- Only their existing child bones are allowed to deform. This
