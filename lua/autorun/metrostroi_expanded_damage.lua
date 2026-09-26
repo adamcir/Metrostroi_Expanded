@@ -608,6 +608,7 @@ if SERVER then
         local model = net.ReadString()
         local localPos = net.ReadVector()
         local localAng = net.ReadAngle()
+        local anchorLocal = net.ReadVector()
         local mins = net.ReadVector()
         local maxs = net.ReadVector()
         local isDoor = net.ReadBool()
@@ -642,6 +643,7 @@ if SERVER then
         if string.sub(string.lower(model), 1, 7) ~= "models/" then return end
         if not util.IsValidModel(model) then return end
         if not isvector(localPos) or not isangle(localAng) then return end
+        if not isvector(anchorLocal) then return end
         if not isvector(mins) or not isvector(maxs) then return end
         if not isstring(material) or #material > 160 then return end
 
@@ -651,6 +653,9 @@ if SERVER then
         if localPos.x < obbMins.x or localPos.x > obbMaxs.x
             or localPos.y < obbMins.y or localPos.y > obbMaxs.y
             or localPos.z < obbMins.z or localPos.z > obbMaxs.z
+            or anchorLocal.x < obbMins.x or anchorLocal.x > obbMaxs.x
+            or anchorLocal.y < obbMins.y or anchorLocal.y > obbMaxs.y
+            or anchorLocal.z < obbMins.z or anchorLocal.z > obbMaxs.z
         then
             return
         end
@@ -666,7 +671,7 @@ if SERVER then
             return
         end
 
-        local zone, localScore = FindNearestDamagedZone(train, localPos)
+        local zone, localScore = FindNearestDamagedZone(train, anchorLocal)
         local overall = MEXD.GetOverallDamage(train)
 
         -- The client chooses the exact mounting failure from its visible
@@ -939,9 +944,19 @@ if SERVER then
             train:GetNW2Float("MEX.Damage.LastImpactKmh", 0)
         ))
     end)
+
+    hook.Add("EntityRemoved", "MEX.Damage.CleanupServerDebris", function(ent)
+        if not IsSubwayTrain(ent) then return end
+
+        if istable(ent.MEXDamageDetachedServer) then
+            for _, data in pairs(ent.MEXDamageDetachedServer) do
+                if IsValid(data.debris) then
+                    data.debris:Remove()
+                end
+            end
+        end
+    end)
 end
-
-
 
 if CLIENT then
     ---------------------------------------------------------------------------
@@ -1879,6 +1894,7 @@ if CLIENT then
             net.WriteString(cached.model)
             net.WriteVector(localPos)
             net.WriteAngle(localAng)
+            net.WriteVector(cached.anchorPos)
             net.WriteVector(prop:OBBMins())
             net.WriteVector(prop:OBBMaxs())
             net.WriteBool(isDoor)
