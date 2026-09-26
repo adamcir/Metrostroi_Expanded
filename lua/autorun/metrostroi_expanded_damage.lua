@@ -2350,13 +2350,27 @@ if CLIENT then
                 isControl = isControl,
                 score = score,
                 edgeDistance = edgeDistance,
+                priority =
+                    isControl and 3
+                    or (isDoor and 1 or 2),
             }
         end
 
         table.sort(candidates, function(a, b)
-            if math.abs(a.edgeDistance - b.edgeDistance) > 0.01 then
-                return a.edgeDistance < b.edgeDistance
+            -- Within a small local neighborhood, prefer the actually mounted
+            -- control over a large panel/case behind it.
+            local neighborhood = math.min(8, radius * 0.35)
+            local aRank = a.edgeDistance - a.priority * neighborhood
+            local bRank = b.edgeDistance - b.priority * neighborhood
+
+            if math.abs(aRank - bRank) > 0.01 then
+                return aRank < bRank
             end
+
+            if a.priority ~= b.priority then
+                return a.priority > b.priority
+            end
+
             return a.score > b.score
         end)
 
