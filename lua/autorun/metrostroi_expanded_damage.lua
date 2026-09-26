@@ -549,11 +549,6 @@ if CLIENT then
                     prop.MEXDamageRenderOrigin = nil
                 end
 
-                if prop.MEXDamageRenderAngles then
-                    prop:SetRenderAngles(nil)
-                    prop.MEXDamageRenderAngles = nil
-                end
-
                 if prop.MEXDamageMatrixApplied then
                     prop:DisableMatrix("RenderMultiply")
                     prop.MEXDamageMatrixApplied = nil
@@ -604,12 +599,28 @@ if CLIENT then
             if not IsValid(prop) then continue end
 
             -- ClientEnts include the salon/interior shell, cab equipment,
-            -- panels, switches, gauges, lamps and buttons. Metrostroi keeps
-            -- their real transform relative to the undeformed train. We only
-            -- override the render transform, so animations and button states
-            -- continue to work normally.
-            local baseWorldPos = prop:GetPos()
-            local baseLocalPos = train:WorldToLocal(baseWorldPos)
+            -- panels, switches, gauges, lamps and buttons. Almost all standard
+            -- Metrostroi ClientEnts are parented directly to the train.
+            --
+            -- IMPORTANT: SetRenderOrigin changes what GetPos() reports, so using
+            -- GetPos() again on the next frame would recursively deform the
+            -- already-deformed render position. GetLocalPos() remains the real
+            -- attachment position maintained by Metrostroi and therefore gives
+            -- us a stable, non-accumulating anchor for every frame.
+            local baseLocalPos
+            if prop:GetParent() == train then
+                baseLocalPos = prop:GetLocalPos()
+            else
+                -- Fallback for third-party ClientEnts that are not parented to
+                -- the train. Temporarily clear our render override before
+                -- reading their real world position.
+                if prop.MEXDamageRenderOrigin then
+                    prop:SetRenderOrigin(nil)
+                    prop.MEXDamageRenderOrigin = nil
+                end
+                baseLocalPos = train:WorldToLocal(prop:GetPos())
+            end
+
             local deformedLocalPos = DeformLocalPosition(baseLocalPos, transform)
             local deformedWorldPos = train:LocalToWorld(deformedLocalPos)
 
@@ -618,10 +629,7 @@ if CLIENT then
 
             -- Keep rigid detail props (buttons, handles, gauges...) rigid, but
             -- move their attachment point with the same deformed panel/body.
-            -- This prevents switches from floating in the air after a crash.
-            local baseWorldAng = prop:GetAngles()
-            prop:SetRenderAngles(baseWorldAng)
-            prop.MEXDamageRenderAngles = true
+            -- Their normal Metrostroi angles/animations remain untouched.
 
             -- Large salon/cab/interior shells are part of the structure and
             -- therefore receive the same compression as the outer carbody.
