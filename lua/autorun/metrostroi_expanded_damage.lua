@@ -4013,14 +4013,12 @@ if CLIENT then
             add("PneumaticBrakeSet7")
         end
 
-        local filtered = {}
-        for _, id in ipairs(out) do
-            if not HasOtherAttachedProvider(train, id, propName) then
-                filtered[#filtered + 1] = id
-            end
-        end
-
-        return filtered, false
+        -- Standalone hardware is itself the authoritative physical
+        -- device. Do not let an invisible/logical ButtonMap prop masquerade as
+        -- a second attached provider and keep the destroyed mechanism alive.
+        -- Duplicate-provider filtering is only valid for exact physical
+        -- ButtonMap bindings handled above.
+        return out, false
     end
 
     local function CopyButtonDefinition(button)
