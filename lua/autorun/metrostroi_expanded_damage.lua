@@ -421,65 +421,168 @@ if SERVER then
     end)
 end
 
+
 if CLIENT then
-    local function HasAnyDamage(train)
-        return train:GetNW2Float("MEX.Damage.overall", 0) > 0.001
-    end
-
-    local function ApplyVisualDeformation(train)
-        if not IsValid(train) then return end
-
+    local function GetDeformationTransform(train)
         local front = train:GetNW2Float("MEX.Damage.front", 0)
         local rear = train:GetNW2Float("MEX.Damage.rear", 0)
         local left = train:GetNW2Float("MEX.Damage.left", 0)
         local right = train:GetNW2Float("MEX.Damage.right", 0)
+        local overall = math.max(front, rear, left, right)
 
-        if math.max(front, rear, left, right) <= 0.001 then
-            if train.MEXDamageMatrixApplied then
-                train:DisableMatrix("RenderMultiply")
-                train.MEXDamageMatrixApplied = nil
-            end
-            return
+        if overall <= 0.001 then
+            return nil
         end
 
         local mins = train:OBBMins()
         local maxs = train:OBBMaxs()
         local length = math.max(maxs.x - mins.x, 1)
         local width = math.max(maxs.y - mins.y, 1)
+        local height = math.max(maxs.z - mins.z, 1)
 
-        -- Generic visual crumple. It deliberately stays conservative because
-        -- the real collision mesh and child props are not deformed by Source.
-        local xLoss = math.Clamp(0.075 * front + 0.075 * rear, 0, 0.14)
-        local yLoss = math.Clamp(0.10 * left + 0.10 * right, 0, 0.16)
+        -- This is the same transform used by the carbody itself. Child/client
+        -- props must use the same local-space mapping or they remain behind
+        -- while the body gets compressed.
+        local scale = Vector(
+            1 - math.Clamp(0.075 * front + 0.075 * rear, 0, 0.14),
+            1 - math.Clamp(0.10 * left + 0.10 * right, 0, 0.16),
+            1 - math.Clamp(overall * 0.025, 0, 0.025)
+        )
 
-        local scaleX = 1 - xLoss
-        local scaleY = 1 - yLoss
-        local overall = math.max(front, rear, left, right)
-        local scaleZ = 1 - math.Clamp(overall * 0.025, 0, 0.025)
+        local translate = Vector(
+            (rear - front) * length * 0.0375,
+            (left - right) * width * 0.05,
+            -overall * height * 0.006
+        )
 
-        -- Translation makes the visual compression happen predominantly from
-        -- the damaged side instead of symmetrically around the model origin.
-        local translateX = (rear - front) * length * 0.0375
-        local translateY = (left - right) * width * 0.05
-        local translateZ = -overall * (maxs.z - mins.z) * 0.006
+        return {
+            scale = scale,
+            translate = translate,
+            front = front,
+            rear = rear,
+            left = left,
+            right = right,
+            overall = overall,
+        }
+    end
+
+    local function DeformLocalPosition(localPos, transform)
+        return Vector(
+            localPos.x * transform.scale.x + transform.translate.x,
+            localPos.y * transform.scale.y + transform.translate.y,
+            localPos.z * transform.scale.z + transform.translate.z
+        )
+    end
+
+    local function ClearClientPropDeformation(train)
+        if not istable(train.ClientEnts) then return end
+
+        for _, prop in pairs(train.ClientEnts) do
+            if IsValid(prop) then
+                if prop.MEXDamageRenderOrigin then
+                    prop:SetRenderOrigin(nil)
+                    prop.MEXDamageRenderOrigin = nil
+                end
+
+                if prop.MEXDamageMatrixApplied then
+                    prop:DisableMatrix("RenderMultiply")
+                    prop.MEXDamageMatrixApplied = nil
+                end
+            end
+        end
+    end
+
+    local function IsLargeAlignedClientProp(train, prop)
+        if not IsValid(prop) then return false end
+
+        local mins = prop:OBBMins()
+        local maxs = prop:OBBMaxs()
+        if not isvector(mins) or not isvector(maxs) then return false end
+
+        local size = maxs - mins
+
+        -- Whole salon/interior shells, lamp strips and additional body shells
+        -- need to deform together with the body. Small rigid objects such as
+        -- switches, door handles and gauges should only move, not be squashed.
+        local large = math.abs(size.x) >= 220 or math.abs(size.y) >= 120
+        if not large then return false end
+
+        local forwardAlignment = math.abs(prop:GetForward():Dot(train:GetForward()))
+        local rightAlignment = math.abs(prop:GetRight():Dot(train:GetRight()))
+
+        return forwardAlignment >= 0.94 and rightAlignment >= 0.94
+    end
+
+    local function ApplyClientPropDeformation(train, transform)
+        if not istable(train.ClientEnts) then return end
+
+        for name, prop in pairs(train.ClientEnts) do
+            if not IsValid(prop) then continue end
+
+            -- GetPos is the real Metrostroi position. SetRenderOrigin below only
+            -- affects drawing, so this does not accumulate every frame and still
+            -- follows animated/moving client props.
+            local baseWorldPos = prop:GetPos()
+            local baseLocalPos = train:WorldToLocal(baseWorldPos)
+            local deformedLocalPos = DeformLocalPosition(baseLocalPos, transform)
+            local deformedWorldPos = train:LocalToWorld(deformedLocalPos)
+
+            prop:SetRenderOrigin(deformedWorldPos)
+            prop.MEXDamageRenderOrigin = true
+
+            if IsLargeAlignedClientProp(train, prop) then
+                local matrix = Matrix()
+                matrix:Scale(transform.scale)
+                prop:EnableMatrix("RenderMultiply", matrix)
+                prop.MEXDamageMatrixApplied = true
+            elseif prop.MEXDamageMatrixApplied then
+                prop:DisableMatrix("RenderMultiply")
+                prop.MEXDamageMatrixApplied = nil
+            end
+        end
+    end
+
+    local function ApplyVisualDeformation(train, transform)
+        if not transform then
+            if train.MEXDamageMatrixApplied then
+                train:DisableMatrix("RenderMultiply")
+                train.MEXDamageMatrixApplied = nil
+            end
+
+            ClearClientPropDeformation(train)
+            return
+        end
 
         local matrix = Matrix()
-        matrix:Scale(Vector(scaleX, scaleY, scaleZ))
-        matrix:SetTranslation(Vector(translateX, translateY, translateZ))
+        matrix:Scale(transform.scale)
+        matrix:SetTranslation(transform.translate)
 
         train:EnableMatrix("RenderMultiply", matrix)
         train.MEXDamageMatrixApplied = true
+
+        ApplyClientPropDeformation(train, transform)
     end
 
-    local nextVisualUpdate = 0
-
-    hook.Add("Think", "MEX.Damage.UpdateVisualDeformation", function()
-        if CurTime() < nextVisualUpdate then return end
-        nextVisualUpdate = CurTime() + 0.05
-
+    -- Use a render hook rather than Think: Metrostroi is free to update
+    -- ClientEnt positions/animations during the frame, then this hook applies
+    -- the crash transform immediately before they are rendered.
+    hook.Add("PreDrawOpaqueRenderables", "MEX.Damage.UpdateVisualDeformation", function()
         for _, train in ipairs(ents.GetAll()) do
             if IsSubwayTrain(train) then
-                ApplyVisualDeformation(train)
+                ApplyVisualDeformation(train, GetDeformationTransform(train))
+            end
+        end
+    end)
+
+    hook.Add("PreDrawTranslucentRenderables", "MEX.Damage.UpdateTransparentClientProps", function()
+        -- Some Metrostroi client props are rendered in translucent groups.
+        -- Reapply the same origins so those props stay attached as well.
+        for _, train in ipairs(ents.GetAll()) do
+            if IsSubwayTrain(train) then
+                local transform = GetDeformationTransform(train)
+                if transform then
+                    ApplyClientPropDeformation(train, transform)
+                end
             end
         end
     end)
@@ -530,6 +633,10 @@ if CLIENT then
         end
     end)
 
+    local function HasAnyDamage(train)
+        return train:GetNW2Float("MEX.Damage.overall", 0) > 0.001
+    end
+
     hook.Add("PostDrawTranslucentRenderables", "MEX.Damage.DebugState", function()
         local ply = LocalPlayer()
         if not IsValid(ply) or not ply:IsAdmin() then return end
@@ -559,6 +666,13 @@ if CLIENT then
                     )
                 cam.End3D2D()
             end
+        end
+    end)
+
+    hook.Add("EntityRemoved", "MEX.Damage.ClearRemovedTrainClientProps", function(ent)
+        if not ent.MEXDamageMatrixApplied then return end
+        if ent.DisableMatrix then
+            ent:DisableMatrix("RenderMultiply")
         end
     end)
 end
