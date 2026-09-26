@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.5.0"
+MEXD.Version = "0.5.1"
 
 local ZONES = {
     front = true,
@@ -137,12 +137,24 @@ if SERVER then
         if not isfunction(train.ButtonEvent) then return end
 
         train.MEXDamageOriginalButtonEvent = train.ButtonEvent
+        train.MEXDamageOriginalOnButtonPress = train.OnButtonPress
+        train.MEXDamageOriginalOnButtonRelease = train.OnButtonRelease
         train.MEXDamageBlockedButtons = train.MEXDamageBlockedButtons or {}
 
+        local function blocked(self, button)
+            if not self.MEXDamageBlockedButtons then return false end
+            button = isstring(button)
+                and button:gsub("^.+:", "")
+                or button
+            return self.MEXDamageBlockedButtons[button] == true
+        end
+
         train.ButtonEvent = function(self, button, state, ply)
-            if self.MEXDamageBlockedButtons
-                and self.MEXDamageBlockedButtons[button]
-            then
+            local normalized = isstring(button)
+                and button:gsub("^.+:", "")
+                or button
+
+            if blocked(self, normalized) then
                 return false
             end
 
@@ -152,6 +164,42 @@ if SERVER then
                 state,
                 ply
             )
+        end
+
+        if isfunction(train.MEXDamageOriginalOnButtonPress) then
+            train.OnButtonPress = function(self, button, ply)
+                local normalized = isstring(button)
+                    and button:gsub("^.+:", "")
+                    or button
+
+                if blocked(self, normalized) then
+                    return true
+                end
+
+                return self.MEXDamageOriginalOnButtonPress(
+                    self,
+                    button,
+                    ply
+                )
+            end
+        end
+
+        if isfunction(train.MEXDamageOriginalOnButtonRelease) then
+            train.OnButtonRelease = function(self, button, ply)
+                local normalized = isstring(button)
+                    and button:gsub("^.+:", "")
+                    or button
+
+                if blocked(self, normalized) then
+                    return true
+                end
+
+                return self.MEXDamageOriginalOnButtonRelease(
+                    self,
+                    button,
+                    ply
+                )
+            end
         end
     end
 
@@ -2762,11 +2810,8 @@ if CLIENT then
     end
 
     local function IsSmallControlComponent(name, cached, panelName)
-        if not panelName then return false end
-
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
-        if largest > 55 then return false end
 
         local text =
             (name or "")
@@ -2775,9 +2820,18 @@ if CLIENT then
             .. " "
             .. (panelName or "")
 
-        -- Generated ButtonMap props are controls even when their file name does
-        -- not literally contain "button".
-        return ContainsAnyWord(text, CONTROL_WORDS) or largest <= 28
+        local namedControl = ContainsAnyWord(text, CONTROL_WORDS)
+
+        -- Standalone driver's valves, disconnect cocks and controllers are
+        -- often not generated from ButtonMap at all. Treat explicitly named
+        -- control hardware as a control even without panelName.
+        if namedControl then
+            return largest <= 145
+        end
+
+        -- Tiny generated ButtonMap props are controls even when their file
+        -- name does not literally contain "button".
+        return panelName ~= nil and largest <= 28
     end
 
     local function IsGeneralBreakawayComponent(
@@ -2804,6 +2858,112 @@ if CLIENT then
         end
 
         return cached.localPiece and largest <= 85
+    end
+
+    local function ButtonCenterLocal(panel, button)
+        if not istable(panel) or not istable(button) then return nil end
+        if not isvector(panel.pos) or not isangle(panel.ang) then return nil end
+
+        local x = tonumber(button.x) or 0
+        local y = tonumber(button.y) or 0
+
+        if not button.radius then
+            x = x + (tonumber(button.w) or 0) * 0.5
+            y = y + (tonumber(button.h) or 0) * 0.5
+        end
+
+        local pos = Vector(x, -y, 0)
+        local ang = panel.MEXDamageBaseAng or panel.ang
+        local basePos = panel.MEXDamageBasePos or panel.pos
+        local scale = tonumber(panel.MEXDamageBaseScale)
+            or tonumber(panel.scale)
+            or 1
+
+        pos:Rotate(ang)
+        return basePos + pos * scale
+    end
+
+    local function GetNearbyButtonIDs(train, cached)
+        local result = {}
+        local candidates = {}
+
+        if not cached or not isvector(cached.anchorPos)
+            or not istable(train.ButtonMap)
+        then
+            return result
+        end
+
+        local s = cached.size
+        local largest = math.max(
+            math.abs(s.x),
+            math.abs(s.y),
+            math.abs(s.z)
+        )
+
+        local text = string.lower(
+            (cached.model or "")
+        )
+
+        local valveLike =
+            string.find(text, "valve", 1, true)
+            or string.find(text, "cran", 1, true)
+            or string.find(text, "kran", 1, true)
+            or string.find(text, "/334", 1, true)
+            or string.find(text, "/013", 1, true)
+
+        local searchRadius = valveLike
+            and math.Clamp(largest * 0.70, 28, 72)
+            or math.Clamp(largest * 0.45, 10, 38)
+
+        for panelName, panel in pairs(train.ButtonMap) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                if not istable(button) or not isstring(button.ID) then
+                    continue
+                end
+
+                local buttonPos = ButtonCenterLocal(panel, button)
+                if not isvector(buttonPos) then continue end
+
+                local distance = cached.anchorPos:Distance(buttonPos)
+                if distance > searchRadius then continue end
+
+                candidates[#candidates + 1] = {
+                    id = button.ID:gsub("^.+:", ""),
+                    panelName = panelName,
+                    distance = distance,
+                }
+            end
+        end
+
+        table.sort(candidates, function(a, b)
+            return a.distance < b.distance
+        end)
+
+        if #candidates == 0 then return result end
+
+        local best = candidates[1].distance
+        local keepDistance = math.min(
+            searchRadius,
+            best + (valveLike and 18 or 8)
+        )
+        local seen = {}
+
+        for _, candidate in ipairs(candidates) do
+            if candidate.distance > keepDistance then break end
+            if not seen[candidate.id] then
+                seen[candidate.id] = true
+                result[#result + 1] = candidate.id
+            end
+        end
+
+        return result
     end
 
     local function GetButtonIDsForProp(train, panelName, propName, cached)
@@ -2845,6 +3005,13 @@ if CLIENT then
                     end
                 end
             end
+        end
+
+        -- Standalone hardware may not have PropName/model-name
+        -- linkage to ButtonMap. Pull in nearby 3D hit targets as a second,
+        -- geometry-based association.
+        for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
+            add(nearbyID)
         end
 
         local text = string.lower(
@@ -2933,7 +3100,76 @@ if CLIENT then
             add("DriverValveTLDisconnectToggle")
         end
 
+        if string.find(text, "valve_disconnect", 1, true)
+            and not string.find(text, "brake_disconnect", 1, true)
+            and not string.find(text, "train_disconnect", 1, true)
+        then
+            add("DriverValveDisconnect")
+            add("DriverValveDisconnectToggle")
+        end
+
+        if string.find(text, "epk_disconnect", 1, true) then
+            add("EPKToggle")
+        end
+
+        if string.find(text, "epv_disconnect", 1, true) then
+            add("EPKToggle")
+        end
+
+        -- Standalone 334/013 driver's brake valves are not tied to a clickable
+        -- ButtonMap prop on many trains. Their physical loss disables the
+        -- complete pneumatic-brake control family.
+        if string.find(text, "brake_valve", 1, true)
+            or string.find(text, "/334", 1, true)
+            or string.find(text, "/013", 1, true)
+        then
+            add("PneumaticBrakeUp")
+            add("PneumaticBrakeDown")
+            add("PneumaticBrakeSet1")
+            add("PneumaticBrakeSet2")
+            add("PneumaticBrakeSet3")
+            add("PneumaticBrakeSet4")
+            add("PneumaticBrakeSet5")
+            add("PneumaticBrakeSet6")
+            add("PneumaticBrakeSet7")
+        end
+
         return out
+    end
+
+    local function DisableDetachedButtonIDs(train, buttonIDs)
+        if not istable(train.ButtonMap) or not istable(buttonIDs) then return end
+
+        local wanted = {}
+        for _, id in ipairs(buttonIDs) do
+            if isstring(id) and id ~= "" then
+                wanted[id:gsub("^.+:", "")] = true
+            end
+        end
+
+        if table.IsEmpty(wanted) then return end
+
+        for _, panel in pairs(train.ButtonMap) do
+            if not istable(panel) or not istable(panel.buttons) then continue end
+
+            if not panel.MEXDamageButtonsPrivate then
+                local privateButtons = {}
+                for k, v in pairs(panel.buttons) do
+                    privateButtons[k] = v
+                end
+                panel.buttons = privateButtons
+                panel.MEXDamageButtonsPrivate = true
+            end
+
+            for key, button in pairs(panel.buttons) do
+                if not istable(button) or not isstring(button.ID) then continue end
+
+                local id = button.ID:gsub("^.+:", "")
+                if wanted[id] then
+                    panel.buttons[key] = nil
+                end
+            end
+        end
     end
 
     local function GetPanelAttachedLocalTransform(train, cached, panelName)
@@ -3432,6 +3668,14 @@ if CLIENT then
                     name,
                     cached
                 )
+
+                local mappedButtons = GetButtonIDsForProp(
+                    train,
+                    nil,
+                    name,
+                    cached
+                )
+                DisableDetachedButtonIDs(train, mappedButtons)
 
                 prop:SetRenderOrigin(nil)
                 prop:SetRenderAngles(nil)
