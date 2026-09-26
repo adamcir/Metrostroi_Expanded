@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.4.0**
+Current damage-system module version: **0.4.1**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -61,6 +61,9 @@ It currently provides:
 - localized parts such as cab shells, front masks, doors, lamps and similar pieces remain rigid but follow their deformed mounting point
 - interactive `ButtonMap` panels are shallow-cloned per wagon (nested Metrostroi runtime tables are not copied) and their generated buttons move with the same rigid panel transform, keeping controls usable
 - train lights follow their deformed mounting points
+- **breakaway doors and small cab controls**: when the local mounting point is distorted strongly enough, the attached Metrostroi ClientEnt is hidden and replaced by a clientside physics prop that falls under gravity and collides with the map
+- door/control debris receives the train velocity plus an impact impulse and angular velocity; models without their own physics mesh receive a conservative box-physics fallback
+- detached button hit targets are removed from the per-wagon panel copy so a button that physically tore off is no longer clickable
 - sparks, impact decals and smoke for harder impacts
 - structural-health and generic electrical/door/equipment damage states
 - `mex_damage_bones` to inspect the actual bone structure of the selected train and its structural ClientEnt models
@@ -68,7 +71,7 @@ It currently provides:
 
 Design notes and the crashworthiness references used for the rewrite are in [docs/DAMAGE_SYSTEM.md](docs/DAMAGE_SYSTEM.md).
 
-The outer skin can only form a true local dent when the compiled Source model has vertices weighted to suitable bones. Garry's Mod can change existing bone matrices clientside, but it cannot add new bones/vertex weights to an already compiled MDL at runtime. On a single-root-bone shell, v0.4 deliberately leaves that shell rigid instead of producing the unrealistic stretched/cut-open wagon seen in the old global-scaling versions. For a full BeamNG-style skin on such a model, a locally prepared deformable MDL with additional deformation bones and weights is required.
+The outer skin can only form a true local dent when the compiled Source model has vertices weighted to suitable bones. Version 0.4.1 now detects whether the selected body has non-root bones in the front region and prints a clear warning when true front-sheet denting is not available on the stock MDL. Garry's Mod can change existing bone matrices clientside, but it cannot add new bones/vertex weights to an already compiled MDL at runtime. On a single-root-bone shell, v0.4 deliberately leaves that shell rigid instead of producing the unrealistic stretched/cut-open wagon seen in the old global-scaling versions. For a full BeamNG-style skin on such a model, a locally prepared deformable MDL with additional deformation bones and weights is required.
 
 ### Damage test commands
 
