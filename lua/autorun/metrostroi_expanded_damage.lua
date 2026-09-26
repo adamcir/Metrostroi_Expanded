@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.1"
+MEXD.Version = "0.6.2"
 
 local ZONES = {
     front = true,
@@ -632,6 +632,29 @@ if SERVER then
         end
 
         return debris
+    end
+
+    local function WorldDirectionToLocal(train, worldVector)
+        if not IsSubwayTrain(train) or not isvector(worldVector) then
+            return Vector(0, 0, 0)
+        end
+
+        return Vector(
+            worldVector:Dot(train:GetForward()),
+            worldVector:Dot(train:GetRight()),
+            worldVector:Dot(train:GetUp())
+        )
+    end
+
+    local function LocalDirectionToWorld(train, localVector)
+        if not IsSubwayTrain(train) or not isvector(localVector) then
+            return Vector(0, 0, 0)
+        end
+
+        return
+            train:GetForward() * localVector.x
+            + train:GetRight() * localVector.y
+            + train:GetUp() * localVector.z
     end
 
     local function ApplyBreakawayImpulse(
@@ -1281,29 +1304,6 @@ if SERVER then
                 table.remove(train.MEXDamageComponentImpacts, i)
             end
         end
-    end
-
-    local function WorldDirectionToLocal(train, worldVector)
-        if not IsSubwayTrain(train) or not isvector(worldVector) then
-            return Vector(0, 0, 0)
-        end
-
-        return Vector(
-            worldVector:Dot(train:GetForward()),
-            worldVector:Dot(train:GetRight()),
-            worldVector:Dot(train:GetUp())
-        )
-    end
-
-    local function LocalDirectionToWorld(train, localVector)
-        if not IsSubwayTrain(train) or not isvector(localVector) then
-            return Vector(0, 0, 0)
-        end
-
-        return
-            train:GetForward() * localVector.x
-            + train:GetRight() * localVector.y
-            + train:GetUp() * localVector.z
     end
 
     local function SendComponentImpact(
@@ -3269,14 +3269,19 @@ if CLIENT then
             (name or "") .. " " .. (cached.model or "")
         )
 
-        if ContainsAnyWord(text, DOOR_WORDS)
-            or ContainsAnyWord(text, CONTROL_WORDS)
-            or string.find(text, "panel", 1, true)
-            or string.find(text, "pult", 1, true)
-            or string.find(text, "lamp", 1, true)
-            or string.find(text, "light", 1, true)
-        then
-            return
+        local excludedStructuralWords = {
+            "door", "dver",
+            "button", "switch", "tumbler", "toggle", "knob",
+            "reverser", "controller", "handle", "lever",
+            "valve", "kran", "wheel", "parking",
+            "manualbrake", "brake",
+            "panel", "pult", "lamp", "light",
+        }
+
+        for _, word in ipairs(excludedStructuralWords) do
+            if string.find(text, word, 1, true) then
+                return
+            end
         end
 
         local structuralShell =
