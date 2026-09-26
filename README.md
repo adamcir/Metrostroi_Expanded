@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.2**
+Current damage-system module version: **0.6.3**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -222,3 +222,15 @@ The visual body deformation remains limited by the bones and vertex weights pres
 - fixes the same class of bug in `ApplyLocalStructuralCrushMatrix`, which referenced later-local `ContainsAnyWord` / breakaway word tables
 - direction-conversion helpers now live before their first use and the local structural-crush filter no longer depends on later declarations
 - a full-file scan for local-function calls before declaration found no remaining forward-reference hazards except an intentionally nested local helper
+
+
+### Damage 0.6.3 – attached vs detached control semantics
+
+Controls now follow one strict rule:
+
+- while the original physical ClientEnt is still attached/visible, the control remains fully usable
+- only after the server confirms that exact physical component detached does mouse/keyboard interaction get disabled
+- generated ButtonMap controls use only their exact physical prop -> button ID relationship; no nearest-neighbour inference is allowed for them
+- spatial fallback is used only for legacy standalone hardware without a direct prop binding, and only the nearest matching control is considered
+- related keyboard aliases are still disabled after confirmed detachment of the same physical control
+- neighbouring controls which remain physically attached stay functional
