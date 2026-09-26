@@ -83,7 +83,12 @@ local function IsAttachedTrainPart(ent)
     if not IsValid(ent) then return false end
     if ent:GetClass() == "mex_damage_debris" then return false end
 
-    local current = ent
+    -- The train itself is a normal physics entity and must remain pickable
+    -- with the Physgun. Only CHILD entities parented to a subway car count as
+    -- attached hardware.
+    if IsSubwayClass(ent) then return false end
+
+    local current = ent:GetParent()
 
     for _ = 1, 10 do
         if not IsValid(current) then return false end
