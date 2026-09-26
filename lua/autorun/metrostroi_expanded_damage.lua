@@ -3508,6 +3508,23 @@ if CLIENT then
             for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
                 add(nearbyID)
             end
+        elseif string.find(text, "door", 1, true)
+            or string.find(text, "dver", 1, true)
+        then
+            -- Older cars often call the visible manual ClientProp door1/door2
+            -- while the interactive panel is FrontDoor/RearDoor/CabinDoor.
+            -- Spatially associate doors too, but ONLY with another Door event
+            -- so a huge door panel cannot steal unrelated nearby controls.
+            for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
+                if string.find(
+                    string.lower(nearbyID),
+                    "door",
+                    1,
+                    true
+                ) then
+                    add(nearbyID)
+                end
+            end
         end
 
         -- Some older trains render the manual/parking-brake mechanism as a
