@@ -49,12 +49,12 @@ Metrostroi Expanded now includes a first simple crash-damage system for all `gmo
 
 It currently provides:
 
-- front, rear, left-side and right-side structural damage zones
+- front, rear, left-side, right-side, roof and underframe/floor structural damage zones
 - a **1000 ms spawn grace period** so Metrostroi initialization/coupling is never counted as a crash
 - primary crash detection from Garry's Mod `PhysicsCollide`, using the actual contact position and pre-impact relative velocity
 - velocity-change detection only as a fallback
 - no global whole-wagon `RenderMultiply` scaling
-- local front/rear crush and side-intrusion fields with a survival-space threshold: light impacts stay near the end/side structure, severe impacts can intrude deeper into the cab/salon
+- local front/rear crush, side intrusion and roof/floor contact deformation with a survival-space threshold: light impacts stay near the contact structure, severe impacts can intrude deeper into the cab/salon
 - **bone-based mesh deformation** through `BuildBonePositions` + `SetBoneMatrix` wherever the existing MDL has usable weighted bones
 - the main train body and structural ClientEnt models use the same deformation field
 - full-length salon/interior shells remain at the train origin and may deform only through their own bones, so the entire interior cannot slide away from the carbody
@@ -65,6 +65,8 @@ It currently provides:
 - structural-health and generic electrical/door/equipment damage states
 - `mex_damage_bones` to inspect the actual bone structure of the selected train and its structural ClientEnt models
 - `mex_damage_debug 1` to show impact centres
+
+Design notes and the crashworthiness references used for the rewrite are in [docs/DAMAGE_SYSTEM.md](docs/DAMAGE_SYSTEM.md).
 
 The outer skin can only form a true local dent when the compiled Source model has vertices weighted to suitable bones. Garry's Mod can change existing bone matrices clientside, but it cannot add new bones/vertex weights to an already compiled MDL at runtime. On a single-root-bone shell, v0.4 deliberately leaves that shell rigid instead of producing the unrealistic stretched/cut-open wagon seen in the old global-scaling versions. For a full BeamNG-style skin on such a model, a locally prepared deformable MDL with additional deformation bones and weights is required.
 
