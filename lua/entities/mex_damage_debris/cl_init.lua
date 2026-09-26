@@ -9,6 +9,18 @@ local function RotatedLocalOffset(ang, v)
         + ang:Up() * v.z
 end
 
+function ENT:Initialize()
+    local mins = self:OBBMins()
+    local maxs = self:OBBMaxs()
+
+    if isvector(mins) and isvector(maxs) then
+        local half = (maxs - mins) * 0.5 + Vector(4, 4, 4)
+        self:SetRenderBounds(-half, half)
+    end
+
+    self:SetPlaybackRate(0)
+end
+
 function ENT:Draw()
     -- The physics entity lives at the visible geometry centre, while the MDL
     -- still expects its original model-space origin. Shift only rendering back
