@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.5**
+Current damage-system module version: **0.6.7**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -252,3 +252,13 @@ Controls now follow one strict rule:
 - the server blocks a shared ButtonEvent only after the last exact physical provider is detached
 - standalone hardware such as brake valves, disconnect cocks and legacy manual doors remains authoritative by itself; logical/invisible ButtonMap hit targets are not allowed to keep a visibly detached mechanism functional
 - doors use the same rule: attached physical door/control parts remain usable, detached physical door/control parts are non-interactive
+
+
+### Damage 0.6.7 – ButtonMap/door state rewrite
+
+- fixes a systemic ButtonMap cloning bug: damaged per-wagon panels now get a private `buttons` container, so replacing a damaged button no longer mutates the original Metrostroi ButtonMap definition
+- exact dead physical bindings are enforced even when the global standalone-control disabled-ID list is empty
+- detached controls also use Metrostroi's native `Hidden.button` state, which its own `findAimButton()` checks for tooltip and mouse interaction every frame
+- shared ButtonEvent IDs are hidden globally only when no other attached physical provider remains
+- legacy doors/mechanisms can resolve their physical ClientEnt through `button.model.var` (for example `FrontDoor` -> `door1`) when that ClientEnt exists
+- reset restores all native Hidden overrides recorded by the damage system
