@@ -35,8 +35,14 @@ function ENT:Initialize()
         phys = self:GetPhysicsObject()
     end
 
+    self:SetPlaybackRate(0)
+    self:SetCycle(math.Clamp(self:GetFrozenCycle(), 0, 1))
+    self:SetPoseParameter("position", self:GetFrozenPosePosition())
+
     if IsValid(phys) then
+        phys:EnableGravity(true)
         phys:EnableMotion(true)
+        phys:EnableDrag(true)
         phys:Wake()
     else
         self:SetMoveType(MOVETYPE_NONE)
