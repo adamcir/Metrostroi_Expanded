@@ -2287,6 +2287,19 @@ if CLIENT then
         "glass", "window", "stekl",
     }
 
+    local MEX_INVISIBLE_GLASS = CreateMaterial(
+        "mex_damage_invisible_glass_v1",
+        "VertexLitGeneric",
+        {
+            ["$basetexture"] = "color/white",
+            ["$translucent"] = "1",
+            ["$alpha"] = "0",
+            ["$nocull"] = "1",
+        }
+    )
+    local MEX_INVISIBLE_GLASS_NAME =
+        "!" .. MEX_INVISIBLE_GLASS:GetName()
+
     local function CopyVector(v)
         return Vector(v.x, v.y, v.z)
     end
@@ -3775,6 +3788,136 @@ if CLIENT then
         end
     end
 
+    local function MaterialPathLooksGlass(path)
+        path = string.lower(path or "")
+
+        return string.find(path, "glass", 1, true) ~= nil
+            or string.find(path, "window", 1, true) ~= nil
+            or string.find(path, "stekl", 1, true) ~= nil
+            or string.find(path, "stec", 1, true) ~= nil
+    end
+
+    local function HideGlassSubMaterials(train, ent)
+        if not IsValid(ent) then return 0 end
+
+        local materials = ent:GetMaterials() or {}
+        local changed = 0
+
+        train.MEXDamageBrokenGlassMaterials =
+            train.MEXDamageBrokenGlassMaterials or {}
+
+        local record = train.MEXDamageBrokenGlassMaterials[ent]
+        if not record then
+            record = {}
+            train.MEXDamageBrokenGlassMaterials[ent] = record
+        end
+
+        for materialIndex, path in ipairs(materials) do
+            if not MaterialPathLooksGlass(path) then continue end
+
+            local subIndex = materialIndex - 1
+
+            if record[subIndex] == nil then
+                record[subIndex] = ent:GetSubMaterial(subIndex) or ""
+            end
+
+            ent:SetSubMaterial(
+                subIndex,
+                MEX_INVISIBLE_GLASS_NAME
+            )
+            changed = changed + 1
+        end
+
+        return changed
+    end
+
+    local function RestoreBrokenGlassMaterials(train)
+        if not istable(train.MEXDamageBrokenGlassMaterials) then return end
+
+        for ent, materials in pairs(train.MEXDamageBrokenGlassMaterials) do
+            if not IsValid(ent) then continue end
+
+            for subIndex, previous in pairs(materials) do
+                if isstring(previous) and previous ~= "" then
+                    ent:SetSubMaterial(subIndex, previous)
+                else
+                    ent:SetSubMaterial(subIndex, nil)
+                end
+            end
+        end
+
+        train.MEXDamageBrokenGlassMaterials = nil
+    end
+
+    local function ShatterEmbeddedGlass(
+        train,
+        hitLocal,
+        power,
+        radius
+    )
+        if not IsSubwayTrain(train) or not isvector(hitLocal) then
+            return false
+        end
+
+        power = tonumber(power) or 0
+        if power < 0.38 then return false end
+
+        local shattered = 0
+        local state = BuildDamageState(train)
+        local mins = train:OBBMins()
+        local maxs = train:OBBMaxs()
+        local center = (mins + maxs) * 0.5
+        local halfLength = math.max((maxs.x - mins.x) * 0.5, 1)
+        local endness = math.abs(hitLocal.x - center.x) / halfLength
+
+        -- Head-end/cab windows are frequently baked into the main carbody MDL
+        -- rather than represented as a separate ClientEnt. If the body has a
+        -- dedicated glass material slot, remove that slot as a fallback.
+        if endness >= 0.62 then
+            shattered = shattered + HideGlassSubMaterials(train, train)
+        end
+
+        if istable(train.ClientEnts) then
+            for name, prop in pairs(train.ClientEnts) do
+                if not IsValid(prop) then continue end
+
+                local cached = CacheClientProp(train, name, prop)
+                local distance = cached.anchorPos:Distance(hitLocal)
+
+                local relevant =
+                    cached.glass
+                    or (
+                        cached.cabin
+                        and endness >= 0.50
+                    )
+                    or (
+                        distance <= math.max(radius or 0, 18) + 28
+                        and cached.structural
+                    )
+
+                if not relevant then continue end
+
+                shattered = shattered
+                    + HideGlassSubMaterials(train, prop)
+            end
+        end
+
+        if shattered > 0 then
+            local worldPos = train:LocalToWorld(hitLocal)
+            local effect = EffectData()
+            effect:SetOrigin(worldPos)
+            effect:SetScale(math.Clamp(power, 0.5, 2))
+            effect:SetMagnitude(2)
+            util.Effect("GlassImpact", effect)
+
+            surface.PlaySound(
+                "physics/glass/glass_largesheet_break1.wav"
+            )
+        end
+
+        return shattered > 0
+    end
+
     local function RequestServerDetach(
         train,
         name,
@@ -4372,6 +4515,7 @@ if CLIENT then
         if not IsSubwayTrain(train) then return end
 
         RestoreDetachedComponents(train)
+        RestoreBrokenGlassMaterials(train)
 
         -- Rebuild a clean per-wagon panel copy on the next damage update.
         RestoreInteractivePanels(train)
