@@ -432,6 +432,46 @@ if SERVER then
         train.MEXDamageBlockedButtons = {}
     end
 
+    local function RebuildDetachedButtonGuard(train)
+        if not IsSubwayTrain(train) then return end
+
+        EnsureButtonEventGuard(train)
+
+        local desired = {}
+
+        if istable(train.MEXDamageDetachedServer) then
+            for _, data in pairs(train.MEXDamageDetachedServer) do
+                if not istable(data) or not istable(data.buttons) then
+                    continue
+                end
+
+                for _, button in ipairs(data.buttons) do
+                    if isstring(button) and button ~= "" then
+                        desired[button:gsub("^.+:", "")] = true
+                    end
+                end
+            end
+        end
+
+        -- Release controls that were blocked by an older/stale association but
+        -- no longer belong to any physically detached component.
+        for button in pairs(train.MEXDamageBlockedButtons or {}) do
+            if desired[button] then continue end
+
+            if train.MEXDamageOriginalButtonEvent then
+                pcall(
+                    train.MEXDamageOriginalButtonEvent,
+                    train,
+                    button,
+                    false,
+                    nil
+                )
+            end
+        end
+
+        train.MEXDamageBlockedButtons = desired
+    end
+
     local function FindNearestDamagedZone(train, localPos)
         local bestZone = nil
         local bestScore = 0
@@ -498,6 +538,7 @@ if SERVER then
 
         train.MEXDamageDetachedServer = {}
         ClearDetachedButtons(train)
+        RebuildDetachedButtonGuard(train)
 
         if broadcastReset then
             net.Start("MEX.DetachReset")
@@ -2009,6 +2050,8 @@ if SERVER then
             debrisList = debrisList,
             buttons = validButtons,
         }
+
+        RebuildDetachedButtonGuard(train)
 
         BroadcastDetachedComponent(train, name, debris)
     end)
