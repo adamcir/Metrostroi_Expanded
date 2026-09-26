@@ -24,10 +24,15 @@ function ENT:Initialize()
             maxs = self:OBBMaxs()
         end
 
-        if isvector(mins) and isvector(maxs) and (maxs - mins):LengthSqr() > 1 then
-            self:PhysicsInitBox(mins, maxs)
-            phys = self:GetPhysicsObject()
+        if not isvector(mins) or not isvector(maxs)
+            or (maxs - mins):LengthSqr() <= 1
+        then
+            mins = Vector(-4, -4, -4)
+            maxs = Vector(4, 4, 4)
         end
+
+        self:PhysicsInitBox(mins, maxs)
+        phys = self:GetPhysicsObject()
     end
 
     if IsValid(phys) then
@@ -45,3 +50,15 @@ end
 function ENT:CanTool(ply, trace, tool)
     return true
 end
+
+hook.Add("PhysgunPickup", "MEX.DamageDebris.Physgun", function(ply, ent)
+    if IsValid(ent) and ent:GetClass() == "mex_damage_debris" then
+        return true
+    end
+end)
+
+hook.Add("GravGunPickupAllowed", "MEX.DamageDebris.GravGun", function(ply, ent)
+    if IsValid(ent) and ent:GetClass() == "mex_damage_debris" then
+        return true
+    end
+end)
