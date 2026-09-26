@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.2"
+MEXD.Version = "0.6.3"
 
 local ZONES = {
     front = true,
@@ -3656,6 +3656,8 @@ if CLIENT then
             out[#out + 1] = id
         end
 
+        local exactPhysicalBinding = false
+
         if panelName and istable(train.ButtonMap) then
             local panel = train.ButtonMap[panelName]
             if istable(panel) and istable(panel.buttons) then
@@ -3678,11 +3680,21 @@ if CLIENT then
                             and model.lamp.name == propName
                         )
 
-                    if matches then
+                    if matches and isstring(button.ID) then
+                        exactPhysicalBinding = true
                         add(button.ID)
                     end
                 end
             end
+        end
+
+        -- Core invariant: an attached physical button stays usable. When a
+        -- generated ButtonMap prop has an exact identity, never infer nearby
+        -- controls from geometry or model-name heuristics. Only this physical
+        -- button's own ID is sent to the server; related keyboard aliases are
+        -- expanded there after the detach is confirmed.
+        if exactPhysicalBinding then
+            return out
         end
 
         local text = string.lower(
@@ -3705,16 +3717,18 @@ if CLIENT then
             or string.find(text, "/013", 1, true)
 
         if needsSpatialAssociation then
-            for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
-                add(nearbyID)
+            -- Standalone hardware has no direct ButtonMap prop identity. Use
+            -- only the single nearest hit target as a fallback; explicit
+            -- hardware mappings below can still disable the complete function
+            -- of one physical controller/valve after it visibly detaches.
+            local nearby = GetNearbyButtonIDs(train, cached)
+            if nearby[1] then
+                add(nearby[1])
             end
         elseif string.find(text, "door", 1, true)
             or string.find(text, "dver", 1, true)
         then
-            -- Older cars often call the visible manual ClientProp door1/door2
-            -- while the interactive panel is FrontDoor/RearDoor/CabinDoor.
-            -- Spatially associate doors too, but ONLY with another Door event
-            -- so a huge door panel cannot steal unrelated nearby controls.
+            -- Legacy manual doors likewise bind to only the nearest Door event.
             for _, nearbyID in ipairs(GetNearbyButtonIDs(train, cached)) do
                 if string.find(
                     string.lower(nearbyID),
@@ -3723,6 +3737,7 @@ if CLIENT then
                     true
                 ) then
                     add(nearbyID)
+                    break
                 end
             end
         end
@@ -4656,6 +4671,10 @@ if CLIENT then
     end
 
     local function MarkDetachedClient(train, name, debris)
+        -- This function is reached only from MEX.ComponentDetached, i.e. after
+        -- the server accepted the physical detach. Never disable controls from
+        -- a mere detach request/prediction: if the original ClientEnt is still
+        -- visibly attached, it must remain fully interactive.
         train.MEXDamageV4ServerDetached =
             train.MEXDamageV4ServerDetached or {}
 
