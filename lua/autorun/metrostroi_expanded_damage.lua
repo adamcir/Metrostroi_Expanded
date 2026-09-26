@@ -4033,9 +4033,11 @@ if CLIENT then
     local function HandleDirectComponentImpact(
         train,
         hitLocal,
+        impulseLocal,
         power,
         radius,
-        maxDetach
+        maxDetach,
+        isBlast
     )
         if not IsSubwayTrain(train) or not istable(train.ClientEnts) then
             return
@@ -4105,7 +4107,40 @@ if CLIENT then
                     isControl
                 )
 
-            if score < threshold then continue end
+            local predictedMove = 0
+
+            if isBlast then
+                local impulseMagnitude = isvector(impulseLocal)
+                    and impulseLocal:Length()
+                    or 0
+
+                local compliance =
+                    isGlass and 2.2
+                    or (isControl and 1.65)
+                    or (isDoor and 0.92 or 1.15)
+
+                predictedMove =
+                    impulseMagnitude
+                    * falloff
+                    * compliance
+                    / 95
+
+                local movementThreshold =
+                    isGlass and 0.025
+                    or (isControl and 0.045)
+                    or (isDoor and 0.085 or 0.065)
+
+                -- Explosion rule: once a mounted part would visibly move even
+                -- a small amount relative to the carbody, its fasteners are
+                -- considered failed and it becomes independent debris.
+                if predictedMove < movementThreshold
+                    and score < threshold * 0.55
+                then
+                    continue
+                end
+            elseif score < threshold then
+                continue
+            end
 
             candidates[#candidates + 1] = {
                 name = name,
@@ -4116,15 +4151,26 @@ if CLIENT then
                 isDoor = isDoor,
                 isControl = isControl,
                 score = score,
+                predictedMove = predictedMove,
                 edgeDistance = edgeDistance,
                 priority =
-                    isGlass and 4
-                    or (isControl and 3)
-                    or (isDoor and 1 or 2),
+                    isGlass and 5
+                    or (isControl and 4)
+                    or (isDoor and 2 or 3),
             }
         end
 
         table.sort(candidates, function(a, b)
+            if isBlast
+                and math.abs(
+                    (a.predictedMove or 0)
+                    - (b.predictedMove or 0)
+                ) > 0.001
+            then
+                return (a.predictedMove or 0)
+                    > (b.predictedMove or 0)
+            end
+
             -- Within a small local neighborhood, prefer the actually mounted
             -- control over a large panel/case behind it.
             local neighborhood = math.min(8, radius * 0.35)
@@ -4143,7 +4189,7 @@ if CLIENT then
         end)
 
         local requested = 0
-        local limit = math.Clamp(maxDetach or 1, 1, 12)
+        local limit = math.Clamp(maxDetach or 1, 1, 96)
 
         for _, candidate in ipairs(candidates) do
             if requested >= limit then break end
@@ -4171,11 +4217,22 @@ if CLIENT then
         local train = net.ReadEntity()
         net.ReadUInt(16) -- serial is currently only used server-side
         local hitLocal = net.ReadVector()
+        local impulseLocal = net.ReadVector()
         local power = net.ReadFloat()
         local radius = net.ReadFloat()
-        local maxDetach = net.ReadUInt(4)
+        local maxDetach = net.ReadUInt(7)
+        local isBlast = net.ReadBool()
 
         if not IsSubwayTrain(train) then return end
+
+        -- Even when glass is baked into a larger carbody/cab model, try to
+        -- remove the model's dedicated glass material slots at the impact.
+        ShatterEmbeddedGlass(
+            train,
+            hitLocal,
+            power,
+            radius
+        )
 
         -- ClientEnts/ButtonMap may be created later in the same frame as the
         -- impact callback. One zero-delay retry is enough without accumulating
@@ -4185,9 +4242,11 @@ if CLIENT then
             HandleDirectComponentImpact(
                 train,
                 hitLocal,
+                impulseLocal,
                 power,
                 radius,
-                maxDetach
+                maxDetach,
+                isBlast
             )
         end)
     end)
