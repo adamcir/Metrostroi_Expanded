@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.4.2**
+Damage System version: **0.4.3**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -117,3 +117,21 @@ Version 0.4.2 promotes detached components to real server-side physics entities:
 - `mex_damage_reset` removes debris, clears blocked controls and restores the undamaged component state
 
 The server validates detach requests against the damaged zone near the component's actual geometry anchor and validates requested Button IDs against the train's KeyMap/systems before disabling them.
+
+
+### Local mounting impacts
+
+Version 0.4.3 adds a separate local mounting-impact path for damage that should not globally deform the train body:
+
+- crowbar/melee (`DMG_CLUB` / `DMG_SLASH`)
+- bullets and buckshot
+- local crush/vehicle contact
+- explosions
+
+The server stores a short-lived local impact around the actual damage/contact point. Clients resolve the visible Metrostroi `ClientEnts` around that point and request only the nearest eligible mounted components. The server then independently validates the request against the recent impact.
+
+For low-energy local hits, the detach budget is normally one component. Large crush/blast impacts receive a larger radius and detach budget.
+
+Small controls have priority over a backing panel/case occupying the same area, so hitting one button should not detach the full dashboard panel.
+
+Structural deformation also uses much lower individual mounting thresholds for fragile controls. This prevents the old failure mode where a complete group of buttons could stay rigidly attached to a deformed `ButtonMap` and move across the cab as one cluster.
