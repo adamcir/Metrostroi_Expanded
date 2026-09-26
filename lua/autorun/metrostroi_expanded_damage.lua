@@ -154,6 +154,56 @@ if SERVER then
         end
     end
 
+    local function KeyMapContainsButton(tbl, target, depth)
+        if not istable(tbl) or depth > 3 then return false end
+
+        for _, value in pairs(tbl) do
+            if isstring(value) and value == target then
+                return true
+            elseif istable(value) and KeyMapContainsButton(
+                value,
+                target,
+                depth + 1
+            ) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function IsValidDetachedButtonID(train, button)
+        if not IsSubwayTrain(train) or not isstring(button) then return false end
+        if button == "" or #button > 96 or string.sub(button, 1, 1) == "!" then
+            return false
+        end
+
+        button = button:gsub("^.+:", "")
+
+        if train[button] ~= nil then return true end
+        if KeyMapContainsButton(train.KeyMap, button, 0) then return true end
+
+        local base = button
+        for _, suffix in ipairs({
+            "Toggle", "Set", "Left", "Right", "Up", "Down",
+        }) do
+            if string.sub(base, -#suffix) == suffix then
+                base = string.sub(base, 1, #base - #suffix)
+                break
+            end
+        end
+
+        if base ~= "" and train[base] ~= nil then return true end
+
+        if string.find(button, "ParkingBrake", 1, true)
+            and train.ParkingBrake ~= nil
+        then
+            return true
+        end
+
+        return false
+    end
+
     local function BlockDetachedButton(train, button)
         if not IsSubwayTrain(train) or not isstring(button) or button == "" then
             return
@@ -661,6 +711,14 @@ if SERVER then
         end
 
         train.MEXDamageDetachedServer = train.MEXDamageDetachedServer or {}
+
+        ply.MEXDamageDetachNext = ply.MEXDamageDetachNext or 0
+        if ply.MEXDamageDetachNext > CurTime() then return end
+        ply.MEXDamageDetachNext = CurTime() + 0.015
+
+        local detachedCount = table.Count(train.MEXDamageDetachedServer)
+        if detachedCount >= 160 then return end
+
         if train.MEXDamageDetachedServer[name] then
             BroadcastDetachedComponent(
                 train,
@@ -703,13 +761,17 @@ if SERVER then
 
         if not IsValid(debris) then return end
 
+        local validButtons = {}
         for _, button in ipairs(buttonIDs) do
-            BlockDetachedButton(train, button)
+            if IsValidDetachedButtonID(train, button) then
+                BlockDetachedButton(train, button)
+                validButtons[#validButtons + 1] = button
+            end
         end
 
         train.MEXDamageDetachedServer[name] = {
             debris = debris,
-            buttons = buttonIDs,
+            buttons = validButtons,
         }
 
         BroadcastDetachedComponent(train, name, debris)
@@ -931,7 +993,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h | detached %d | blocked controls %d",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -941,7 +1003,13 @@ if SERVER then
             MEXD.GetZoneDamage(train, "floor"),
             train:GetNW2Float("MEX.StructuralHealth", 1),
             train:GetNW2Float("MEX.Damage.electrical", 0),
-            train:GetNW2Float("MEX.Damage.LastImpactKmh", 0)
+            train:GetNW2Float("MEX.Damage.LastImpactKmh", 0),
+            istable(train.MEXDamageDetachedServer)
+                and table.Count(train.MEXDamageDetachedServer)
+                or 0,
+            istable(train.MEXDamageBlockedButtons)
+                and table.Count(train.MEXDamageBlockedButtons)
+                or 0
         ))
     end)
 
@@ -1630,7 +1698,8 @@ if CLIENT then
 
     local BREAKAWAY_WORDS = {
         "lamp", "light", "headlight", "mirror", "sign", "cover", "cap",
-        "box", "case", "guard", "panel", "seat", "couch", "handrail",
+        "window", "glass", "box", "case", "guard", "panel", "seat",
+        "couch", "handrail",
         "handler", "wiper", "meter", "gauge", "indicator", "display",
         "wheel", "brake", "parking", "button", "switch", "tumbler",
         "toggle", "knob", "reverser", "controller", "handle", "lever",
@@ -1653,7 +1722,12 @@ if CLIENT then
     end
 
     local function IsDoorComponent(name, cached)
-        local text = (name or "") .. " " .. (cached.model or "")
+        local text =
+            (name or "")
+            .. " "
+            .. (cached.model or "")
+            .. " "
+            .. (panelName or "")
         if not ContainsAnyWord(text, DOOR_WORDS) then return false end
 
         local s = cached.size
@@ -1677,20 +1751,30 @@ if CLIENT then
         return ContainsAnyWord(text, CONTROL_WORDS) or largest <= 28
     end
 
-    local function IsGeneralBreakawayComponent(name, cached)
+    local function IsGeneralBreakawayComponent(
+        name,
+        cached,
+        panelName
+    )
         if cached.fullLength then return false end
 
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
-        if largest > 150 then return false end
 
-        local text = (name or "") .. " " .. (cached.model or "")
+        local text =
+            (name or "")
+            .. " "
+            .. (cached.model or "")
+            .. " "
+            .. (panelName or "")
 
-        return ContainsAnyWord(text, BREAKAWAY_WORDS)
-            or (
-                cached.localPiece
-                and largest <= 75
-            )
+        local explicit = ContainsAnyWord(text, BREAKAWAY_WORDS)
+
+        if explicit then
+            return largest <= 220
+        end
+
+        return cached.localPiece and largest <= 85
     end
 
     local function GetButtonIDsForProp(train, panelName, propName, cached)
@@ -1748,6 +1832,12 @@ if CLIENT then
             add("ParkingBrakeToggle")
             add("ParkingBrakeLeft")
             add("ParkingBrakeRight")
+        end
+
+        if string.find(text, "wiper", 1, true) then
+            add("WiperToggle")
+            add("WiperSet")
+            add("Wiper")
         end
 
         return out
@@ -2094,7 +2184,11 @@ if CLIENT then
         local seed = StableFraction(name)
         local isDoor = IsDoorComponent(name, cached)
         local isControl = IsSmallControlComponent(name, cached, panelName)
-        local isBreakaway = IsGeneralBreakawayComponent(name, cached)
+        local isBreakaway = IsGeneralBreakawayComponent(
+            name,
+            cached,
+            panelName
+        )
 
         if isDoor then
             local threshold = 6.5 + seed * 5.5
