@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.0"
+MEXD.Version = "0.6.1"
 
 local ZONES = {
     front = true,
@@ -1645,7 +1645,7 @@ if SERVER then
         end
 
         local buttonIDs = {}
-        local buttonCount = math.min(net.ReadUInt(5), 16)
+        local buttonCount = math.min(net.ReadUInt(6), 48)
         for _ = 1, buttonCount do
             local id = net.ReadString()
             if #id <= 96 and id ~= "" then
@@ -1877,15 +1877,37 @@ if SERVER then
         end
 
         local validButtons = {}
+        local seenButtons = {}
+
+        local function rememberAndBlock(button)
+            if not isstring(button) or button == "" then return end
+            button = button:gsub("^.+:", "")
+            if #button > 96 or seenButtons[button] then return end
+
+            seenButtons[button] = true
+            BlockDetachedButton(train, button)
+            validButtons[#validButtons + 1] = button
+        end
+
+        -- These IDs were resolved client-side from the actual physical
+        -- ClientEnt/ButtonMap relationship of the component whose detach the
+        -- server has just validated by location/model/recent impact. Some old
+        -- trains expose mouse-only ButtonMap IDs which do not exist in KeyMap
+        -- and used to be incorrectly discarded here.
+        for _, button in ipairs(buttonIDs) do
+            rememberAndBlock(button)
+        end
+
         local expandedButtons = ExpandDetachedButtonAliases(
             train,
             buttonIDs
         )
 
         for _, button in ipairs(expandedButtons) do
-            if IsValidDetachedButtonID(train, button) then
-                BlockDetachedButton(train, button)
-                validButtons[#validButtons + 1] = button
+            if not seenButtons[button]
+                and IsValidDetachedButtonID(train, button)
+            then
+                rememberAndBlock(button)
             end
         end
 
@@ -3656,8 +3678,7 @@ if CLIENT then
 
         -- A direct bullet/crowbar hit can detach a component without creating
         -- structural deformation. Keep a private ButtonMap even in that case;
-        -- otherwise RestoreInteractivePanels would resurrect an invisible
-        -- clickable control on the next Think.
+        -- otherwise Metrostroi can resurrect an invisible clickable control.
         if not train.MEXDamageV4ButtonMapOriginal then
             CloneInteractivePanels(train)
         end
@@ -3680,8 +3701,32 @@ if CLIENT then
                 if not istable(button) or not isstring(button.ID) then continue end
 
                 local id = button.ID:gsub("^.+:", "")
-                if train.MEXDamageDisabledButtonIDs[id] then
-                    panel.buttons[key] = nil
+                if not train.MEXDamageDisabledButtonIDs[id] then continue end
+
+                -- Do not rely on removing the entry alone: Metrostroi may keep
+                -- a local reference to a button object for part of a frame.
+                -- Replace it with a private dead hitbox object at an impossible
+                -- location and zero size, preserving only harmless metadata.
+                if not button.MEXDamageDeadHitbox then
+                    local dead = {}
+                    for k, v in pairs(button) do dead[k] = v end
+
+                    dead.x = 100000000
+                    dead.y = 100000000
+                    dead.w = 0
+                    dead.h = 0
+                    dead.radius = 0
+                    dead.tooltip = ""
+                    dead.MEXDamageDeadHitbox = true
+
+                    panel.buttons[key] = dead
+                else
+                    button.x = 100000000
+                    button.y = 100000000
+                    button.w = 0
+                    button.h = 0
+                    button.radius = 0
+                    button.tooltip = ""
                 end
             end
         end
@@ -4011,8 +4056,8 @@ if CLIENT then
                 )
             end
 
-            net.WriteUInt(math.min(#buttons, 16), 5)
-            for i = 1, math.min(#buttons, 16) do
+            net.WriteUInt(math.min(#buttons, 48), 6)
+            for i = 1, math.min(#buttons, 48) do
                 net.WriteString(buttons[i])
             end
         net.SendToServer()
