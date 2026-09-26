@@ -462,7 +462,9 @@ if SERVER then
 
         return string.find(
             string.lower(model or ""),
-            "81%-717_doors_pos"
+            "81-717_doors_pos",
+            1,
+            true
         ) ~= nil
     end
 
