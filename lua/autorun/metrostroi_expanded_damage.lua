@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.5.2"
+MEXD.Version = "0.6.0"
 
 local ZONES = {
     front = true,
@@ -1086,19 +1086,49 @@ if SERVER then
         end
     end
 
+    local function WorldDirectionToLocal(train, worldVector)
+        if not IsSubwayTrain(train) or not isvector(worldVector) then
+            return Vector(0, 0, 0)
+        end
+
+        return Vector(
+            worldVector:Dot(train:GetForward()),
+            worldVector:Dot(train:GetRight()),
+            worldVector:Dot(train:GetUp())
+        )
+    end
+
+    local function LocalDirectionToWorld(train, localVector)
+        if not IsSubwayTrain(train) or not isvector(localVector) then
+            return Vector(0, 0, 0)
+        end
+
+        return
+            train:GetForward() * localVector.x
+            + train:GetRight() * localVector.y
+            + train:GetUp() * localVector.z
+    end
+
     local function SendComponentImpact(
         train,
         worldPos,
         power,
         radius,
         maxDetach,
-        source
+        source,
+        worldImpulse,
+        isBlast
     )
         if not IsSubwayTrain(train) or not isvector(worldPos) then return end
 
-        power = math.Clamp(tonumber(power) or 0, 0.05, 1.5)
-        radius = math.Clamp(tonumber(radius) or 20, 8, 180)
-        maxDetach = math.Clamp(math.floor(tonumber(maxDetach) or 1), 1, 12)
+        power = math.Clamp(tonumber(power) or 0, 0.05, 2.0)
+        radius = math.Clamp(tonumber(radius) or 20, 8, 320)
+        maxDetach = math.Clamp(math.floor(tonumber(maxDetach) or 1), 1, 96)
+
+        local localImpulse = Vector(0, 0, 0)
+        if isvector(worldImpulse) then
+            localImpulse = WorldDirectionToLocal(train, worldImpulse)
+        end
 
         PruneComponentImpacts(train)
 
@@ -1108,10 +1138,12 @@ if SERVER then
         local impact = {
             id = train.MEXDamageComponentImpactSerial,
             localPos = train:WorldToLocal(worldPos),
+            localImpulse = localImpulse,
             power = power,
             radius = radius,
             remaining = maxDetach,
             source = source or "unknown",
+            blast = isBlast == true,
             expires = CurTime() + COMPONENT_IMPACT_LIFETIME,
         }
 
@@ -1121,9 +1153,11 @@ if SERVER then
             net.WriteEntity(train)
             net.WriteUInt(impact.id % 65536, 16)
             net.WriteVector(impact.localPos)
+            net.WriteVector(localImpulse)
             net.WriteFloat(power)
             net.WriteFloat(radius)
-            net.WriteUInt(maxDetach, 4)
+            net.WriteUInt(maxDetach, 7)
+            net.WriteBool(impact.blast)
         net.Broadcast()
     end
 
@@ -1271,10 +1305,12 @@ if SERVER then
                 SendComponentImpact(
                     ent,
                     hitPos,
-                    math.Clamp(impactKmh / 42, 0.15, 1.5),
-                    math.Clamp(16 + impactKmh * 1.45, 20, 150),
-                    math.Clamp(1 + math.floor(impactKmh / 16), 1, 10),
-                    "physics"
+                    math.Clamp(impactKmh / 42, 0.15, 1.7),
+                    math.Clamp(18 + impactKmh * 1.65, 22, 180),
+                    math.Clamp(1 + math.floor(impactKmh / 12), 1, 16),
+                    "physics",
+                    relativeVelocity * 0.70,
+                    false
                 )
 
                 MEXD.ApplyDamage(
@@ -1757,8 +1793,8 @@ if SERVER then
             local maxDetach
 
             if isBlast then
-                radius = math.Clamp(38 + rawDamage * 0.75, 45, 150)
-                maxDetach = math.Clamp(2 + math.floor(rawDamage / 24), 2, 10)
+                radius = math.Clamp(58 + rawDamage * 1.15, 70, 280)
+                maxDetach = math.Clamp(10 + math.floor(rawDamage / 8), 10, 80)
             elseif isCrush then
                 radius = math.Clamp(22 + rawDamage * 0.45, 24, 105)
                 maxDetach = math.Clamp(1 + math.floor(rawDamage / 32), 1, 7)
@@ -1772,13 +1808,39 @@ if SERVER then
                 maxDetach = 1
             end
 
+            local damageForce = dmginfo:GetDamageForce()
+            local impulseWorld = Vector(0, 0, 0)
+
+            if isvector(damageForce) and damageForce:LengthSqr() > 1 then
+                local dir = damageForce:GetNormalized()
+                local speedImpulse
+
+                if isBlast then
+                    speedImpulse = math.Clamp(45 + rawDamage * 1.65, 55, 260)
+                elseif isCrush then
+                    speedImpulse = math.Clamp(25 + rawDamage * 0.85, 30, 170)
+                elseif isBuckshot then
+                    speedImpulse = math.Clamp(18 + rawDamage * 0.55, 20, 105)
+                else
+                    speedImpulse = math.Clamp(10 + rawDamage * 0.35, 12, 70)
+                end
+
+                impulseWorld = dir * speedImpulse
+            end
+
             SendComponentImpact(
                 ent,
                 componentPos,
-                math.Clamp(0.32 + rawDamage / 40, 0.32, 1.35),
+                math.Clamp(
+                    (isBlast and 0.55 or 0.32) + rawDamage / 40,
+                    isBlast and 0.55 or 0.32,
+                    isBlast and 1.9 or 1.35
+                ),
                 radius,
                 maxDetach,
-                "damageinfo"
+                isBlast and "blast" or "damageinfo",
+                impulseWorld,
+                isBlast
             )
         end
 
