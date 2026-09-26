@@ -1722,12 +1722,7 @@ if CLIENT then
     end
 
     local function IsDoorComponent(name, cached)
-        local text =
-            (name or "")
-            .. " "
-            .. (cached.model or "")
-            .. " "
-            .. (panelName or "")
+        local text = (name or "") .. " " .. (cached.model or "")
         if not ContainsAnyWord(text, DOOR_WORDS) then return false end
 
         local s = cached.size
@@ -1744,7 +1739,12 @@ if CLIENT then
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
         if largest > 55 then return false end
 
-        local text = (name or "") .. " " .. (cached.model or "")
+        local text =
+            (name or "")
+            .. " "
+            .. (cached.model or "")
+            .. " "
+            .. (panelName or "")
 
         -- Generated ButtonMap props are controls even when their file name does
         -- not literally contain "button".
