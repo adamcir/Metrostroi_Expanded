@@ -274,6 +274,10 @@ if SERVER then
         local amount = math.Clamp(rawDamage / 260, 0.025, 0.42)
         local normal = ZoneOutwardNormal(ent, zone)
 
+        -- Prevent the velocity-change detector from counting the same physical
+        -- collision a second time on the next scan.
+        ent.MEXDamageCrashCooldown = CurTime() + 0.18
+
         MEXD.ApplyDamage(ent, zone, amount, pos, normal, "damageinfo")
     end)
 
