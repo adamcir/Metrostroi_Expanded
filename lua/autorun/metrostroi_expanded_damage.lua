@@ -1461,6 +1461,10 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.overall", 0)
         train:SetNW2Float("MEX.StructuralHealth", 1)
         train:SetNW2Float("MEX.Damage.LastImpactKmh", 0)
+        train:SetNW2Float("MEX.Damage.BlastStrength", 0)
+        train:SetNW2Float("MEX.Damage.BlastRadius", 0)
+        train:SetNW2Vector("MEX.Damage.BlastLocal", vector_origin)
+        train:SetNW2Vector("MEX.Damage.BlastImpulseLocal", vector_origin)
         train.MEXDamageComponentImpacts = {}
 
         train:SetNW2Bool("MEX.Damage.Moderate", false)
@@ -2014,6 +2018,39 @@ if SERVER then
         local amount = math.Clamp(rawDamage / 260, 0.025, 0.42)
         local normal = ZoneOutwardNormal(ent, zone)
 
+        if dmginfo:IsDamageType(DMG_BLAST) then
+            local blastWorldPos = DamageImpactWorldPosition(ent, dmginfo)
+            local blastForce = dmginfo:GetDamageForce()
+            local blastImpulseLocal = Vector(0, 0, 0)
+
+            if isvector(blastForce) and blastForce:LengthSqr() > 1 then
+                local dir = blastForce:GetNormalized()
+                local velocityLike =
+                    math.Clamp(45 + rawDamage * 1.65, 55, 260)
+                blastImpulseLocal = WorldDirectionToLocal(
+                    ent,
+                    dir * velocityLike
+                )
+            end
+
+            ent:SetNW2Vector(
+                "MEX.Damage.BlastLocal",
+                ent:WorldToLocal(blastWorldPos)
+            )
+            ent:SetNW2Vector(
+                "MEX.Damage.BlastImpulseLocal",
+                blastImpulseLocal
+            )
+            ent:SetNW2Float(
+                "MEX.Damage.BlastStrength",
+                math.Clamp(rawDamage / 180, 0.08, 1.25)
+            )
+            ent:SetNW2Float(
+                "MEX.Damage.BlastRadius",
+                math.Clamp(58 + rawDamage * 1.15, 70, 280)
+            )
+        end
+
         -- Prevent the velocity-change detector from counting the same physical
         -- collision a second time on the next scan.
         ent.MEXDamageCrashCooldown = CurTime() + 0.18
@@ -2313,7 +2350,17 @@ if CLIENT then
         local right = train:GetNW2Float("MEX.Damage.right", 0)
         local roof = train:GetNW2Float("MEX.Damage.roof", 0)
         local floor = train:GetNW2Float("MEX.Damage.floor", 0)
-        local overall = math.max(front, rear, left, right, roof, floor)
+        local blastStrength =
+            train:GetNW2Float("MEX.Damage.BlastStrength", 0)
+        local overall = math.max(
+            front,
+            rear,
+            left,
+            right,
+            roof,
+            floor,
+            math.min(blastStrength, 1)
+        )
 
         if overall <= 0.001 then return nil end
 
@@ -2329,6 +2376,21 @@ if CLIENT then
             roof = roof,
             floor = floor,
             overall = overall,
+            blast = {
+                strength = blastStrength,
+                radius = train:GetNW2Float(
+                    "MEX.Damage.BlastRadius",
+                    0
+                ),
+                localPos = train:GetNW2Vector(
+                    "MEX.Damage.BlastLocal",
+                    center
+                ),
+                impulse = train:GetNW2Vector(
+                    "MEX.Damage.BlastImpulseLocal",
+                    vector_origin
+                ),
+            },
             mins = mins,
             maxs = maxs,
             center = center,
