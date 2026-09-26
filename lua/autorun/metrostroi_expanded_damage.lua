@@ -572,13 +572,49 @@ end
 
 if CLIENT then
     ---------------------------------------------------------------------------
-    -- Unified deformation field
+    -- v0.4 deformation model
     --
-    -- The train body, interior ClientEnts and ButtonMap panels all use the
-    -- exact same local-space mapping. This is important: a control must never
-    -- be rendered somewhere different from the panel/hitbox that Metrostroi
-    -- uses for mouse interaction.
+    -- No global RenderMultiply scaling is used here. A rail vehicle does not
+    -- realistically turn into a uniformly scaled box during a collision.
+    --
+    -- Instead, every visible part uses one local deformation field:
+    --   * existing MDL bones are displaced/rotated with BuildBonePositions,
+    --   * localized rigid ClientEnts follow the deformed structure,
+    --   * full-car interior shells stay at the train origin and deform only
+    --     through their own bones,
+    --   * ButtonMap panels are shallow-cloned per wagon and moved as rigid
+    --     planes together with their generated button props.
+    --
+    -- This keeps the cab/salon attached to the carbody while retaining
+    -- Metrostroi's original animation and interaction code.
     ---------------------------------------------------------------------------
+
+    local STRUCTURAL_WORDS = {
+        "body", "interior", "salon", "cabin", "cabine", "mask",
+        "pult", "panel", "door", "window", "glass", "seat", "couch",
+        "handler", "handrail", "lamp", "headlight", "frame", "roof",
+    }
+
+    local function CopyVector(v)
+        return Vector(v.x, v.y, v.z)
+    end
+
+    local function CopyAngle(a)
+        return Angle(a.p, a.y, a.r)
+    end
+
+    local function Smooth01(x)
+        x = math.Clamp(x, 0, 1)
+        return x * x * (3 - 2 * x)
+    end
+
+    local function IsFiniteVector(v)
+        return isvector(v)
+            and v.x == v.x and v.y == v.y and v.z == v.z
+            and math.abs(v.x) < 1000000
+            and math.abs(v.y) < 1000000
+            and math.abs(v.z) < 1000000
+    end
 
     local function DefaultHitLocal(train, zone)
         local mins = train:OBBMins()
@@ -599,8 +635,7 @@ if CLIENT then
     end
 
     local function ReadHitLocal(train, zone)
-        local strength = train:GetNW2Float("MEX.Damage.HitStrength." .. zone, 0)
-        if strength <= 0.001 then
+        if train:GetNW2Float("MEX.Damage.HitStrength." .. zone, 0) <= 0.001 then
             return DefaultHitLocal(train, zone)
         end
 
@@ -610,10 +645,8 @@ if CLIENT then
         )
     end
 
-    local function GetDamageState(train)
-        if not train:GetNW2Bool("MEX.DamageReady", false) then
-            return nil
-        end
+    local function BuildDamageState(train)
+        if not train:GetNW2Bool("MEX.DamageReady", false) then return nil end
 
         local front = train:GetNW2Float("MEX.Damage.front", 0)
         local rear = train:GetNW2Float("MEX.Damage.rear", 0)
@@ -621,81 +654,11 @@ if CLIENT then
         local right = train:GetNW2Float("MEX.Damage.right", 0)
         local overall = math.max(front, rear, left, right)
 
-        if overall <= 0.001 then
-            return nil
-        end
+        if overall <= 0.001 then return nil end
 
         local mins = train:OBBMins()
         local maxs = train:OBBMaxs()
         local center = (mins + maxs) * 0.5
-        local halfLength = math.max((maxs.x - mins.x) * 0.5, 1)
-        local halfWidth = math.max((maxs.y - mins.y) * 0.5, 1)
-        local halfHeight = math.max((maxs.z - mins.z) * 0.5, 1)
-
-        local hits = {
-            front = ReadHitLocal(train, "front"),
-            rear = ReadHitLocal(train, "rear"),
-            left = ReadHitLocal(train, "left"),
-            right = ReadHitLocal(train, "right"),
-        }
-
-        -- Main structural crush. Instead of scaling around the model origin,
-        -- choose a pivot towards the opposite, less damaged side. This makes a
-        -- front impact crush the cab while the far end stays much closer to its
-        -- original position.
-        local scale = Vector(
-            1 - math.Clamp((front + rear) * 0.13, 0, 0.20),
-            1 - math.Clamp((left + right) * 0.16, 0, 0.24),
-            1 - math.Clamp(overall * 0.03, 0, 0.035)
-        )
-
-        local longitudinal = front + rear
-        local lateral = left + right
-
-        local pivot = Vector(center.x, center.y, center.z)
-        if longitudinal > 0.001 then
-            pivot.x = center.x
-                + ((rear - front) / longitudinal) * halfLength * 0.82
-        end
-        if lateral > 0.001 then
-            pivot.y = center.y
-                + ((left - right) / lateral) * halfWidth * 0.82
-        end
-
-        -- Asymmetric impacts bend the body a little instead of producing a
-        -- perfectly symmetric "scaled box".
-        local yaw = 0
-        local pitch = 0
-        local roll = 0
-
-        if front > 0 then
-            yaw = yaw - front * math.Clamp((hits.front.y - center.y) / halfWidth, -1, 1) * 5.5
-            pitch = pitch + front * math.Clamp((hits.front.z - center.z) / halfHeight, -1, 1) * 3.5
-        end
-        if rear > 0 then
-            yaw = yaw + rear * math.Clamp((hits.rear.y - center.y) / halfWidth, -1, 1) * 5.5
-            pitch = pitch - rear * math.Clamp((hits.rear.z - center.z) / halfHeight, -1, 1) * 3.5
-        end
-        if right > 0 then
-            yaw = yaw + right * math.Clamp((hits.right.x - center.x) / halfLength, -1, 1) * 3.0
-            roll = roll - right * math.Clamp((hits.right.z - center.z) / halfHeight, -1, 1) * 4.5
-        end
-        if left > 0 then
-            yaw = yaw - left * math.Clamp((hits.left.x - center.x) / halfLength, -1, 1) * 3.0
-            roll = roll + left * math.Clamp((hits.left.z - center.z) / halfHeight, -1, 1) * 4.5
-        end
-
-        local bend = Angle(
-            math.Clamp(pitch, -5, 5),
-            math.Clamp(yaw, -7, 7),
-            math.Clamp(roll, -5, 5)
-        )
-
-        local affine = Matrix()
-        affine:Translate(pivot)
-        affine:Rotate(bend)
-        affine:Scale(scale)
-        affine:Translate(-pivot)
 
         return {
             front = front,
@@ -706,159 +669,185 @@ if CLIENT then
             mins = mins,
             maxs = maxs,
             center = center,
-            halfLength = halfLength,
-            halfWidth = halfWidth,
-            halfHeight = halfHeight,
-            hits = hits,
-            scale = scale,
-            bend = bend,
-            affine = affine,
+            halfLength = math.max((maxs.x - mins.x) * 0.5, 1),
+            halfWidth = math.max((maxs.y - mins.y) * 0.5, 1),
+            halfHeight = math.max((maxs.z - mins.z) * 0.5, 1),
+            hits = {
+                front = ReadHitLocal(train, "front"),
+                rear = ReadHitLocal(train, "rear"),
+                left = ReadHitLocal(train, "left"),
+                right = ReadHitLocal(train, "right"),
+            },
         }
     end
 
-    local function SmoothFalloff(value)
-        value = math.Clamp(value, 0, 1)
-        return value * value * (3 - 2 * value)
+    ---------------------------------------------------------------------------
+    -- Continuous local-space deformation field
+    ---------------------------------------------------------------------------
+
+    local function AddEndCrush(offset, localPos, state, zone, damage, inwardSign)
+        if damage <= 0.001 then return end
+
+        local hit = state.hits[zone]
+        local surfaceX = zone == "front" and state.maxs.x or state.mins.x
+        local depth = zone == "front"
+            and (surfaceX - localPos.x)
+            or (localPos.x - surfaceX)
+
+        -- A light crash mainly damages the end structure. Only heavy damage
+        -- reaches deep into the cab/saloon survival space.
+        local survivalIntrusion = math.max(damage - 0.48, 0) / 0.52
+        local reach = 78 + damage * 82 + survivalIntrusion * 105
+
+        if depth < -8 or depth > reach then return end
+
+        local axial = Smooth01(1 - math.Clamp(depth / reach, 0, 1))
+
+        local radiusY = 34 + damage * 38 + survivalIntrusion * 24
+        local radiusZ = 38 + damage * 38 + survivalIntrusion * 22
+        local dy = (localPos.y - hit.y) / radiusY
+        local dz = (localPos.z - hit.z) / radiusZ
+        local radial = Smooth01(1 - math.Clamp(dy * dy + dz * dz, 0, 1))
+
+        -- The strong underframe/longitudinal structure does not fold as easily
+        -- as thin cab/interior sheetwork.
+        local z01 = math.Clamp(
+            (localPos.z - state.mins.z) / math.max(state.maxs.z - state.mins.z, 1),
+            0,
+            1
+        )
+        local frameFactor = Lerp(Smooth01(math.Clamp(z01 * 2.2, 0, 1)), 0.48, 1.0)
+
+        local influence = axial * radial
+        if influence <= 0.0001 then return end
+
+        local primaryCrush = 5 + damage * 31
+        local deepIntrusion = survivalIntrusion * 42
+        local crush = (primaryCrush + deepIntrusion) * influence * frameFactor
+
+        offset.x = offset.x + inwardSign * crush
+
+        -- Draw nearby structure towards the contact point. This gives the end
+        -- a crease/bowl instead of translating a flat rectangle.
+        offset.y = offset.y + (hit.y - localPos.y)
+            * (0.055 + damage * 0.08) * influence
+        offset.z = offset.z + (hit.z - localPos.z)
+            * (0.040 + damage * 0.055) * influence
+
+        -- Severe off-centre impacts also bend the occupied structure slightly.
+        if survivalIntrusion > 0 then
+            local offY = math.Clamp(
+                (hit.y - state.center.y) / state.halfWidth,
+                -1,
+                1
+            )
+            local offZ = math.Clamp(
+                (hit.z - state.center.z) / state.halfHeight,
+                -1,
+                1
+            )
+            local deep = Smooth01(1 - math.Clamp(depth / math.max(reach, 1), 0, 1))
+
+            offset.y = offset.y + inwardSign * offY
+                * survivalIntrusion * deep * 8
+            offset.z = offset.z + inwardSign * offZ
+                * survivalIntrusion * deep * 5
+        end
     end
 
-    -- Additional local "dent" displacement layered on top of the structural
-    -- crush. It is deliberately continuous: objects embedded in the affected
-    -- cab/salon volume receive nearly the same movement as the sheet metal
-    -- around them, so the interior cannot visually separate from the carbody.
-    local function LocalDentOffset(localPos, state)
-        local out = Vector(0, 0, 0)
+    local function AddSideIntrusion(offset, localPos, state, zone, damage, inwardSign)
+        if damage <= 0.001 then return end
 
-        local function frontRear(zone, damage, sign)
-            if damage <= 0.001 then return end
+        local hit = state.hits[zone]
+        local surfaceY = zone == "right" and state.maxs.y or state.mins.y
+        local depth = zone == "right"
+            and (surfaceY - localPos.y)
+            or (localPos.y - surfaceY)
 
-            local hit = state.hits[zone]
-            local surfaceX = sign < 0 and state.maxs.x or state.mins.x
-            local depthIntoBody = sign < 0
-                and (surfaceX - localPos.x)
-                or (localPos.x - surfaceX)
+        local severe = math.max(damage - 0.52, 0) / 0.48
+        local reach = 44 + damage * 48 + severe * 58
+        if depth < -7 or depth > reach then return end
 
-            if depthIntoBody < -4 then return end
+        local inward = Smooth01(1 - math.Clamp(depth / reach, 0, 1))
+        local radiusX = 55 + damage * 75 + severe * 55
+        local radiusZ = 36 + damage * 40 + severe * 34
 
-            local depthRange = 145 + damage * 95
-            local depthFactor = 1 - math.Clamp(depthIntoBody / depthRange, 0, 1)
+        local dx = (localPos.x - hit.x) / radiusX
+        local dz = (localPos.z - hit.z) / radiusZ
+        local radial = Smooth01(1 - math.Clamp(dx * dx + dz * dz, 0, 1))
+        local influence = inward * radial
+        if influence <= 0.0001 then return end
 
-            local radiusY = 42 + damage * 42
-            local radiusZ = 48 + damage * 38
-            local dy = (localPos.y - hit.y) / radiusY
-            local dz = (localPos.z - hit.z) / radiusZ
-            local radial = 1 - math.Clamp(dy * dy + dz * dz, 0, 1)
+        local intrusion = (4 + damage * 23 + severe * 25) * influence
+        offset.y = offset.y + inwardSign * intrusion
 
-            local influence = SmoothFalloff(radial) * SmoothFalloff(depthFactor)
-            if influence <= 0 then return end
-
-            local dentDepth = (10 + 34 * damage) * influence
-            out.x = out.x + sign * dentDepth
-
-            -- Pull material/attached equipment slightly towards the center of
-            -- the impact, producing a crease instead of a flat translation.
-            out.y = out.y + (hit.y - localPos.y) * 0.10 * damage * influence
-            out.z = out.z + (hit.z - localPos.z) * 0.075 * damage * influence
-        end
-
-        local function side(zone, damage, sign)
-            if damage <= 0.001 then return end
-
-            local hit = state.hits[zone]
-            local surfaceY = sign < 0 and state.maxs.y or state.mins.y
-            local depthIntoBody = sign < 0
-                and (surfaceY - localPos.y)
-                or (localPos.y - surfaceY)
-
-            if depthIntoBody < -4 then return end
-
-            local depthRange = 78 + damage * 70
-            local depthFactor = 1 - math.Clamp(depthIntoBody / depthRange, 0, 1)
-
-            local radiusX = 78 + damage * 85
-            local radiusZ = 45 + damage * 42
-            local dx = (localPos.x - hit.x) / radiusX
-            local dz = (localPos.z - hit.z) / radiusZ
-            local radial = 1 - math.Clamp(dx * dx + dz * dz, 0, 1)
-
-            local influence = SmoothFalloff(radial) * SmoothFalloff(depthFactor)
-            if influence <= 0 then return end
-
-            local dentDepth = (7 + 24 * damage) * influence
-            out.y = out.y + sign * dentDepth
-            out.x = out.x + (hit.x - localPos.x) * 0.075 * damage * influence
-            out.z = out.z + (hit.z - localPos.z) * 0.065 * damage * influence
-        end
-
-        -- Sign is the inward direction.
-        frontRear("front", state.front, -1)
-        frontRear("rear", state.rear, 1)
-        side("right", state.right, -1)
-        side("left", state.left, 1)
-
-        return out
+        offset.x = offset.x + (hit.x - localPos.x)
+            * (0.035 + damage * 0.055) * influence
+        offset.z = offset.z + (hit.z - localPos.z)
+            * (0.030 + damage * 0.040) * influence
     end
 
     local function DeformLocalPoint(localPos, state)
-        local structurallyDeformed = state.affine * localPos
-        return structurallyDeformed + LocalDentOffset(localPos, state)
+        if not state then return CopyVector(localPos) end
+
+        local offset = Vector(0, 0, 0)
+
+        -- Positive X is the front on current Metrostroi subway bodies.
+        AddEndCrush(offset, localPos, state, "front", state.front, -1)
+        AddEndCrush(offset, localPos, state, "rear", state.rear, 1)
+
+        -- Positive Y = right side, negative Y = left side.
+        AddSideIntrusion(offset, localPos, state, "right", state.right, -1)
+        AddSideIntrusion(offset, localPos, state, "left", state.left, 1)
+
+        return localPos + offset
     end
 
     local function DeformLocalAngle(localPos, localAng, state)
-        local step = 6
+        if not state then return CopyAngle(localAng) end
+
+        local step = 5
         local p0 = DeformLocalPoint(localPos, state)
-        local dx = DeformLocalPoint(localPos + localAng:Forward() * step, state) - p0
-        local dy = DeformLocalPoint(localPos - localAng:Right() * step, state) - p0
+        local pf = DeformLocalPoint(localPos + localAng:Forward() * step, state)
+        local pu = DeformLocalPoint(localPos + localAng:Up() * step, state)
 
-        if dx:LengthSqr() < 0.0001 or dy:LengthSqr() < 0.0001 then
-            return localAng
+        local forward = pf - p0
+        local up = pu - p0
+
+        if forward:LengthSqr() < 0.001 or up:LengthSqr() < 0.001 then
+            return CopyAngle(localAng)
         end
 
-        dx:Normalize()
-        dy:Normalize()
-
-        local up = dx:Cross(-dy)
-        if up:LengthSqr() < 0.0001 then
-            return localAng
-        end
-
+        forward:Normalize()
         up:Normalize()
-        return dx:AngleEx(up)
+
+        local side = forward:Cross(up)
+        if side:LengthSqr() < 0.001 then
+            return CopyAngle(localAng)
+        end
+
+        side:Normalize()
+        up = side:Cross(forward)
+        up:Normalize()
+
+        return forward:AngleEx(up)
     end
 
-    local function LocalScaleAt(localPos, localAng, state)
-        local step = 8
-        local p0 = DeformLocalPoint(localPos, state)
-        local px = DeformLocalPoint(localPos + localAng:Forward() * step, state)
-        local py = DeformLocalPoint(localPos + localAng:Right() * step, state)
-        local pz = DeformLocalPoint(localPos + localAng:Up() * step, state)
-
-        return Vector(
-            math.Clamp((px - p0):Length() / step, 0.72, 1.08),
-            math.Clamp((py - p0):Length() / step, 0.72, 1.08),
-            math.Clamp((pz - p0):Length() / step, 0.72, 1.08)
-        )
+    local function LocalDisplacement(localPos, state)
+        return DeformLocalPoint(localPos, state) - localPos
     end
 
     ---------------------------------------------------------------------------
-    -- Interactive controls
-    --
-    -- Metrostroi calculates panel aiming/clicks from ButtonMap every frame.
-    -- Moving/rotating those panels from a third-party addon breaks interaction
-    -- on several train classes because their own client code also updates the
-    -- same data. Keep ButtonMap completely untouched.
+    -- Legacy cleanup
     ---------------------------------------------------------------------------
 
-    local function RestoreButtonMap(train)
+    local function RecoverLegacyButtonMap(train)
         if not IsValid(train) then return end
 
         if train.MEXDamageButtonMapOriginal then
             train.ButtonMap = train.MEXDamageButtonMapOriginal
             train.MEXDamageButtonMapOriginal = nil
         elseif train.MEXDamagePrivateButtonMap then
-            -- v0.3.0 created a private copy without retaining an explicit
-            -- original pointer. Recover the untouched ButtonMap from the
-            -- registered Metrostroi entity class so already-running trains can
-            -- be repaired without a respawn/map restart.
             local stored = scripted_ents.GetStored(train:GetClass())
             local original = stored and stored.t and stored.t.ButtonMap
             if istable(original) then
@@ -869,43 +858,122 @@ if CLIENT then
         train.MEXDamagePrivateButtonMap = nil
     end
 
-    local function ApplyButtonMapDeformation(train, state)
-        -- Intentionally disabled. Interactive panels must remain exactly where
-        -- Metrostroi expects them so all switches, buttons and touchscreen
-        -- controls keep working.
-        RestoreButtonMap(train)
+    local function ClearLegacyTransforms(train)
+        if not IsValid(train) then return end
+        if train.MEXDamageV4LegacyCleared then return end
+        train.MEXDamageV4LegacyCleared = true
+
+        -- v0.1-v0.3 used RenderMultiply on the whole car. Never allow that
+        -- transform to survive into the bone-based system.
+        train:DisableMatrix("RenderMultiply")
+        train.MEXDamageMatrixApplied = nil
+
+        RecoverLegacyButtonMap(train)
+
+        if istable(train.ClientEnts) then
+            for _, prop in pairs(train.ClientEnts) do
+                if not IsValid(prop) then continue end
+
+                prop:DisableMatrix("RenderMultiply")
+                prop:SetRenderOrigin(nil)
+                prop:SetRenderAngles(nil)
+                prop.MEXDamageMatrixApplied = nil
+                prop.MEXDamageRenderOrigin = nil
+                prop.MEXDamageRenderAngles = nil
+            end
+        end
     end
 
-    local function BuildInteractivePropSet(train)
-        local set = {}
+    ---------------------------------------------------------------------------
+    -- Per-wagon ButtonMap clone
+    --
+    -- This is intentionally SHALLOW. Nested buttons/config tables stay the
+    -- original Metrostroi objects. The old deep copy in v0.3 could disconnect
+    -- generated controls from Metrostroi's runtime state.
+    ---------------------------------------------------------------------------
 
-        if istable(train.ButtonMap) then
-            for panelName, panel in pairs(train.ButtonMap) do
-                if panelName ~= "BaseClass" and istable(panel) then
-                    -- Some trains use ClientEnts named after the panel itself.
-                    set[panelName] = true
+    local function CloneInteractivePanels(train)
+        if not istable(train.ButtonMap) then return false end
+        if train.MEXDamageV4ButtonMapOriginal then return true end
 
-                    if istable(panel.props) then
-                        for _, propName in pairs(panel.props) do
-                            if isstring(propName) then set[propName] = true end
-                        end
+        RecoverLegacyButtonMap(train)
+
+        local original = train.ButtonMap
+        local clone = {}
+
+        for key, panel in pairs(original) do
+            if key ~= "BaseClass" and istable(panel) and isvector(panel.pos) then
+                local p = {}
+                for k, v in pairs(panel) do
+                    p[k] = v
+                end
+
+                p.MEXDamageBasePos = CopyVector(panel.pos)
+                p.MEXDamageBaseAng = isangle(panel.ang)
+                    and CopyAngle(panel.ang)
+                    or Angle(0, 0, 0)
+                p.MEXDamageBaseScale = panel.scale
+                clone[key] = p
+            else
+                clone[key] = panel
+            end
+        end
+
+        train.MEXDamageV4ButtonMapOriginal = original
+        train.ButtonMap = clone
+        train.MEXDamageV4PanelProps = nil
+        return true
+    end
+
+    local function RestoreInteractivePanels(train)
+        if not IsValid(train) then return end
+
+        if train.MEXDamageV4ButtonMapOriginal then
+            train.ButtonMap = train.MEXDamageV4ButtonMapOriginal
+            train.MEXDamageV4ButtonMapOriginal = nil
+        end
+
+        train.MEXDamageV4PanelProps = nil
+    end
+
+    local function BuildPanelPropMap(train)
+        local map = {}
+
+        if not istable(train.ButtonMap) then
+            train.MEXDamageV4PanelProps = map
+            return map
+        end
+
+        for panelName, panel in pairs(train.ButtonMap) do
+            if panelName == "BaseClass" or not istable(panel) then continue end
+
+            if istable(panel.props) then
+                for _, propName in pairs(panel.props) do
+                    if isstring(propName) then
+                        map[propName] = panelName
+                    end
+                end
+            end
+
+            if istable(panel.buttons) then
+                for _, button in pairs(panel.buttons) do
+                    if not istable(button) then continue end
+
+                    if isstring(button.PropName) then
+                        map[button.PropName] = panelName
                     end
 
-                    if istable(panel.buttons) then
-                        for _, button in pairs(panel.buttons) do
-                            if istable(button) then
-                                if isstring(button.PropName) then set[button.PropName] = true end
-                                if isstring(button.ID) and string.sub(button.ID,1,1) ~= "!" then
-                                    set[button.ID] = true
-                                end
+                    local config = button.model
+                    if istable(config) then
+                        local generatedName = config.name or button.ID
+                        if isstring(generatedName) then
+                            map[generatedName] = panelName
+                        end
 
-                                if istable(button.model) and isstring(button.model.name) then
-                                    set[button.model.name] = true
-                                end
-
-                                if istable(button.lamp) and isstring(button.lamp.name) then
-                                    set[button.lamp.name] = true
-                                end
+                        if istable(config.lamp) then
+                            local lampName = config.lamp.name
+                            if isstring(lampName) then
+                                map[lampName] = panelName
                             end
                         end
                     end
@@ -913,274 +981,448 @@ if CLIENT then
             end
         end
 
-        train.MEXDamageInteractiveProps = set
-        return set
+        train.MEXDamageV4PanelProps = map
+        return map
     end
 
-    local function IsInteractiveProp(train, name)
-        local set = train.MEXDamageInteractiveProps or BuildInteractivePropSet(train)
-        return set[name] == true
-    end
+    local function ApplyPanelDeformation(train, state)
+        if not state then
+            RestoreInteractivePanels(train)
+            return
+        end
 
-    ---------------------------------------------------------------------------
-    -- ClientEnts: interior, panels, buttons, lamps, gauges, handles...
-    ---------------------------------------------------------------------------
+        if not CloneInteractivePanels(train) then return end
 
-    local function ClearClientPropDeformation(train)
-        if not istable(train.ClientEnts) then return end
+        for _, panel in pairs(train.ButtonMap) do
+            if not istable(panel) or not panel.MEXDamageBasePos then continue end
 
-        for _, prop in pairs(train.ClientEnts) do
-            if not IsValid(prop) then continue end
+            panel.pos = DeformLocalPoint(panel.MEXDamageBasePos, state)
+            panel.ang = DeformLocalAngle(
+                panel.MEXDamageBasePos,
+                panel.MEXDamageBaseAng,
+                state
+            )
 
-            if prop.MEXDamageRenderOrigin then
-                prop:SetRenderOrigin(nil)
-                prop.MEXDamageRenderOrigin = nil
-            end
-
-            if prop.MEXDamageRenderAngles then
-                prop:SetRenderAngles(nil)
-                prop.MEXDamageRenderAngles = nil
-            end
-
-            if prop.MEXDamageMatrixApplied then
-                prop:DisableMatrix("RenderMultiply")
-                prop.MEXDamageMatrixApplied = nil
-            end
+            -- Keep the 2D coordinate system unchanged. It means the visual
+            -- control and hit target remain exactly the same size.
+            panel.scale = panel.MEXDamageBaseScale
         end
     end
 
-    local function IsInteriorOrLargeClientProp(prop)
-        if not IsValid(prop) then return false end
+    ---------------------------------------------------------------------------
+    -- ClientEnt geometry cache / attachment logic
+    ---------------------------------------------------------------------------
 
-        local mins = prop:OBBMins()
-        local maxs = prop:OBBMaxs()
-        if not isvector(mins) or not isvector(maxs) then return false end
+    local function ModelLooksStructural(name, model)
+        local text = string.lower((name or "") .. " " .. (model or ""))
 
-        local size = maxs - mins
-        local model = string.lower(prop:GetModel() or "")
+        for _, word in ipairs(STRUCTURAL_WORDS) do
+            if string.find(text, word, 1, true) then
+                return true
+            end
+        end
 
-        local namedInterior =
-            string.find(model, "interior", 1, true)
-            or string.find(model, "salon", 1, true)
-            or string.find(model, "cabin", 1, true)
-            or string.find(model, "cabine", 1, true)
-            or string.find(model, "panel", 1, true)
-
-        return namedInterior
-            or math.abs(size.x) >= 170
-            or math.abs(size.y) >= 105
-            or math.abs(size.z) >= 105
+        return false
     end
 
-    local function GetPropBaseLocalTransform(train, prop)
-        -- Render origins/angles are drawing-only. The actual local transform
-        -- remains the transform Metrostroi is animating.
+    local function GetStaticClientPropTransform(train, name, prop)
+        local def = istable(train.ClientProps) and train.ClientProps[name] or nil
+
+        if istable(def) and isvector(def.pos) then
+            local ang = isangle(def.ang) and def.ang or Angle(0, 0, 0)
+            return CopyVector(def.pos), CopyAngle(ang)
+        end
+
         if prop:GetParent() == train then
-            return prop:GetLocalPos(), prop:GetLocalAngles()
+            return CopyVector(prop:GetLocalPos()), CopyAngle(prop:GetLocalAngles())
         end
 
-        if prop.MEXDamageRenderOrigin then
-            prop:SetRenderOrigin(nil)
-            prop.MEXDamageRenderOrigin = nil
-        end
-        if prop.MEXDamageRenderAngles then
-            prop:SetRenderAngles(nil)
-            prop.MEXDamageRenderAngles = nil
-        end
-
-        local pos, ang = WorldToLocal(
+        local localPos, localAng = WorldToLocal(
             prop:GetPos(),
             prop:GetAngles(),
             train:GetPos(),
             train:GetAngles()
         )
 
-        return pos, ang
+        return localPos, localAng
     end
 
-    local function EnsureBoneDentCallback(ent, train)
-        if not IsValid(ent) or ent.MEXDamageBoneCallback then return end
+    local function CacheClientProp(train, name, prop)
+        train.MEXDamageV4PropCache = train.MEXDamageV4PropCache or {}
 
-        ent.MEXDamageBoneCallback = ent:AddCallback("BuildBonePositions", function(modelEnt, boneCount)
-            if not IsValid(train) then return end
-            local state = GetDamageState(train)
-            if not state then return end
-            if boneCount <= 1 then return end
+        local cached = train.MEXDamageV4PropCache[name]
+        if cached and cached.entity == prop then
+            return cached
+        end
 
-            -- Bone 0 is normally the root. Moving it would just duplicate the
-            -- whole-body RenderMultiply transform. Non-root bones can create
-            -- genuine local deformation on models whose body/interior vertices
-            -- are weighted to more than one bone.
-            for bone = 1, boneCount - 1 do
-                if modelEnt:GetBoneName(bone) == "__INVALIDBONE__" then continue end
+        prop:SetRenderOrigin(nil)
+        prop:SetRenderAngles(nil)
+        prop:DisableMatrix("RenderMultiply")
 
-                local matrix = modelEnt:GetBoneMatrix(bone)
-                if not matrix then continue end
+        local basePos, baseAng = GetStaticClientPropTransform(train, name, prop)
+        local mins = prop:OBBMins()
+        local maxs = prop:OBBMaxs()
+        local obbCenter = (mins + maxs) * 0.5
+        local size = maxs - mins
 
-                local worldPos = matrix:GetTranslation()
-                local localToTrain = train:WorldToLocal(worldPos)
-                local dent = LocalDentOffset(localToTrain, state)
+        -- Convert the model's actual visual center into train-local space.
+        local anchorPos = LocalToWorld(
+            obbCenter,
+            Angle(0, 0, 0),
+            basePos,
+            baseAng
+        )
 
-                if dent:LengthSqr() < 0.0025 then continue end
+        local model = prop:GetModel() or ""
+        local spanX = math.abs(size.x)
+        local spanY = math.abs(size.y)
+        local spanZ = math.abs(size.z)
 
-                matrix:SetTranslation(
-                    train:LocalToWorld(localToTrain + dent)
-                )
+        cached = {
+            entity = prop,
+            basePos = basePos,
+            baseAng = baseAng,
+            obbCenter = obbCenter,
+            anchorPos = anchorPos,
+            size = size,
+            model = model,
+            structural = ModelLooksStructural(name, model),
 
-                modelEnt:SetBoneMatrix(bone, matrix)
+            -- A full saloon/interior shell must not be translated as one rigid
+            -- object. Its ends should move only through its bones.
+            fullLength = spanX >= 330,
+
+            -- Small/localized pieces may follow one structural attachment point.
+            localPiece = spanX < 330 and spanY < 230 and spanZ < 230,
+        }
+
+        train.MEXDamageV4PropCache[name] = cached
+        return cached
+    end
+
+    local function OriginForAnchoredModel(anchorInModel, desiredAnchor, desiredAng)
+        local rotated =
+            desiredAng:Forward() * anchorInModel.x
+            + desiredAng:Right() * anchorInModel.y
+            + desiredAng:Up() * anchorInModel.z
+
+        return desiredAnchor - rotated
+    end
+
+    local function ApplyRigidAttachment(train, prop, cached, state)
+        local desiredAnchor = DeformLocalPoint(cached.anchorPos, state)
+        local desiredAng = DeformLocalAngle(
+            cached.anchorPos,
+            cached.baseAng,
+            state
+        )
+
+        local desiredOrigin = OriginForAnchoredModel(
+            cached.obbCenter,
+            desiredAnchor,
+            desiredAng
+        )
+
+        prop:SetRenderOrigin(train:LocalToWorld(desiredOrigin))
+        prop:SetRenderAngles(train:LocalToWorldAngles(desiredAng))
+        prop.MEXDamageV4RenderMoved = true
+    end
+
+    local function ApplyPanelAttachment(train, name, prop, cached, panelName)
+        local panel = train.ButtonMap and train.ButtonMap[panelName]
+        if not istable(panel) or not panel.MEXDamageBasePos then return false end
+
+        -- Client props generated by Metrostroi are defined in train-local space.
+        -- Express the prop relative to the original panel and replay the exact
+        -- same rigid relationship on the deformed panel.
+        local relPos, relAng = WorldToLocal(
+            cached.basePos,
+            cached.baseAng,
+            panel.MEXDamageBasePos,
+            panel.MEXDamageBaseAng
+        )
+
+        local newPos, newAng = LocalToWorld(
+            relPos,
+            relAng,
+            panel.pos,
+            panel.ang
+        )
+
+        prop:SetRenderOrigin(train:LocalToWorld(newPos))
+        prop:SetRenderAngles(train:LocalToWorldAngles(newAng))
+        prop.MEXDamageV4RenderMoved = true
+        return true
+    end
+
+    local function ClearClientPropRenderTransform(prop)
+        if not IsValid(prop) then return end
+
+        if prop.MEXDamageV4RenderMoved
+            or prop.MEXDamageRenderOrigin
+            or prop.MEXDamageRenderAngles
+        then
+            prop:SetRenderOrigin(nil)
+            prop:SetRenderAngles(nil)
+            prop.MEXDamageV4RenderMoved = nil
+            prop.MEXDamageRenderOrigin = nil
+            prop.MEXDamageRenderAngles = nil
+        end
+
+        if prop.MEXDamageMatrixApplied then
+            prop:DisableMatrix("RenderMultiply")
+            prop.MEXDamageMatrixApplied = nil
+        end
+    end
+
+    ---------------------------------------------------------------------------
+    -- Bone deformation
+    ---------------------------------------------------------------------------
+
+    local function ToTrainLocalAngle(train, worldAng)
+        local _, localAng = WorldToLocal(
+            vector_origin,
+            worldAng,
+            vector_origin,
+            train:GetAngles()
+        )
+        return localAng
+    end
+
+    local function InstallBoneField(modelEnt, train, skipRoot)
+        if not IsValid(modelEnt) or not IsValid(train) then return end
+        if modelEnt.MEXDamageV4BoneCallback then return end
+
+        modelEnt.MEXDamageV4BoneCallback = modelEnt:AddCallback(
+            "BuildBonePositions",
+            function(ent, boneCount)
+                if not IsValid(train) then return end
+
+                local state = BuildDamageState(train)
+                if not state or boneCount <= 0 then return end
+
+                for bone = 0, boneCount - 1 do
+                    if skipRoot and bone == 0 then continue end
+                    if ent:GetBoneName(bone) == "__INVALIDBONE__" then continue end
+
+                    local matrix = ent:GetBoneMatrix(bone)
+                    if not matrix then continue end
+
+                    local worldPos = matrix:GetTranslation()
+                    if not IsFiniteVector(worldPos) then continue end
+
+                    local trainLocalPos = train:WorldToLocal(worldPos)
+                    local displacement = LocalDisplacement(trainLocalPos, state)
+                    if displacement:LengthSqr() < 0.0025 then continue end
+
+                    local worldAng = matrix:GetAngles()
+                    local trainLocalAng = ToTrainLocalAngle(train, worldAng)
+                    local deformedPos = trainLocalPos + displacement
+                    local deformedAng = DeformLocalAngle(
+                        trainLocalPos,
+                        trainLocalAng,
+                        state
+                    )
+
+                    matrix:SetTranslation(train:LocalToWorld(deformedPos))
+                    matrix:SetAngles(train:LocalToWorldAngles(deformedAng))
+                    ent:SetBoneMatrix(bone, matrix)
+                end
             end
-        end)
+        )
     end
 
-    local function ApplyClientPropDeformation(train, state)
+    local function InstallTrainBoneField(train)
+        if not IsValid(train) then return end
+        InstallBoneField(train, train, true)
+    end
+
+    ---------------------------------------------------------------------------
+    -- Lights follow the same deformed mounting points.
+    ---------------------------------------------------------------------------
+
+    local function CloneLights(train)
+        if train.MEXDamageV4LightsOriginal then return true end
+        if not istable(train.Lights) then return false end
+
+        local original = train.Lights
+        local clone = {}
+
+        for id, light in pairs(original) do
+            if istable(light) then
+                local l = {}
+                for k, v in pairs(light) do l[k] = v end
+
+                if isvector(light[2]) then
+                    l.MEXDamageBasePos = CopyVector(light[2])
+                    l[2] = CopyVector(light[2])
+                end
+                if isangle(light[3]) then
+                    l.MEXDamageBaseAng = CopyAngle(light[3])
+                    l[3] = CopyAngle(light[3])
+                end
+
+                clone[id] = l
+            else
+                clone[id] = light
+            end
+        end
+
+        train.MEXDamageV4LightsOriginal = original
+        train.Lights = clone
+        return true
+    end
+
+    local function ApplyLightDeformation(train, state)
+        if not state then
+            if train.MEXDamageV4LightsOriginal then
+                train.Lights = train.MEXDamageV4LightsOriginal
+                train.MEXDamageV4LightsOriginal = nil
+            end
+            return
+        end
+
+        if not CloneLights(train) then return end
+
+        for _, light in pairs(train.Lights) do
+            if not istable(light) or not light.MEXDamageBasePos then continue end
+
+            light[2] = DeformLocalPoint(light.MEXDamageBasePos, state)
+
+            if light.MEXDamageBaseAng then
+                light[3] = DeformLocalAngle(
+                    light.MEXDamageBasePos,
+                    light.MEXDamageBaseAng,
+                    state
+                )
+            end
+        end
+    end
+
+    ---------------------------------------------------------------------------
+    -- Apply / clear the complete visual deformation
+    ---------------------------------------------------------------------------
+
+    local function ApplyClientEnts(train, state)
         if not istable(train.ClientEnts) then return end
+
+        local panelMap = train.MEXDamageV4PanelProps or BuildPanelPropMap(train)
 
         for name, prop in pairs(train.ClientEnts) do
             if not IsValid(prop) then continue end
 
-            -- Never move a visual control away from the exact coordinates used
-            -- by Metrostroi's ButtonMap hit testing. This includes panel models,
-            -- switches, buttons, gauges, touchscreens and their generated props.
-            if IsInteractiveProp(train, name) then
-                if prop.MEXDamageRenderOrigin then
-                    prop:SetRenderOrigin(nil)
-                    prop.MEXDamageRenderOrigin = nil
-                end
-                if prop.MEXDamageRenderAngles then
-                    prop:SetRenderAngles(nil)
-                    prop.MEXDamageRenderAngles = nil
-                end
-                if prop.MEXDamageMatrixApplied then
-                    prop:DisableMatrix("RenderMultiply")
-                    prop.MEXDamageMatrixApplied = nil
-                end
+            if not state then
+                ClearClientPropRenderTransform(prop)
                 continue
             end
 
-            local basePos, baseAng = GetPropBaseLocalTransform(train, prop)
-            local deformedPos = DeformLocalPoint(basePos, state)
-            local deformedAng = DeformLocalAngle(basePos, baseAng, state)
+            local cached = CacheClientProp(train, name, prop)
 
-            prop:SetRenderOrigin(train:LocalToWorld(deformedPos))
-            prop:SetRenderAngles(train:LocalToWorldAngles(deformedAng))
-            prop.MEXDamageRenderOrigin = true
-            prop.MEXDamageRenderAngles = true
+            -- Existing bones deform the actual mesh instead of stretching the
+            -- complete client entity. Root is skipped because it would move the
+            -- whole full-length shell.
+            if cached.structural then
+                InstallBoneField(prop, train, true)
+            end
 
-            if IsInteriorOrLargeClientProp(prop) then
-                local localScale = LocalScaleAt(basePos, baseAng, state)
-                local matrix = Matrix()
-                matrix:Scale(localScale)
-                prop:EnableMatrix("RenderMultiply", matrix)
-                prop.MEXDamageMatrixApplied = true
+            local panelName = panelMap[name]
+            if panelName and ApplyPanelAttachment(
+                train,
+                name,
+                prop,
+                cached,
+                panelName
+            ) then
+                continue
+            end
 
-                EnsureBoneDentCallback(prop, train)
-            elseif prop.MEXDamageMatrixApplied then
-                prop:DisableMatrix("RenderMultiply")
-                prop.MEXDamageMatrixApplied = nil
+            if cached.localPiece then
+                -- Doors, front masks, lamp groups, localized cab shells,
+                -- localized panel bodies etc. remain rigid but follow the
+                -- deformed mounting point. Their own child bones can still bend.
+                ApplyRigidAttachment(train, prop, cached, state)
+            else
+                -- Full saloon/interior models are kept at the train origin.
+                -- Only their existing child bones are allowed to deform. This
+                -- prevents the entire interior from "driving away" from the car.
+                ClearClientPropRenderTransform(prop)
             end
         end
     end
 
-    ---------------------------------------------------------------------------
-    -- Main body
-    ---------------------------------------------------------------------------
+    local function ClearAllVisualDamage(train)
+        RestoreInteractivePanels(train)
+        ApplyLightDeformation(train, nil)
 
-    local function EnsureTrainBoneDentCallback(train)
-        if train.MEXDamageTrainBoneCallback then return end
-
-        train.MEXDamageTrainBoneCallback = train:AddCallback("BuildBonePositions", function(ent, boneCount)
-            local state = GetDamageState(ent)
-            if not state or boneCount <= 1 then return end
-
-            for bone = 1, boneCount - 1 do
-                if ent:GetBoneName(bone) == "__INVALIDBONE__" then continue end
-
-                local matrix = ent:GetBoneMatrix(bone)
-                if not matrix then continue end
-
-                local worldPos = matrix:GetTranslation()
-                local localPos = ent:WorldToLocal(worldPos)
-                local dent = LocalDentOffset(localPos, state)
-
-                if dent:LengthSqr() < 0.0025 then continue end
-
-                matrix:SetTranslation(ent:LocalToWorld(localPos + dent))
-                ent:SetBoneMatrix(bone, matrix)
+        if istable(train.ClientEnts) then
+            for _, prop in pairs(train.ClientEnts) do
+                if IsValid(prop) then
+                    ClearClientPropRenderTransform(prop)
+                end
             end
-        end)
-    end
-
-    local function ClearTrainDeformation(train)
-        if train.MEXDamageMatrixApplied then
-            train:DisableMatrix("RenderMultiply")
-            train.MEXDamageMatrixApplied = nil
         end
-
-        ClearClientPropDeformation(train)
-        RestoreButtonMap(train)
     end
 
-    local function ApplyVisualDeformation(train, state)
+    local function ApplyCompleteDamage(train)
+        if not IsSubwayTrain(train) then return end
+
+        ClearLegacyTransforms(train)
+
+        local state = BuildDamageState(train)
         if not state then
-            ClearTrainDeformation(train)
+            ClearAllVisualDamage(train)
             return
         end
 
-        train:EnableMatrix("RenderMultiply", state.affine)
-        train.MEXDamageMatrixApplied = true
+        InstallTrainBoneField(train)
+        ApplyPanelDeformation(train, state)
 
-        EnsureTrainBoneDentCallback(train)
-        ApplyButtonMapDeformation(train, state)
-        ApplyClientPropDeformation(train, state)
+        -- Panel props may be generated after the map was cloned.
+        train.MEXDamageV4PanelProps = BuildPanelPropMap(train)
+
+        ApplyClientEnts(train, state)
+        ApplyLightDeformation(train, state)
     end
 
-    -- Run after Metrostroi's Think code has updated all animated ClientEnts.
-    -- ButtonMap positions are changed before Metrostroi's next panel aiming pass,
-    -- so rendered controls and clickable hitboxes stay in the same place.
-    local nextDeformationUpdate = 0
-    hook.Add("Think", "MEX.Damage.UpdateUnifiedDeformation", function()
-        if CurTime() < nextDeformationUpdate then return end
-        nextDeformationUpdate = CurTime() + 0.01
+    ---------------------------------------------------------------------------
+    -- Update timing
+    ---------------------------------------------------------------------------
+
+    local nextDamageUpdate = 0
+
+    hook.Add("Think", "MEX.Damage.V4StructuralUpdate", function()
+        if CurTime() < nextDamageUpdate then return end
+        nextDamageUpdate = CurTime() + 0.02
 
         for _, train in ipairs(ents.GetAll()) do
             if IsSubwayTrain(train) then
-                ApplyVisualDeformation(train, GetDamageState(train))
+                ApplyCompleteDamage(train)
             end
         end
     end)
 
-    -- Reapply immediately before render because some train scripts reposition
-    -- client props later in the frame (wagon numbers are one example).
-    hook.Add("PreDrawOpaqueRenderables", "MEX.Damage.RenderAttachedParts", function()
+    -- Some Metrostroi train classes move client props late in their own Think.
+    -- Reapply rigid attachment render transforms immediately before drawing.
+    hook.Add("PreDrawOpaqueRenderables", "MEX.Damage.V4OpaqueAttachments", function()
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
-            local state = GetDamageState(train)
+
+            local state = BuildDamageState(train)
             if state then
-                ApplyClientPropDeformation(train, state)
+                ApplyClientEnts(train, state)
             end
         end
     end)
 
-    hook.Add("PreDrawTranslucentRenderables", "MEX.Damage.RenderAttachedTransparentParts", function()
+    hook.Add("PreDrawTranslucentRenderables", "MEX.Damage.V4TranslucentAttachments", function()
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
-            local state = GetDamageState(train)
+
+            local state = BuildDamageState(train)
             if state then
-                ApplyClientPropDeformation(train, state)
+                ApplyClientEnts(train, state)
             end
         end
-    end)
-
-    concommand.Add("mex_controls_restore", function()
-        for _, train in ipairs(ents.GetAll()) do
-            if IsSubwayTrain(train) then
-                RestoreButtonMap(train)
-                train.MEXDamageInteractiveProps = nil
-                ClearClientPropDeformation(train)
-            end
-        end
-
-        chat.AddText(Color(120,255,120), "[Metrostroi Expanded] Control panels restored.")
     end)
 
     ---------------------------------------------------------------------------
@@ -1196,35 +1438,41 @@ if CLIENT then
 
         if not IsValid(train) then return end
 
-        if amount >= 0.18 then
+        if amount >= 0.14 then
             local dlight = DynamicLight(train:EntIndex())
             if dlight then
                 dlight.pos = worldPos
                 dlight.r = 255
-                dlight.g = 150
-                dlight.b = 70
-                dlight.brightness = math.Clamp(amount * 3, 0.5, 2.5)
-                dlight.Decay = 1600
-                dlight.Size = math.Clamp(80 + amount * 120, 80, 200)
+                dlight.g = 145
+                dlight.b = 65
+                dlight.brightness = math.Clamp(amount * 3.2, 0.5, 2.7)
+                dlight.Decay = 1700
+                dlight.Size = math.Clamp(70 + amount * 140, 70, 210)
                 dlight.DieTime = CurTime() + 0.08
             end
         end
 
-        if amount >= 0.42 then
+        if amount >= 0.38 then
             local emitter = ParticleEmitter(worldPos)
             if emitter then
-                for i = 1, math.floor(2 + amount * 4) do
-                    local particle = emitter:Add("particle/particle_smokegrenade", worldPos)
+                for i = 1, math.floor(2 + amount * 5) do
+                    local particle = emitter:Add(
+                        "particle/particle_smokegrenade",
+                        worldPos
+                    )
+
                     if particle then
-                        particle:SetVelocity(normal * math.Rand(8, 28) + VectorRand() * 8)
-                        particle:SetDieTime(math.Rand(0.7, 1.5))
-                        particle:SetStartAlpha(math.random(55, 90))
+                        particle:SetVelocity(
+                            normal * math.Rand(6, 24) + VectorRand() * 7
+                        )
+                        particle:SetDieTime(math.Rand(0.8, 1.7))
+                        particle:SetStartAlpha(math.random(50, 85))
                         particle:SetEndAlpha(0)
                         particle:SetStartSize(math.Rand(4, 8))
-                        particle:SetEndSize(math.Rand(15, 25))
+                        particle:SetEndSize(math.Rand(16, 28))
                         particle:SetRoll(math.Rand(-180, 180))
                         particle:SetRollDelta(math.Rand(-0.5, 0.5))
-                        particle:SetAirResistance(80)
+                        particle:SetAirResistance(85)
                         particle:SetGravity(Vector(0, 0, math.Rand(4, 10)))
                     end
                 end
@@ -1234,49 +1482,144 @@ if CLIENT then
     end)
 
     ---------------------------------------------------------------------------
-    -- Debug
+    -- Debug / inspection commands
     ---------------------------------------------------------------------------
 
-    local function HasAnyDamage(train)
-        return train:GetNW2Float("MEX.Damage.overall", 0) > 0.001
+    local function GetAimedClientTrain()
+        local ply = LocalPlayer()
+        if not IsValid(ply) then return nil end
+
+        local trace = ply:GetEyeTrace()
+        if trace and IsSubwayTrain(trace.Entity) then
+            return trace.Entity
+        end
+
+        local seat = ply:GetVehicle()
+        if IsValid(seat) then
+            local train = seat:GetNW2Entity("TrainEntity")
+            if IsSubwayTrain(train) then return train end
+        end
+
+        return nil
     end
 
-    hook.Add("PostDrawTranslucentRenderables", "MEX.Damage.DebugState", function()
-        local ply = LocalPlayer()
-        if not IsValid(ply) or not ply:IsAdmin() then return end
-        if not GetConVar("developer") or GetConVar("developer"):GetInt() < 2 then return end
+    concommand.Add("mex_controls_restore", function()
+        for _, train in ipairs(ents.GetAll()) do
+            if IsSubwayTrain(train) then
+                RestoreInteractivePanels(train)
+                train.MEXDamageV4PanelProps = nil
+
+                if istable(train.ClientEnts) then
+                    for _, prop in pairs(train.ClientEnts) do
+                        if IsValid(prop) then
+                            ClearClientPropRenderTransform(prop)
+                        end
+                    end
+                end
+            end
+        end
+
+        chat.AddText(
+            Color(120, 255, 120),
+            "[Metrostroi Expanded] Control layout restored."
+        )
+    end)
+
+    concommand.Add("mex_damage_bones", function()
+        local train = GetAimedClientTrain()
+        if not IsValid(train) then
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            return
+        end
+
+        train:SetupBones()
+
+        print("------------------------------------------------------------")
+        print("[Metrostroi Expanded/Damage] Bone dump: " .. train:GetClass())
+        print("model: " .. tostring(train:GetModel()))
+        print("body bones: " .. tostring(train:GetBoneCount()))
+
+        for bone = 0, math.max(train:GetBoneCount() - 1, -1) do
+            print(string.format(
+                "  body [%d] %s parent=%d",
+                bone,
+                tostring(train:GetBoneName(bone)),
+                train:GetBoneParent(bone)
+            ))
+        end
+
+        if istable(train.ClientEnts) then
+            for name, prop in pairs(train.ClientEnts) do
+                if not IsValid(prop) then continue end
+
+                local model = string.lower(prop:GetModel() or "")
+                if not ModelLooksStructural(name, model) then continue end
+
+                prop:SetupBones()
+                print(string.format(
+                    "client %s | %s | bones=%d",
+                    tostring(name),
+                    tostring(prop:GetModel()),
+                    prop:GetBoneCount()
+                ))
+
+                for bone = 0, math.max(prop:GetBoneCount() - 1, -1) do
+                    print(string.format(
+                        "    [%d] %s parent=%d",
+                        bone,
+                        tostring(prop:GetBoneName(bone)),
+                        prop:GetBoneParent(bone)
+                    ))
+                end
+            end
+        end
+
+        print("------------------------------------------------------------")
+    end)
+
+    local debugDamage = CreateClientConVar(
+        "mex_damage_debug",
+        "0",
+        true,
+        false,
+        "Draw Metrostroi Expanded impact/deformation debug markers"
+    )
+
+    hook.Add("PostDrawTranslucentRenderables", "MEX.Damage.V4Debug", function()
+        if not debugDamage:GetBool() then return end
 
         for _, train in ipairs(ents.GetAll()) do
-            if IsSubwayTrain(train) and HasAnyDamage(train) then
-                local pos = train:GetPos() + train:GetUp() * (train:OBBMaxs().z + 25)
-                local ang = Angle(0, ply:EyeAngles().y - 90, 90)
-                cam.Start3D2D(pos, ang, 0.1)
-                    draw.SimpleTextOutlined(
-                        string.format(
-                            "F %.0f%%  R %.0f%%  L %.0f%%  P %.0f%%",
-                            train:GetNW2Float("MEX.Damage.front", 0) * 100,
-                            train:GetNW2Float("MEX.Damage.rear", 0) * 100,
-                            train:GetNW2Float("MEX.Damage.left", 0) * 100,
-                            train:GetNW2Float("MEX.Damage.right", 0) * 100
-                        ),
-                        "DermaDefaultBold",
-                        0,
-                        0,
-                        Color(255, 220, 120),
-                        TEXT_ALIGN_CENTER,
-                        TEXT_ALIGN_CENTER,
-                        1,
-                        Color(0, 0, 0)
-                    )
-                cam.End3D2D()
+            if not IsSubwayTrain(train) then continue end
+
+            local state = BuildDamageState(train)
+            if not state then continue end
+
+            local colors = {
+                front = Color(255, 90, 70),
+                rear = Color(255, 170, 70),
+                left = Color(80, 180, 255),
+                right = Color(170, 100, 255),
+            }
+
+            for _, zone in ipairs({"front", "rear", "left", "right"}) do
+                local amount = state[zone]
+                if amount <= 0.001 then continue end
+
+                local pos = train:LocalToWorld(state.hits[zone])
+                render.DrawWireframeSphere(
+                    pos,
+                    7 + amount * 18,
+                    10,
+                    8,
+                    colors[zone],
+                    true
+                )
             end
         end
     end)
 
-    hook.Add("EntityRemoved", "MEX.Damage.CleanupClientState", function(ent)
-        if not ent.MEXDamageMatrixApplied then return end
-        if ent.DisableMatrix then
-            ent:DisableMatrix("RenderMultiply")
-        end
+    hook.Add("EntityRemoved", "MEX.Damage.V4Cleanup", function(ent)
+        if not IsSubwayTrain(ent) then return end
+        RestoreInteractivePanels(ent)
     end)
 end
