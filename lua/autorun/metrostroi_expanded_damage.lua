@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.4.4"
+MEXD.Version = "0.5.0"
 
 local ZONES = {
     front = true,
@@ -171,6 +171,87 @@ if SERVER then
         end
 
         return false
+    end
+
+    local function NormalizeButtonFamily(button)
+        if not isstring(button) then return "" end
+
+        button = button:gsub("^.+:", "")
+        button = button:gsub("_Unlocked$", "")
+        button = button:gsub("%d+$", "")
+
+        local changed = true
+        while changed do
+            changed = false
+
+            for _, suffix in ipairs({
+                "Toggle", "Engage", "Set", "Left", "Right",
+                "Up", "Down", "On", "Off",
+            }) do
+                if #button > #suffix
+                    and string.sub(button, -#suffix) == suffix
+                then
+                    button = string.sub(button, 1, #button - #suffix)
+                    button = button:gsub("%d+$", "")
+                    changed = true
+                    break
+                end
+            end
+        end
+
+        return string.lower(button)
+    end
+
+    local function CollectKeyMapEvents(tbl, out, seen, depth)
+        if not istable(tbl) or depth > 5 then return end
+
+        for _, value in pairs(tbl) do
+            if isstring(value) then
+                value = value:gsub("^.+:", "")
+
+                if value ~= "" and not seen[value] then
+                    seen[value] = true
+                    out[#out + 1] = value
+                end
+            elseif istable(value) then
+                CollectKeyMapEvents(value, out, seen, depth + 1)
+            end
+        end
+    end
+
+    local function ExpandDetachedButtonAliases(train, buttonIDs)
+        local result = {}
+        local seen = {}
+        local families = {}
+
+        local function add(id)
+            if not isstring(id) or id == "" then return end
+            id = id:gsub("^.+:", "")
+            if seen[id] then return end
+            seen[id] = true
+            result[#result + 1] = id
+
+            local family = NormalizeButtonFamily(id)
+            if family ~= "" then
+                families[family] = true
+            end
+        end
+
+        for _, id in ipairs(buttonIDs or {}) do
+            add(id)
+        end
+
+        local keyEvents = {}
+        CollectKeyMapEvents(train.KeyMap, keyEvents, {}, 0)
+
+        for _, event in ipairs(keyEvents) do
+            local family = NormalizeButtonFamily(event)
+            if family ~= "" and families[family] then
+                add(event)
+            end
+        end
+
+        return result
     end
 
     local function IsValidDetachedButtonID(train, button)
@@ -444,33 +525,151 @@ if SERVER then
         return debris
     end
 
-    local function IsCombined717PassengerDoor(train, name, model)
-        if not IsSubwayTrain(train) then return false end
+    local PASSENGER_DOOR_FAMILIES = {
+        {
+            prefix = "models/metrostroi_train/81-717/81-717_doors_pos",
+            leafA = "models/metrostroi_train/81-717/door_right_spb.mdl",
+            leafB = "models/metrostroi_train/81-717/door_left_spb.mdl",
+            position = function(i, k, leaf)
+                local x = 338.0 - 230.1 * i + (1 - k) * 0.8
+                if leaf == 2 then x = x + 0.2 end
+                return Vector(x, -65 * (1 - 2 * k), 0.761)
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-718/81-718_doors_pos",
+            leafA = "models/metrostroi_train/81-718/door_right.mdl",
+            leafB = "models/metrostroi_train/81-718/door_left.mdl",
+            position = function(i, k)
+                return Vector(
+                    338.2 - 230.1 * i + (1 - k) * 0.8,
+                    -65.449 * (1 - 2 * k),
+                    0.761
+                )
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-710/81-710_doors_pos",
+            leafA = "models/metrostroi_train/81-710/81-710_door_right.mdl",
+            leafB = "models/metrostroi_train/81-710/81-710_door_left.mdl",
+            position = function(i, k, leaf)
+                local x
+                if leaf == 1 then
+                    x = 344.9 - 0.1 * k - 233.6 * i
+                else
+                    x = 344.9 - 0.1 * (1 - k) - 233.6 * i
+                end
 
-        local class = train:GetClass()
-        if class ~= "gmod_subway_81-717_mvm"
-            and class ~= "gmod_subway_81-717_lvz"
-            and class ~= "gmod_subway_81-714_mvm"
-            and class ~= "gmod_subway_81-714_lvz"
-        then
-            return false
-        end
+                return Vector(
+                    x,
+                    -63.86 * (1 - 2.02 * k),
+                    -5.75
+                )
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-502/81-502_doors_pos",
+            leafA = "models/metrostroi_train/81-502/81-502_door_right.mdl",
+            leafB = "models/metrostroi_train/81-502/81-502_door_left.mdl",
+            position = function(i, k, leaf)
+                local x
+                if leaf == 1 then
+                    x = 344.9 - 0.1 * k - 233.6 * i
+                else
+                    x = 344.9 - 0.1 * (1 - k) - 233.6 * i
+                end
 
+                return Vector(
+                    x,
+                    -63.86 * (1 - 2.02 * k),
+                    -5.75
+                )
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-702/81-702_doors_pos",
+            leafA = "models/metrostroi_train/81-702/81-702_door_right.mdl",
+            leafB = "models/metrostroi_train/81-702/81-702_door_left.mdl",
+            position = function(i, k, leaf)
+                local x
+                if leaf == 1 then
+                    x = 349.45 - k - 232.202 * i
+                else
+                    x = 349.45 - (1 - k) - 232.202 * i
+                end
+
+                return Vector(
+                    x,
+                    -64.6 * (1 - 2 * k),
+                    -8.728
+                )
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-703/81-703_doors_pos",
+            leafA = "models/metrostroi_train/81-703/81-703_door_right.mdl",
+            leafB = "models/metrostroi_train/81-703/81-703_door_left.mdl",
+            position = function(i, k, leaf)
+                local x
+                if leaf == 1 then
+                    x = 323.0 - 0.5 * k - 0.8 * (1 - k) - 233.5 * i
+                else
+                    x = 323.0 - 0.5 * (1 - k) - 0.8 * (1 - k) - 233.5 * i
+                end
+
+                return Vector(
+                    x,
+                    -62.8 * (1 - 2.045 * k),
+                    -5.3
+                )
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-720/81-720_doors_pos",
+            leafA = "models/metrostroi_train/81-720/81-720_door_l.mdl",
+            leafB = "models/metrostroi_train/81-720/81-720_door_r.mdl",
+            position = function(i, k)
+                return Vector(
+                    341 + k - 230 * i,
+                    -64 * (1 - 2 * k),
+                    -10
+                )
+            end,
+        },
+        {
+            prefix = "models/metrostroi_train/81-722/81-722_doors_pos",
+            leafA = "models/metrostroi_train/81-722/81-722_door_l.mdl",
+            leafB = "models/metrostroi_train/81-722/81-722_door_r.mdl",
+            position = function(i, k)
+                return Vector(
+                    341 + k - 230 * i,
+                    -64 * (1 - 2 * k),
+                    -10
+                )
+            end,
+        },
+    }
+
+    local function GetPassengerDoorFamily(name, model)
         if not string.match(name or "", "^door%d+x[01]$") then
-            return false
+            return nil
         end
 
-        return string.find(
-            string.lower(model or ""),
-            "81-717_doors_pos",
-            1,
-            true
-        ) ~= nil
+        local lowerModel = string.lower(model or "")
+
+        for _, family in ipairs(PASSENGER_DOOR_FAMILIES) do
+            if string.find(lowerModel, family.prefix, 1, true) == 1 then
+                return family
+            end
+        end
+
+        return nil
     end
 
-    local function SpawnSplit717DoorLeaves(
+    local function SpawnSplitPassengerDoorLeaves(
         train,
         name,
+        model,
         zone,
         skin,
         color,
@@ -480,26 +679,25 @@ if SERVER then
         frozenCycle,
         frozenPose
     )
+        local family = GetPassengerDoorFamily(name, model)
+        if not family then return nil end
+
         local i, k = string.match(name, "^door(%d)x([01])$")
         i = tonumber(i)
         k = tonumber(k)
 
         if not i or not k then return nil end
 
-        local y = -65 * (1 - 2 * k)
-        local yaw = 90 + 180 * k
-        local baseX = 338.0 - 230.1 * i + (1 - k) * 0.8
-
         local specs = {
             {
                 suffix = "a",
-                model = "models/metrostroi_train/81-717/door_right_spb.mdl",
-                pos = Vector(baseX, y, 0.761),
+                model = family.leafA,
+                pos = family.position(i, k, 1),
             },
             {
                 suffix = "b",
-                model = "models/metrostroi_train/81-717/door_left_spb.mdl",
-                pos = Vector(baseX + 0.2, y, 0.761),
+                model = family.leafB,
+                pos = family.position(i, k, 2),
             },
         }
 
@@ -518,7 +716,7 @@ if SERVER then
                 name .. ":" .. spec.suffix,
                 spec.model,
                 spec.pos,
-                Angle(0, yaw, 0),
+                Angle(0, 90 + 180 * k, 0),
                 nil,
                 nil,
                 skin,
@@ -540,18 +738,17 @@ if SERVER then
                 return nil
             end
 
-            -- Give the two leaves different impulses so they physically
-            -- separate instead of remaining superimposed after detachment.
             local phys = leaf:GetPhysicsObject()
             if IsValid(phys) then
-                local sideDir = train:GetForward()
-                    * (leafIndex == 1 and -1 or 1)
+                local separation =
+                    train:GetForward() * (leafIndex == 1 and -1 or 1)
+                    + train:GetRight() * (k == 1 and 0.18 or -0.18)
 
-                phys:AddVelocity(sideDir * (22 + leafIndex * 8))
+                phys:AddVelocity(separation * (26 + leafIndex * 7))
                 phys:AddAngleVelocity(Vector(
-                    leafIndex == 1 and 80 or -80,
-                    leafIndex == 1 and -55 or 55,
-                    leafIndex == 1 and 120 or -120
+                    leafIndex == 1 and 90 or -90,
+                    leafIndex == 1 and -60 or 60,
+                    leafIndex == 1 and 125 or -125
                 ))
                 phys:Wake()
             end
@@ -560,6 +757,98 @@ if SERVER then
         end
 
         return leaves
+    end
+
+    local function IsGlassComponentName(name, model)
+        local text = string.lower((name or "") .. " " .. (model or ""))
+
+        return string.find(text, "glass", 1, true) ~= nil
+            or string.find(text, "window", 1, true) ~= nil
+            or string.find(text, "stekl", 1, true) ~= nil
+    end
+
+    local function SpawnGlassShards(train, name, anchorLocal, zone)
+        local shards = {}
+        local worldPos = train:LocalToWorld(anchorLocal)
+        local normal = ZoneOutwardNormal(train, zone or "front")
+
+        local effect = EffectData()
+        effect:SetOrigin(worldPos)
+        effect:SetNormal(normal)
+        effect:SetMagnitude(2)
+        effect:SetScale(1.5)
+        util.Effect("GlassImpact", effect, true, true)
+
+        sound.Play(
+            "physics/glass/glass_largesheet_break1.wav",
+            worldPos,
+            78,
+            100,
+            0.9
+        )
+
+        local shardModels = {
+            "models/gibs/glass_shard01.mdl",
+            "models/gibs/glass_shard02.mdl",
+            "models/gibs/glass_shard03.mdl",
+            "models/gibs/glass_shard04.mdl",
+        }
+
+        for i = 1, 6 do
+            local model = shardModels[((i - 1) % #shardModels) + 1]
+            if not util.IsValidModel(model) then continue end
+
+            local offset = Vector(
+                math.Rand(-7, 7),
+                math.Rand(-7, 7),
+                math.Rand(-5, 7)
+            )
+
+            local shard = SpawnDetachedPhysicsProp(
+                train,
+                name .. ":glass:" .. i,
+                model,
+                anchorLocal + offset,
+                Angle(
+                    math.Rand(-25, 25),
+                    math.Rand(0, 360),
+                    math.Rand(-25, 25)
+                ),
+                Vector(-2, -2, -2),
+                Vector(2, 2, 2),
+                0,
+                color_white,
+                "",
+                {},
+                false,
+                false,
+                zone,
+                0,
+                0,
+                0
+            )
+
+            if IsValid(shard) then
+                local phys = shard:GetPhysicsObject()
+                if IsValid(phys) then
+                    phys:SetMass(0.35)
+                    phys:AddVelocity(
+                        normal * math.Rand(45, 110)
+                        + train:GetUp() * math.Rand(15, 70)
+                        + train:GetRight() * math.Rand(-55, 55)
+                    )
+                    phys:Wake()
+                end
+
+                shards[#shards + 1] = shard
+
+                timer.Simple(25 + i * 2, function()
+                    if IsValid(shard) then shard:Remove() end
+                end)
+            end
+        end
+
+        return shards
     end
 
     local COMPONENT_IMPACT_LIFETIME = 0.90
@@ -1113,13 +1402,21 @@ if SERVER then
 
         local debris
         local debrisList
+        local isGlass = IsGlassComponentName(name, model)
 
-        if isDoor
-            and IsCombined717PassengerDoor(train, name, model)
-        then
-            debrisList = SpawnSplit717DoorLeaves(
+        if isGlass then
+            debrisList = SpawnGlassShards(
                 train,
                 name,
+                anchorLocal,
+                zone
+            )
+            debris = istable(debrisList) and debrisList[1] or nil
+        elseif isDoor and GetPassengerDoorFamily(name, model) then
+            debrisList = SpawnSplitPassengerDoorLeaves(
+                train,
+                name,
+                model,
                 zone,
                 skin,
                 color,
@@ -1133,9 +1430,6 @@ if SERVER then
             if istable(debrisList) and #debrisList > 0 then
                 debris = debrisList[1]
             else
-                -- If an installation is missing the old individual leaf MDLs,
-                -- still detach the original combined door rather than leaving
-                -- it permanently attached.
                 debrisList = nil
                 debris = SpawnDetachedPhysicsProp(
                     train,
@@ -1184,7 +1478,12 @@ if SERVER then
         end
 
         local validButtons = {}
-        for _, button in ipairs(buttonIDs) do
+        local expandedButtons = ExpandDetachedButtonAliases(
+            train,
+            buttonIDs
+        )
+
+        for _, button in ipairs(expandedButtons) do
             if IsValidDetachedButtonID(train, button) then
                 BlockDetachedButton(train, button)
                 validButtons[#validButtons + 1] = button
