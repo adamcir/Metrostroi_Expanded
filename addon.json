@@ -1,0 +1,12 @@
+{
+  "title": "Metrostroi Expanded",
+  "type": "servercontent",
+  "tags": ["roleplay", "fun"],
+  "ignore": [
+    "README.md",
+    "LICENSE",
+    "tools/*",
+    ".git/*",
+    ".github/*"
+  ]
+}
