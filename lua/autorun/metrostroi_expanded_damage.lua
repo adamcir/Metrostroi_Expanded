@@ -1597,10 +1597,10 @@ if CLIENT then
     ---------------------------------------------------------------------------
     -- Breakaway components
     --
-    -- Doors and small panel controls are separate Metrostroi ClientEnt models.
-    -- Once their mounting point receives enough local displacement, replace the
-    -- attached ClientEnt with a clientside physics prop. ents.CreateClientProp
-    -- is specifically intended for clientside props with optional physics.
+    -- Doors, controls and other mounted Metrostroi ClientEnt models may lose
+    -- their mounting points under heavy local deformation. The original
+    -- ClientEnt is hidden only after the server accepts the failure request;
+    -- the server then creates a real networked physics debris entity.
     ---------------------------------------------------------------------------
 
     local DOOR_WORDS = {
@@ -2009,7 +2009,7 @@ if CLIENT then
         if not previous then
             previous = {
                 debris = debris,
-                oldNoDraw = false,
+                oldNoDraw = nil,
             }
 
             train.MEXDamageV4ServerDetached[name] = previous
