@@ -475,7 +475,10 @@ if SERVER then
         skin,
         color,
         material,
-        bodygroups
+        bodygroups,
+        frozenSequence,
+        frozenCycle,
+        frozenPose
     )
         local i, k = string.match(name, "^door(%d)x([01])$")
         i = tonumber(i)
@@ -525,9 +528,9 @@ if SERVER then
                 true,
                 false,
                 zone,
-                0,
-                0,
-                0
+                frozenSequence,
+                frozenCycle,
+                frozenPose
             )
 
             if not IsValid(leaf) then
@@ -1121,14 +1124,41 @@ if SERVER then
                 skin,
                 color,
                 material,
-                bodygroups
+                bodygroups,
+                frozenSequence,
+                frozenCycle,
+                frozenPose
             )
 
-            if not istable(debrisList) or #debrisList == 0 then
-                return
-            end
+            if istable(debrisList) and #debrisList > 0 then
+                debris = debrisList[1]
+            else
+                -- If an installation is missing the old individual leaf MDLs,
+                -- still detach the original combined door rather than leaving
+                -- it permanently attached.
+                debrisList = nil
+                debris = SpawnDetachedPhysicsProp(
+                    train,
+                    name,
+                    model,
+                    localPos,
+                    localAng,
+                    mins,
+                    maxs,
+                    skin,
+                    color,
+                    material,
+                    bodygroups,
+                    isDoor,
+                    isControl,
+                    zone,
+                    frozenSequence,
+                    frozenCycle,
+                    frozenPose
+                )
 
-            debris = debrisList[1]
+                if not IsValid(debris) then return end
+            end
         else
             debris = SpawnDetachedPhysicsProp(
                 train,
