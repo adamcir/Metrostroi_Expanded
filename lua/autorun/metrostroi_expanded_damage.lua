@@ -831,11 +831,30 @@ if SERVER then
     end
 
     local function IsGlassComponentName(name, model)
-        local text = string.lower((name or "") .. " " .. (model or ""))
+        local lowerModel = string.lower(model or "")
 
-        return string.find(text, "glass", 1, true) ~= nil
-            or string.find(text, "window", 1, true) ~= nil
-            or string.find(text, "stekl", 1, true) ~= nil
+        if string.find(lowerModel, "glass", 1, true)
+            or string.find(lowerModel, "window", 1, true)
+            or string.find(lowerModel, "stekl", 1, true)
+        then
+            return true
+        end
+
+        local lowerName = string.lower(name or "")
+
+        if string.find(lowerName, "washer", 1, true)
+            or string.find(lowerName, "cleaner", 1, true)
+            or string.find(lowerName, "wiper", 1, true)
+            or string.find(lowerName, "button", 1, true)
+            or string.find(lowerName, "switch", 1, true)
+            or string.find(lowerName, "toggle", 1, true)
+        then
+            return false
+        end
+
+        return string.find(lowerName, "glass", 1, true) ~= nil
+            or string.find(lowerName, "window", 1, true) ~= nil
+            or string.find(lowerName, "stekl", 1, true) ~= nil
     end
 
     local function SpawnGlassShards(train, name, anchorLocal, zone)
@@ -2486,7 +2505,33 @@ if CLIENT then
     end
 
     local function ModelLooksGlass(name, model)
-        return ModelMatchesWords(name, model, GLASS_WORDS)
+        local lowerModel = string.lower(model or "")
+
+        for _, word in ipairs(GLASS_WORDS) do
+            if string.find(lowerModel, word, 1, true) then
+                return true
+            end
+        end
+
+        local lowerName = string.lower(name or "")
+        local excluded = {
+            "washer", "cleaner", "wiper", "button", "switch",
+            "toggle", "control",
+        }
+
+        for _, word in ipairs(excluded) do
+            if string.find(lowerName, word, 1, true) then
+                return false
+            end
+        end
+
+        for _, word in ipairs(GLASS_WORDS) do
+            if string.find(lowerName, word, 1, true) then
+                return true
+            end
+        end
+
+        return false
     end
 
     local function GetStaticClientPropTransform(train, name, prop)
