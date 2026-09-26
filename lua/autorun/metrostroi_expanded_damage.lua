@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.4.3"
+MEXD.Version = "0.4.4"
 
 local ZONES = {
     front = true,
@@ -290,6 +290,14 @@ if SERVER then
                 if IsValid(data.debris) then
                     data.debris:Remove()
                 end
+
+                if istable(data.debrisList) then
+                    for _, debris in ipairs(data.debrisList) do
+                        if IsValid(debris) then
+                            debris:Remove()
+                        end
+                    end
+                end
             end
         end
 
@@ -317,7 +325,10 @@ if SERVER then
         bodygroups,
         isDoor,
         isControl,
-        zone
+        zone,
+        frozenSequence,
+        frozenCycle,
+        frozenPose
     )
         if not util.IsValidModel(model) then return nil end
 
@@ -325,18 +336,57 @@ if SERVER then
         if not IsValid(debris) then return nil end
 
         debris:SetModel(model)
+
+        if not isvector(mins) or not isvector(maxs)
+            or (maxs - mins):LengthSqr() <= 1
+        then
+            mins = debris:OBBMins()
+            maxs = debris:OBBMaxs()
+        end
+
+        if not isvector(mins) or not isvector(maxs)
+            or (maxs - mins):LengthSqr() <= 1
+        then
+            mins = Vector(-4, -4, -4)
+            maxs = Vector(4, 4, 4)
+        end
+
+        local visualCenter = (mins + maxs) * 0.5
+
+        -- Put the *physics entity* at the actual visible geometry centre.
+        -- mex_damage_debris:Draw() shifts only the rendered MDL back to its
+        -- original model origin. This fixes Metrostroi models whose origin is
+        -- hundreds of Source units away from the visible part.
+        local anchorLocal = LocalToWorld(
+            visualCenter,
+            angle_zero,
+            localPos,
+            localAng
+        )
+
         debris.MEXFallbackMins = mins
         debris.MEXFallbackMaxs = maxs
-        debris:SetPos(train:LocalToWorld(localPos))
+        debris:SetPos(train:LocalToWorld(anchorLocal))
         debris:SetAngles(train:LocalToWorldAngles(localAng))
         debris:SetSourceTrain(train)
         debris:SetComponentName(name)
+        debris:SetVisualCenter(visualCenter)
+        debris:SetFrozenSequence(math.max(math.floor(frozenSequence or 0), 0))
+        debris:SetFrozenCycle(math.Clamp(frozenCycle or 0, 0, 1))
+        debris:SetFrozenPosePosition(tonumber(frozenPose) or 0)
         debris:Spawn()
 
         if not IsValid(debris) then return nil end
 
         debris:SetSkin(math.max(0, skin or 0))
         debris:SetColor(color or color_white)
+        debris:SetPlaybackRate(0)
+        debris:SetSequence(debris:GetFrozenSequence())
+        debris:SetCycle(debris:GetFrozenCycle())
+        debris:SetPoseParameter(
+            "position",
+            debris:GetFrozenPosePosition()
+        )
 
         if isstring(material) and material ~= "" then
             debris:SetMaterial(material)
@@ -376,6 +426,8 @@ if SERVER then
             end
 
             phys:SetMass(mass)
+            phys:EnableGravity(true)
+            phys:EnableMotion(true)
             phys:SetVelocity(
                 train:GetVelocity()
                 + normal * (35 + seed * 55)
@@ -390,6 +442,119 @@ if SERVER then
         end
 
         return debris
+    end
+
+    local function IsCombined717PassengerDoor(train, name, model)
+        if not IsSubwayTrain(train) then return false end
+
+        local class = train:GetClass()
+        if class ~= "gmod_subway_81-717_mvm"
+            and class ~= "gmod_subway_81-717_lvz"
+            and class ~= "gmod_subway_81-714_mvm"
+            and class ~= "gmod_subway_81-714_lvz"
+        then
+            return false
+        end
+
+        if not string.match(name or "", "^door%d+x[01]$") then
+            return false
+        end
+
+        return string.find(
+            string.lower(model or ""),
+            "81%-717_doors_pos"
+        ) ~= nil
+    end
+
+    local function SpawnSplit717DoorLeaves(
+        train,
+        name,
+        zone,
+        skin,
+        color,
+        material,
+        bodygroups
+    )
+        local i, k = string.match(name, "^door(%d)x([01])$")
+        i = tonumber(i)
+        k = tonumber(k)
+
+        if not i or not k then return nil end
+
+        local y = -65 * (1 - 2 * k)
+        local yaw = 90 + 180 * k
+        local baseX = 338.0 - 230.1 * i + (1 - k) * 0.8
+
+        local specs = {
+            {
+                suffix = "a",
+                model = "models/metrostroi_train/81-717/door_right_spb.mdl",
+                pos = Vector(baseX, y, 0.761),
+            },
+            {
+                suffix = "b",
+                model = "models/metrostroi_train/81-717/door_left_spb.mdl",
+                pos = Vector(baseX + 0.2, y, 0.761),
+            },
+        }
+
+        local leaves = {}
+
+        for leafIndex, spec in ipairs(specs) do
+            if not util.IsValidModel(spec.model) then
+                for _, leaf in ipairs(leaves) do
+                    if IsValid(leaf) then leaf:Remove() end
+                end
+                return nil
+            end
+
+            local leaf = SpawnDetachedPhysicsProp(
+                train,
+                name .. ":" .. spec.suffix,
+                spec.model,
+                spec.pos,
+                Angle(0, yaw, 0),
+                nil,
+                nil,
+                skin,
+                color,
+                material,
+                bodygroups,
+                true,
+                false,
+                zone,
+                0,
+                0,
+                0
+            )
+
+            if not IsValid(leaf) then
+                for _, existing in ipairs(leaves) do
+                    if IsValid(existing) then existing:Remove() end
+                end
+                return nil
+            end
+
+            -- Give the two leaves different impulses so they physically
+            -- separate instead of remaining superimposed after detachment.
+            local phys = leaf:GetPhysicsObject()
+            if IsValid(phys) then
+                local sideDir = train:GetForward()
+                    * (leafIndex == 1 and -1 or 1)
+
+                phys:AddVelocity(sideDir * (22 + leafIndex * 8))
+                phys:AddAngleVelocity(Vector(
+                    leafIndex == 1 and 80 or -80,
+                    leafIndex == 1 and -55 or 55,
+                    leafIndex == 1 and 120 or -120
+                ))
+                phys:Wake()
+            end
+
+            leaves[#leaves + 1] = leaf
+        end
+
+        return leaves
     end
 
     local COMPONENT_IMPACT_LIFETIME = 0.90
@@ -815,6 +980,9 @@ if SERVER then
         local skin = net.ReadUInt(8)
         local color = net.ReadColor()
         local material = net.ReadString()
+        local frozenSequence = net.ReadUInt(16)
+        local frozenCycle = net.ReadFloat()
+        local frozenPose = net.ReadFloat()
 
         local bodygroups = {}
         local bodygroupCount = math.min(net.ReadUInt(5), 31)
@@ -914,7 +1082,7 @@ if SERVER then
             or (isControl and 0.020 or 0.035)
 
         local directMinimum =
-            isDoor and 0.62
+            isDoor and 0.20
             or (isControl and 0.11 or 0.20)
 
         local structuralOK =
@@ -938,24 +1106,50 @@ if SERVER then
             )
         end
 
-        local debris = SpawnDetachedPhysicsProp(
-            train,
-            name,
-            model,
-            localPos,
-            localAng,
-            mins,
-            maxs,
-            skin,
-            color,
-            material,
-            bodygroups,
-            isDoor,
-            isControl,
-            zone
-        )
+        local debris
+        local debrisList
 
-        if not IsValid(debris) then return end
+        if isDoor
+            and IsCombined717PassengerDoor(train, name, model)
+        then
+            debrisList = SpawnSplit717DoorLeaves(
+                train,
+                name,
+                zone,
+                skin,
+                color,
+                material,
+                bodygroups
+            )
+
+            if not istable(debrisList) or #debrisList == 0 then
+                return
+            end
+
+            debris = debrisList[1]
+        else
+            debris = SpawnDetachedPhysicsProp(
+                train,
+                name,
+                model,
+                localPos,
+                localAng,
+                mins,
+                maxs,
+                skin,
+                color,
+                material,
+                bodygroups,
+                isDoor,
+                isControl,
+                zone,
+                frozenSequence,
+                frozenCycle,
+                frozenPose
+            )
+
+            if not IsValid(debris) then return end
+        end
 
         local validButtons = {}
         for _, button in ipairs(buttonIDs) do
@@ -967,6 +1161,7 @@ if SERVER then
 
         train.MEXDamageDetachedServer[name] = {
             debris = debris,
+            debrisList = debrisList,
             buttons = validButtons,
         }
 
@@ -2074,6 +2269,70 @@ if CLIENT then
             add("Wiper")
         end
 
+        -- Main traction/braking controller (KV/GRKV). If the physical
+        -- controller is gone, no keyboard shortcut may still move its
+        -- electrical positions.
+        if string.find(text, "controller", 1, true)
+            or string.find(text, "grkv", 1, true)
+            or string.find(text, "/kv_", 1, true)
+        then
+            add("KVUp")
+            add("KVDown")
+            add("KV_Unlock")
+            add("KVSetX1")
+            add("KVSetX1B")
+            add("KVSetX2")
+            add("KVSetX3")
+            add("KVSet0")
+            add("KVSet0Fast")
+            add("KVSetT1")
+            add("KVSetT1A")
+            add("KVSetT2")
+        end
+
+        -- Driver brake valve / crane. The visible valve may be a standalone
+        -- ClientEnt with no ButtonMap entry, while F/R and numpad keys still
+        -- operate the Pneumatic system through ButtonEvent.
+        if string.find(text, "brake_valve", 1, true)
+            or string.find(text, "brake valve", 1, true)
+            or string.find(text, "crane", 1, true)
+            or string.find(text, "/334", 1, true)
+            or string.find(text, "/013", 1, true)
+        then
+            add("PneumaticBrakeUp")
+            add("PneumaticBrakeDown")
+            add("PneumaticBrakeSet1")
+            add("PneumaticBrakeSet2")
+            add("PneumaticBrakeSet3")
+            add("PneumaticBrakeSet4")
+            add("PneumaticBrakeSet5")
+            add("PneumaticBrakeSet6")
+            add("PneumaticBrakeSet7")
+            add("EmergencyBrake")
+        end
+
+        if string.find(text, "stopkran", 1, true)
+            or string.find(text, "emergencybrake", 1, true)
+            or string.find(text, "emergency_brake", 1, true)
+        then
+            add("EmergencyBrake")
+            add("EmergencyBrakeValveToggle")
+        end
+
+        if string.find(text, "driver_valve_bl", 1, true)
+            or string.find(text, "brake_disconnect", 1, true)
+        then
+            add("DriverValveBLDisconnect")
+            add("DriverValveBLDisconnectToggle")
+        end
+
+        if string.find(text, "driver_valve_tl", 1, true)
+            or string.find(text, "train_disconnect", 1, true)
+        then
+            add("DriverValveTLDisconnect")
+            add("DriverValveTLDisconnectToggle")
+        end
+
         return out
     end
 
@@ -2226,6 +2485,16 @@ if CLIENT then
             net.WriteUInt(math.Clamp(prop:GetSkin() or 0, 0, 255), 8)
             net.WriteColor(prop:GetColor())
             net.WriteString(prop:GetMaterial() or "")
+            net.WriteUInt(
+                math.Clamp(prop:GetSequence() or 0, 0, 65535),
+                16
+            )
+            net.WriteFloat(
+                math.Clamp(prop:GetCycle() or 0, 0, 1)
+            )
+            net.WriteFloat(
+                prop:GetPoseParameter("position") or 0
+            )
 
             local bodygroupCount = math.min(prop:GetNumBodyGroups() or 0, 31)
             net.WriteUInt(bodygroupCount, 5)
@@ -2263,7 +2532,7 @@ if CLIENT then
         local seed = StableFraction(name)
 
         if isDoor then
-            return 0.52 + seed * 0.22
+            return 0.20 + seed * 0.14
         elseif isControl then
             return 0.055 + seed * 0.085
         end
