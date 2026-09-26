@@ -2216,6 +2216,170 @@ if CLIENT then
         return true
     end
 
+    local function ComponentCandidateRadius(cached, isDoor, isControl)
+        local s = cached.size
+        local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
+
+        if isDoor then
+            return math.Clamp(largest * 0.22, 8, 30)
+        elseif isControl then
+            return math.Clamp(largest * 0.38, 3, 12)
+        end
+
+        return math.Clamp(largest * 0.28, 4, 18)
+    end
+
+    local function DirectImpactMountThreshold(name, isDoor, isControl)
+        local seed = StableFraction(name)
+
+        if isDoor then
+            return 0.52 + seed * 0.22
+        elseif isControl then
+            return 0.055 + seed * 0.085
+        end
+
+        return 0.13 + seed * 0.14
+    end
+
+    local function HandleDirectComponentImpact(
+        train,
+        hitLocal,
+        power,
+        radius,
+        maxDetach
+    )
+        if not IsSubwayTrain(train) or not istable(train.ClientEnts) then
+            return
+        end
+
+        local panelMap = train.MEXDamageV4PanelProps
+            or BuildPanelPropMap(train)
+        local state = BuildDamageState(train)
+        local candidates = {}
+
+        for name, prop in pairs(train.ClientEnts) do
+            if not IsValid(prop) then continue end
+
+            if train.MEXDamageV4ServerDetached
+                and train.MEXDamageV4ServerDetached[name]
+            then
+                continue
+            end
+
+            if prop.GetNoDraw and prop:GetNoDraw() then continue end
+            if prop:GetColor().a <= 5 then continue end
+
+            local cached = CacheClientProp(train, name, prop)
+            local panelName = panelMap[name]
+
+            local isDoor = IsDoorComponent(name, cached)
+            local isControl = IsSmallControlComponent(
+                name,
+                cached,
+                panelName
+            )
+            local isBreakaway = IsGeneralBreakawayComponent(
+                name,
+                cached,
+                panelName
+            )
+
+            if not isDoor and not isControl and not isBreakaway then
+                continue
+            end
+
+            local centerDistance = cached.anchorPos:Distance(hitLocal)
+            local componentRadius = ComponentCandidateRadius(
+                cached,
+                isDoor,
+                isControl
+            )
+            local edgeDistance = math.max(
+                0,
+                centerDistance - componentRadius
+            )
+
+            if edgeDistance > radius then continue end
+
+            local falloff = 1 - edgeDistance / math.max(radius, 1)
+            local score = falloff * power
+            local threshold = DirectImpactMountThreshold(
+                name,
+                isDoor,
+                isControl
+            )
+
+            if score < threshold then continue end
+
+            candidates[#candidates + 1] = {
+                name = name,
+                prop = prop,
+                cached = cached,
+                panelName = panelName,
+                isDoor = isDoor,
+                isControl = isControl,
+                score = score,
+                edgeDistance = edgeDistance,
+            }
+        end
+
+        table.sort(candidates, function(a, b)
+            if math.abs(a.edgeDistance - b.edgeDistance) > 0.01 then
+                return a.edgeDistance < b.edgeDistance
+            end
+            return a.score > b.score
+        end)
+
+        local requested = 0
+        local limit = math.Clamp(maxDetach or 1, 1, 12)
+
+        for _, candidate in ipairs(candidates) do
+            if requested >= limit then break end
+
+            if RequestServerDetach(
+                train,
+                candidate.name,
+                candidate.prop,
+                candidate.cached,
+                state,
+                candidate.panelName,
+                candidate.isDoor,
+                candidate.isControl
+            ) then
+                requested = requested + 1
+
+                -- Do not let a fragile prop visibly ride away with a distorted
+                -- panel while waiting one network round-trip for confirmation.
+                ClearClientPropRenderTransform(candidate.prop)
+            end
+        end
+    end
+
+    net.Receive("MEX.ComponentImpact", function()
+        local train = net.ReadEntity()
+        net.ReadUInt(16) -- serial is currently only used server-side
+        local hitLocal = net.ReadVector()
+        local power = net.ReadFloat()
+        local radius = net.ReadFloat()
+        local maxDetach = net.ReadUInt(4)
+
+        if not IsSubwayTrain(train) then return end
+
+        -- ClientEnts/ButtonMap may be created later in the same frame as the
+        -- impact callback. One zero-delay retry is enough without accumulating
+        -- stale hit events.
+        timer.Simple(0, function()
+            if not IsSubwayTrain(train) then return end
+            HandleDirectComponentImpact(
+                train,
+                hitLocal,
+                power,
+                radius,
+                maxDetach
+            )
+        end)
+    end)
+
     local function EnsureDamagedLightGuard(train)
         if train.MEXDamageOriginalSetLightPower then return end
         if not isfunction(train.SetLightPower) then return end
