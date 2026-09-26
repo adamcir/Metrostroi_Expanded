@@ -70,14 +70,66 @@ function ENT:CanTool(ply, trace, tool)
     return true
 end
 
+local function IsSubwayClass(ent)
+    if not IsValid(ent) then return false end
+
+    local className = ent:GetClass()
+    return isstring(className)
+        and className ~= "gmod_subway_base"
+        and string.sub(className, 1, 12) == "gmod_subway_"
+end
+
+local function IsAttachedTrainPart(ent)
+    if not IsValid(ent) then return false end
+    if ent:GetClass() == "mex_damage_debris" then return false end
+
+    local current = ent
+
+    for _ = 1, 10 do
+        if not IsValid(current) then return false end
+        if IsSubwayClass(current) then return true end
+
+        current = current:GetParent()
+    end
+
+    return false
+end
+
+-- Attached train hardware is not an independent physics object. It only
+-- becomes manipulable after the damage system has actually detached it and
+-- replaced it with mex_damage_debris.
 hook.Add("PhysgunPickup", "MEX.DamageDebris.Physgun", function(ply, ent)
-    if IsValid(ent) and ent:GetClass() == "mex_damage_debris" then
+    if not IsValid(ent) then return end
+
+    if ent:GetClass() == "mex_damage_debris" then
         return true
+    end
+
+    if IsAttachedTrainPart(ent) then
+        return false
     end
 end)
 
 hook.Add("GravGunPickupAllowed", "MEX.DamageDebris.GravGun", function(ply, ent)
-    if IsValid(ent) and ent:GetClass() == "mex_damage_debris" then
+    if not IsValid(ent) then return end
+
+    if ent:GetClass() == "mex_damage_debris" then
         return true
+    end
+
+    if IsAttachedTrainPart(ent) then
+        return false
+    end
+end)
+
+hook.Add("GravGunPunt", "MEX.DamageDebris.GravGunPunt", function(ply, ent)
+    if not IsValid(ent) then return end
+
+    if ent:GetClass() == "mex_damage_debris" then
+        return true
+    end
+
+    if IsAttachedTrainPart(ent) then
+        return false
     end
 end)
