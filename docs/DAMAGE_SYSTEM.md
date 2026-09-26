@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.5.0**
+Damage System version: **0.5.1**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -231,3 +231,25 @@ Examples:
 - Toggle/Set/Up/Down/Left/Right/On/Off variants are normalized into one control family
 
 All matched events are server-blocked through the train's `ButtonEvent` wrapper, so a detached physical control cannot be operated by a keyboard shortcut.
+
+
+### Standalone pneumatic controls
+
+0.5.1 fixes controls whose visible hardware is not generated from a ButtonMap prop.
+
+Examples include:
+
+- `brake_valve_334`
+- `brake_valve_013`
+- `brake_disconnect`
+- `train_disconnect`
+- `valve_disconnect`
+- EPK/EPV disconnect valves
+
+These ClientEnts are classified as controls directly from their hardware/model identity even without a ButtonMap parent.
+
+When such a part detaches, the client additionally searches ButtonMap button centres near the physical component anchor and removes the matching local hit targets. The corresponding IDs are sent to the server and expanded through the train KeyMap.
+
+The server guards `ButtonEvent`, `OnButtonPress` and `OnButtonRelease`. This prevents mouse, keyboard, direct button-event paths and train-specific button handlers from continuing to operate a destroyed physical control.
+
+A detached 334/013 driver's brake valve explicitly disables the complete `PneumaticBrake*` control family. Driver-valve, brake-line and train-line disconnect cocks disable their matching disconnect events.
