@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.9**
+Current damage-system module version: **0.6.10**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -283,3 +283,12 @@ Controls now follow one strict rule:
 - parking/manual/hand-brake hardware disables its complete parking-brake event family after physical detachment
 - classic `FrontBrake`, `FrontTrain`, `RearBrake`, `RearTrain` valve props are bound directly to their corresponding line-isolation events
 - `brake_disconnect`, `train_disconnect`, `EPK_disconnect` and `EPV_disconnect` are handled as independent physical valve failures
+
+
+### Damage 0.6.10 – authoritative pneumatic hardware failure
+
+- detached 81-717 `brake334` / `brake013` handles are recognized as the physical 334/013 driver's brake valve, not merely as nearby cabin props
+- losing the driver's pneumatic brake valve blocks `PneumaticBrakeUp`, `PneumaticBrakeDown`, positions 1–7 and emergency-brake input paths
+- front/rear brake-line and train-line isolation cocks are re-derived from the validated detached component on the server, so their original interaction cannot survive a missing client-side ButtonMap association
+- cab shut-off valves (`brake_disconnect`, `train_disconnect`, `valve_disconnect`, EPK/EPV) and parking-brake hardware use the same authoritative fallback
+- the client still kills the corresponding ButtonMap hitboxes, while the server independently rejects keyboard/ButtonEvent paths
