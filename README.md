@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.7.3**
+Current damage-system module version: **0.8.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -352,3 +352,17 @@ Controls now follow one strict rule:
 - this removes the exact crash path `BuildPanelPropMap -> GetButtonPhysicalPropName nil` even under hot reload / older initialization ordering
 - the damage module now prints its version and source path when loaded
 - added `mex_damage_version` so a running GMod instance can show the exact loaded module version and file path
+
+
+### Damage 0.8.0 – real main-body front crumple fallback
+
+- 81-717/714 front deformation no longer depends only on weighted MDL bones
+- properly rigged models still use the existing bone deformation path
+- rigid stock bodies now build a deformed copy of the main visual MDL with `util.GetModelMeshes` and render it through a per-entity `RenderOverride`
+- front vertices are pushed inward from the actual hit position with depth/radial falloff, impact-bowl pull and an accordion-like crush boundary
+- the main body mesh is rebuilt only when the accumulated front damage / impact centre / skin / bodygroup state changes
+- large material meshes are split below the 65535-vertex IMesh limit
+- if a workshop bodygroup mask cannot be read, the mesh loader retries with the default bodygroup layout instead of silently disabling deformation
+- `mex_damage_bones` now reports whether the mesh fallback is active
+- added `mex_damage_mesh_status` for exact client-side deformation diagnostics
+- collision geometry is unchanged; this remains a visual deformation system
