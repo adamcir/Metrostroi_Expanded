@@ -3662,11 +3662,9 @@ if CLIENT then
                         map[button.PropName] = panelName
                     end
 
-                    -- Resolve the physical provider locally. Do NOT call
-                    -- GetButtonPhysicalPropName() from this early mapping path:
-                    -- direct-impact processing may build the panel map before
-                    -- other attachment helpers have been initialized on older
-                    -- hot-reloaded addon copies.
+                    -- Resolve the physical provider locally in this early
+                    -- mapping path. Direct-impact processing may build the
+                    -- panel map before later attachment helpers are ready.
                     local config = button.model
                     local physicalProp = nil
 
