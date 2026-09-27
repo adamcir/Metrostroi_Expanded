@@ -487,3 +487,14 @@ Testing commands:
 - `mex_damage_scrap_test 6` — maximum current visual crush
 - `mex_damage_reset` — restore the wagon
 - `mex_damage_mesh_status` — show front/overall crush and active vertex-deformed ClientProps
+
+
+## Interior and seat attachment
+
+Damage System 0.10.2 extends whole-wagon scrap deformation to the visible cabin and saloon equipment.
+
+When overall crush reaches the scrap phase, visual seats, benches, couches, handrails, cabinets and other remaining interior ClientProps follow the same deformation field as the carbody. Large/long interior assemblies can be vertex-deformed; smaller furniture follows its deformed mounting point rigidly.
+
+Running gear (bogies, wheels, axles, couplers and major underframe mechanisms) remains on the original physics chassis.
+
+Interior fixtures are intentionally retained until much deeper crush energy so they are compressed with the cabin rather than immediately detaching as debris.
