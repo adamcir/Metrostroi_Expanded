@@ -417,3 +417,26 @@ Weapon damage now contributes a small permanent structural deformation amount at
 Physgun-driven impacts are detected through both old velocity vectors and Source's collision `Speed` value. The addon also tracks entities currently held or recently released by the physgun, because their old velocity values can be unreliable while the physgun moves them kinematically.
 
 When a stock model does not contain enough weighted front bones, local structural ClientEnt shells use a stronger longitudinal crush fallback. This does not alter the collision mesh.
+
+
+## Main body mesh fallback
+
+Damage System 0.8.0 adds a vertex-mesh fallback for rigid stock train bodies, especially the 81-717/714 family.
+
+The normal path still uses existing MDL bones. If the visible front shell is part of a rigid main model, the addon retrieves the model's visual triangle data, deforms the front vertices using the same persistent crash state, builds IMesh render parts, and installs an entity-specific RenderOverride for the damaged body.
+
+The deformation uses the stored front impact centre and accumulated front damage to calculate:
+
+- longitudinal crush depth
+- radial falloff around the contact point
+- local pull toward the impact bowl
+- deeper propagation for severe crashes
+- a fold/crease around the crush boundary
+
+The original server collision mesh is not modified.
+
+Useful client commands:
+
+- `mex_damage_bones` — body/front bone capability plus mesh fallback state
+- `mex_damage_mesh_status` — front damage, bone counts, mesh build state and render-part count
+- `mex_damage_version` — exact loaded module version and source path
