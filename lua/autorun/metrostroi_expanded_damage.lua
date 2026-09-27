@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.7.0"
+MEXD.Version = "0.7.1"
 
 local ZONES = {
     front = true,
@@ -1734,6 +1734,30 @@ if SERVER then
             or dmginfo:IsDamageType(DMG_VEHICLE)
     end
 
+    local function IsRecentPhysgunEntity(ent)
+        return IsValid(ent)
+            and (
+                ent.MEXDamagePhysgunHeld == true
+                or (ent.MEXDamagePhysgunUntil or 0) > CurTime()
+            )
+    end
+
+    -- Physgun motion is partly kinematic in Source, so OurOldVelocity can be
+    -- much smaller than the visible movement. Remember held/thrown entities so
+    -- PhysicsCollide can trust collisionData.Speed and use a lower threshold
+    -- for deliberate destructive tests instead of silently ignoring them.
+    hook.Add("PhysgunPickup", "MEX.Damage.TrackPhysgunPickup", function(_, ent)
+        if not IsValid(ent) then return end
+        ent.MEXDamagePhysgunHeld = true
+        ent.MEXDamagePhysgunUntil = CurTime() + 0.25
+    end)
+
+    hook.Add("PhysgunDrop", "MEX.Damage.TrackPhysgunDrop", function(_, ent)
+        if not IsValid(ent) then return end
+        ent.MEXDamagePhysgunHeld = false
+        ent.MEXDamagePhysgunUntil = CurTime() + 0.55
+    end)
+
     local function InitializeTrainDamage(train)
         if not IsSubwayTrain(train) then return end
         if train.MEXDamageInitialized then return end
@@ -1760,53 +1784,117 @@ if SERVER then
                 if (ent.MEXDamageCrashCooldown or 0) > CurTime() then return end
                 if not istable(data) then return end
 
-                local ourOld = isvector(data.OurOldVelocity) and data.OurOldVelocity or ent:GetVelocity()
-                local theirOld = isvector(data.TheirOldVelocity) and data.TheirOldVelocity or vector_origin
+                local ourOld = isvector(data.OurOldVelocity)
+                    and data.OurOldVelocity
+                    or ent:GetVelocity()
+                local theirOld = isvector(data.TheirOldVelocity)
+                    and data.TheirOldVelocity
+                    or vector_origin
                 local relativeVelocity = ourOld - theirOld
 
-                local hitNormal = isvector(data.HitNormal) and data.HitNormal or vector_origin
+                local hitNormal = isvector(data.HitNormal)
+                    and data.HitNormal
+                    or vector_origin
                 local normalSpeed = 0
                 if hitNormal:LengthSqr() > 0.001 then
                     normalSpeed = math.abs(relativeVelocity:Dot(hitNormal))
                 end
 
                 local relativeSpeed = relativeVelocity:Length()
-                local impactSpeedSU = math.max(normalSpeed, relativeSpeed * 0.45)
 
-                if isvector(data.HitSpeed) then
-                    impactSpeedSU = math.max(impactSpeedSU, data.HitSpeed:Length())
-                end
+                -- collisionData.Speed is a scalar and is much more reliable
+                -- for entities moved by the physgun than OurOldVelocity.
+                local reportedSpeed = tonumber(data.Speed) or 0
+                local hitSpeed = isvector(data.HitSpeed)
+                    and data.HitSpeed:Length()
+                    or tonumber(data.HitSpeed)
+                    or 0
 
-                local impactKmh = impactSpeedSU * SU_TO_KMH
-                if impactKmh < MIN_CRASH_SPEED_KMH then return end
-
-                local hitPos = isvector(data.HitPos) and data.HitPos or ent:GetPos()
-                local zone = ClassifyFromWorldPosition and ClassifyFromWorldPosition(ent, hitPos) or nil
-                if not zone then
-                    zone = ClassifyFromWorldDeltaVelocity and ClassifyFromWorldDeltaVelocity(ent, relativeVelocity) or "front"
-                end
-
-                local severity = math.Clamp(
-                    (impactKmh - MIN_CRASH_SPEED_KMH)
-                    / (MAX_CRASH_SPEED_KMH - MIN_CRASH_SPEED_KMH),
-                    0.015,
-                    0.90
+                local impactSpeedSU = math.max(
+                    normalSpeed,
+                    relativeSpeed * 0.68,
+                    reportedSpeed,
+                    hitSpeed
                 )
 
+                local other = IsValid(data.HitEntity)
+                    and data.HitEntity
+                    or nil
+                local physgunImpact =
+                    IsRecentPhysgunEntity(ent)
+                    or IsRecentPhysgunEntity(other)
+
+                local impactKmh = impactSpeedSU * SU_TO_KMH
+                local threshold = physgunImpact and 2.5 or MIN_CRASH_SPEED_KMH
+                if impactKmh < threshold then return end
+
+                local hitPos = isvector(data.HitPos)
+                    and data.HitPos
+                    or ent:GetPos()
+                local zone = ClassifyFromWorldPosition
+                    and ClassifyFromWorldPosition(ent, hitPos)
+                    or nil
+                if not zone then
+                    zone = ClassifyFromWorldDeltaVelocity
+                        and ClassifyFromWorldDeltaVelocity(
+                            ent,
+                            relativeVelocity
+                        )
+                        or "front"
+                end
+
+                local maxSpeed = physgunImpact
+                    and 48
+                    or MAX_CRASH_SPEED_KMH
+                local severity = math.Clamp(
+                    (impactKmh - threshold)
+                        / math.max(maxSpeed - threshold, 1),
+                    physgunImpact and 0.030 or 0.015,
+                    0.95
+                )
+
+                if physgunImpact then
+                    severity = math.Clamp(
+                        severity * 1.20 + 0.012,
+                        0.035,
+                        0.95
+                    )
+                end
+
                 -- Repeated sub-crash contacts in one physical impact arrive in
-                -- consecutive physics steps. Count the first one and let the
-                -- deformation accumulator handle later distinct impacts.
-                ent.MEXDamageCrashCooldown = CurTime() + 0.12
+                -- consecutive physics steps. Physgun testing intentionally
+                -- allows more distinct impacts per second.
+                ent.MEXDamageCrashCooldown =
+                    CurTime() + (physgunImpact and 0.065 or 0.12)
                 ent:SetNW2Float("MEX.Damage.LastImpactKmh", impactKmh)
+
+                local impactVelocity = relativeVelocity
+                if impactVelocity:Length() < impactSpeedSU * 0.35
+                    and hitNormal:LengthSqr() > 0.001
+                then
+                    impactVelocity = -hitNormal:GetNormalized() * impactSpeedSU
+                end
 
                 SendComponentImpact(
                     ent,
                     hitPos,
-                    math.Clamp(impactKmh / 42, 0.15, 1.7),
-                    math.Clamp(18 + impactKmh * 1.65, 22, 180),
-                    math.Clamp(1 + math.floor(impactKmh / 12), 1, 16),
-                    "physics",
-                    relativeVelocity * 0.70,
+                    math.Clamp(
+                        impactKmh / (physgunImpact and 28 or 42),
+                        physgunImpact and 0.24 or 0.15,
+                        1.9
+                    ),
+                    math.Clamp(
+                        18 + impactKmh * (physgunImpact and 2.1 or 1.65),
+                        22,
+                        210
+                    ),
+                    math.Clamp(
+                        1 + math.floor(impactKmh / (physgunImpact and 8 or 12)),
+                        1,
+                        20
+                    ),
+                    physgunImpact and "physgun" or "physics",
+                    impactVelocity * 0.70,
                     false
                 )
 
@@ -1816,7 +1904,7 @@ if SERVER then
                     severity,
                     hitPos,
                     ZoneOutwardNormal(ent, zone),
-                    "physics"
+                    physgunImpact and "physgun" or "physics"
                 )
             end)
         end
@@ -2430,21 +2518,22 @@ if SERVER then
             )
         end
 
-        if not (
-            dmginfo:IsDamageType(DMG_CRUSH)
-            or dmginfo:IsDamageType(DMG_BLAST)
-        ) then
+        if rawDamage <= 0 then return end
+
+        local isBlast = dmginfo:IsDamageType(DMG_BLAST)
+        local isCrush = dmginfo:IsDamageType(DMG_CRUSH)
+            or dmginfo:IsDamageType(DMG_VEHICLE)
+        local isBullet = dmginfo:IsDamageType(DMG_BULLET)
+        local isBuckshot = dmginfo:IsDamageType(DMG_BUCKSHOT)
+        local isMelee = dmginfo:IsDamageType(DMG_CLUB)
+            or dmginfo:IsDamageType(DMG_SLASH)
+
+        if not (isBlast or isCrush or isBullet or isBuckshot or isMelee) then
             return
         end
 
-        if rawDamage <= 1 then return end
-
-        local pos = dmginfo:GetDamagePosition()
-        local zone = nil
-
-        if isvector(pos) and pos ~= vector_origin then
-            zone = ClassifyFromWorldPosition(ent, pos)
-        end
+        local pos = DamageImpactWorldPosition(ent, dmginfo)
+        local zone = ClassifyFromWorldPosition(ent, pos)
 
         if not zone then
             local force = dmginfo:GetDamageForce()
@@ -2454,10 +2543,40 @@ if SERVER then
         end
 
         zone = zone or "front"
-        local amount = math.Clamp(rawDamage / 260, 0.025, 0.42)
+
+        -- Weapons used to detach individual props but did not feed the
+        -- structural deformation accumulator at all. Give them a small local,
+        -- permanent dent contribution so repeated shots actually crumple the
+        -- front instead of only making controls disappear.
+        local amount
+
+        if isBlast then
+            amount = math.Clamp(rawDamage / 230, 0.040, 0.52)
+        elseif isCrush then
+            amount = math.Clamp(rawDamage / 220, 0.030, 0.48)
+        elseif isBuckshot then
+            amount = math.Clamp(
+                0.035 + rawDamage / 230,
+                0.040,
+                0.20
+            )
+        elseif isBullet then
+            amount = math.Clamp(
+                0.018 + rawDamage / 340,
+                0.022,
+                0.16
+            )
+        else
+            amount = math.Clamp(
+                0.012 + rawDamage / 520,
+                0.015,
+                0.085
+            )
+        end
+
         local normal = ZoneOutwardNormal(ent, zone)
 
-        if dmginfo:IsDamageType(DMG_BLAST) then
+        if isBlast then
             local blastWorldPos = DamageImpactWorldPosition(ent, dmginfo)
             local blastForce = dmginfo:GetDamageForce()
             local blastImpulseLocal = Vector(0, 0, 0)
@@ -2490,11 +2609,20 @@ if SERVER then
             )
         end
 
-        -- Prevent the velocity-change detector from counting the same physical
-        -- collision a second time on the next scan.
-        ent.MEXDamageCrashCooldown = CurTime() + 0.18
+        -- Only physical collisions/blasts need velocity-detector de-duplication.
+        -- A bullet immediately before a crash must not suppress that crash.
+        if isCrush or isBlast then
+            ent.MEXDamageCrashCooldown = CurTime() + 0.18
+        end
 
-        MEXD.ApplyDamage(ent, zone, amount, pos, normal, "damageinfo")
+        local source =
+            isBullet and "bullet"
+            or isBuckshot and "buckshot"
+            or isMelee and "melee"
+            or isBlast and "blast"
+            or "damageinfo"
+
+        MEXD.ApplyDamage(ent, zone, amount, pos, normal, source)
     end)
 
     local nextVelocityScan = 0
