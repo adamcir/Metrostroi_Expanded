@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.7"
+MEXD.Version = "0.6.8"
 
 local ZONES = {
     front = true,
@@ -211,47 +211,127 @@ if SERVER then
         then
             train.MEXDamageOriginalOnKeyEvent = train.OnKeyEvent
 
-            local function keyEntryBlocked(self, entry, depth)
-                depth = depth or 0
-                if depth > 5 then return false end
-
-                if isstring(entry) then
-                    local id = entry:gsub("^.+:", "")
-                    return blocked(self, id)
+            local function selectedActionBlocked(
+                self,
+                action,
+                helper
+            )
+                if isstring(action) then
+                    return blocked(
+                        self,
+                        action:gsub("^.+:", "")
+                    )
                 end
 
-                if not istable(entry) then return false end
+                if not istable(action) then return false end
 
-                for key, value in pairs(entry) do
-                    if key ~= "helper" and key ~= "def"
-                        and keyEntryBlocked(self, value, depth + 1)
-                    then
-                        return true
+                -- Some KeyMap actions use {"Action", helper="OtherAction"}.
+                -- Only inspect the action Metrostroi is about to execute, not
+                -- every sibling in a modifier table.
+                local selected = helper
+                    and action.helper
+                    or action[1]
+
+                if isstring(selected) then
+                    return blocked(
+                        self,
+                        selected:gsub("^.+:", "")
+                    )
+                end
+
+                return false
+            end
+
+            local function resolvedKeyEventBlocked(
+                self,
+                key,
+                state,
+                helper
+            )
+                -- Never swallow key releases. If a control was held when it
+                -- broke, Metrostroi must still receive the release so nothing
+                -- can remain electrically latched.
+                if not state then return false end
+
+                local keyMap = self.KeyMap
+                if not istable(keyMap) then return false end
+
+                local keyT = keyMap[key]
+
+                -- Mirror gmod_subway_base:OnKeyEvent exactly enough to test
+                -- only the action selected by the currently active modifier.
+                if isfunction(self.HasModifier)
+                    and self:HasModifier(key)
+                    and not helper
+                    and isfunction(self.GetActiveModifiers)
+                then
+                    local active = self:GetActiveModifiers(key)
+
+                    if istable(active) and #active > 0 then
+                        for _, modifier in pairs(active) do
+                            local modTable = keyMap[modifier]
+                            local action = istable(modTable)
+                                and modTable[key]
+                                or nil
+
+                            if action ~= nil
+                                and selectedActionBlocked(
+                                    self,
+                                    action,
+                                    false
+                                )
+                            then
+                                return true
+                            end
+                        end
+
+                        return false
                     end
                 end
 
-                if isstring(entry.helper)
-                    and keyEntryBlocked(self, entry.helper, depth + 1)
+                if isfunction(self.IsModifier)
+                    and self:IsModifier(key)
+                    and istable(keyT)
                 then
-                    return true
+                    if keyT.helper then
+                        local action = helper
+                            and keyT.helper
+                            or keyT[1]
+
+                        return selectedActionBlocked(
+                            self,
+                            action,
+                            helper
+                        )
+                    end
+
+                    if not helper and isstring(keyT.def) then
+                        return blocked(
+                            self,
+                            keyT.def:gsub("^.+:", "")
+                        )
+                    end
+
+                    return false
                 end
 
-                if isstring(entry.def)
-                    and keyEntryBlocked(self, entry.def, depth + 1)
-                then
-                    return true
+                if isstring(keyT) and not helper then
+                    return blocked(
+                        self,
+                        keyT:gsub("^.+:", "")
+                    )
                 end
 
                 return false
             end
 
             train.OnKeyEvent = function(self, key, state, ply, helper)
-                local keyMap = self.KeyMap
-                local entry = istable(keyMap) and keyMap[key] or nil
-
-                if keyEntryBlocked(self, entry, 0) then
-                    -- Clear any stale held-key state so the control cannot stay
-                    -- electrically latched after its hardware was torn off.
+                if resolvedKeyEventBlocked(
+                    self,
+                    key,
+                    state,
+                    helper
+                ) then
                     if istable(self.KeyBuffer) then
                         self.KeyBuffer[key] = nil
                     end
@@ -3977,7 +4057,9 @@ if CLIENT then
         then
             add("KVUp")
             add("KVDown")
-            add("KV_Unlock")
+            -- Reverser/key insertion is a separate physical mechanism. Do not
+            -- disable KV_Unlock or KVWrench* merely because the traction
+            -- controller itself was damaged.
             add("KVSetX1")
             add("KVSetX1B")
             add("KVSetX2")
@@ -3987,6 +4069,48 @@ if CLIENT then
             add("KVSetT1")
             add("KVSetT1A")
             add("KVSetT2")
+        end
+
+        -- Reverser key / wrench mechanics are physically independent from
+        -- the main traction controller. Only a detached reverser mechanism may
+        -- disable inserting/removing/turning the reverser key.
+        local propNameLower = string.lower(propName or "")
+        local modelLower = string.lower(cached.model or "")
+
+        local isReverserHardware =
+            string.find(propNameLower, "reverser", 1, true)
+            or string.find(modelLower, "/reversor/", 1, true)
+            or propNameLower == "kro"
+            or propNameLower == "krr"
+            or propNameLower == "kr_wrench"
+            or propNameLower == "kru_wrench"
+
+        if isReverserHardware then
+            local isAuxReverser =
+                string.find(propNameLower, "kru", 1, true)
+                or string.find(propNameLower, "rcu", 1, true)
+                or propNameLower == "krr"
+
+            if isAuxReverser then
+                add("KVWrenchKRU")
+                add("WrenchKRR")
+                add("KRR-")
+                add("KRR+")
+            else
+                add("KVWrenchKV")
+                add("KVWrenchKV9")
+                add("WrenchKRO")
+                add("KRO-")
+                add("KRO+")
+            end
+
+            -- Removal is shared by several Metrostroi families. It is disabled
+            -- only because an actual reverser mechanism has physically failed.
+            add("KVWrenchNone")
+            add("WrenchNone")
+
+            add("KVReverserUp")
+            add("KVReverserDown")
         end
 
         -- Driver brake valve / crane. The visible valve may be a standalone
