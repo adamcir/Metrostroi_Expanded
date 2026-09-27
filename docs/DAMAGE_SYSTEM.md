@@ -451,3 +451,14 @@ This applies to localized ClientEnt assemblies such as masks, cab doors/windows,
 ButtonMap panel transforms and dynamic light transforms also use that field, so the visual control, clickable area and emitted light stay together after a front crash.
 
 Full-length salon/interior shells are intentionally not translated as one rigid object.
+
+
+## Front ClientProp vertex meshes
+
+Damage System 0.9.0 extends the mesh fallback to large front ClientProps.
+
+On trains such as the 81-717, the visible front mask is a separate rigid model. Moving that model as one attachment cannot produce a visibly crumpled nose. The addon now retrieves the mask/cab-shell triangle data, converts every vertex into train-local coordinates, applies the same front deformation field used by the main body, and renders the resulting IMesh through the ClientProp's RenderOverride.
+
+The front deformation field in 0.9.0 also has increased crush depth and radial reach so medium damage is easier to see.
+
+Use `mex_damage_mesh_status` to list currently active vertex-deformed ClientProps.
