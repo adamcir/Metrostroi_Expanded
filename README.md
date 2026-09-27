@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.11**
+Current damage-system module version: **0.6.12**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -302,3 +302,9 @@ Controls now follow one strict rule:
 - `DriverValveDisconnectToggle` is physically owned by `valve_disconnect`
 - EPK/EPV and parking/emergency-brake valve aliases also resolve to the currently visible physical ClientProp
 - after that physical valve detaches, its exact ButtonMap hitbox is replaced by a dead hitbox and the server-side event remains blocked
+
+
+### Damage 0.6.12 – cab valve resolver scope fix
+
+- fixed a Lua scope error where `BuildPanelPropMap()` could call `GetButtonPhysicalPropName` as an undefined global
+- the physical-control resolver is now forward-declared and assigned in the same client-side local scope
