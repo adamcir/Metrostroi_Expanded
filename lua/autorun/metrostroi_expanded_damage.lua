@@ -1707,7 +1707,11 @@ if SERVER then
             local startPos = attacker:GetShootPos()
             local trace = util.TraceLine({
                 start = startPos,
-                endpos = startPos + attacker:GetAimVector() * 160,
+                -- 160 SU was only a few metres. From normal shooting
+                -- distances the trace therefore missed the train and the
+                -- damage system guessed a generic nearest point instead of
+                -- denting the actual bullet impact position.
+                endpos = startPos + attacker:GetAimVector() * 32768,
                 filter = attacker,
             })
 
@@ -3806,26 +3810,46 @@ if CLIENT then
             return
         end
 
+        local frontFallback = 0
+        if (state.front or 0) > 0.001 then
+            local depth = state.maxs.x - cached.anchorPos.x
+            local reach = 72 + state.front * 175
+            if depth >= -8 and depth <= reach then
+                frontFallback =
+                    Smooth01(
+                        1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
+                    )
+                    * math.Clamp(state.front, 0, 1)
+            end
+        end
+
+        -- Local shell pieces are also our fallback on stock models that do not
+        -- have enough weighted nose bones. Longitudinal compression is made
+        -- noticeably stronger near the front while the transverse axes remain
+        -- comparatively stiff.
         local sx = 1 - math.Clamp(
             math.abs(displacement.x)
                 / math.max(math.abs(size.x), 28)
-                * 0.42,
+                * 0.50
+                + frontFallback * 0.22,
             0,
-            0.24
+            0.42
         )
         local sy = 1 - math.Clamp(
             math.abs(displacement.y)
                 / math.max(math.abs(size.y), 28)
-                * 0.34,
+                * 0.34
+                + frontFallback * 0.035,
             0,
-            0.18
+            0.20
         )
         local sz = 1 - math.Clamp(
             math.abs(displacement.z)
                 / math.max(math.abs(size.z), 28)
-                * 0.30,
+                * 0.30
+                + frontFallback * 0.025,
             0,
-            0.15
+            0.17
         )
 
         local matrix = Matrix()
