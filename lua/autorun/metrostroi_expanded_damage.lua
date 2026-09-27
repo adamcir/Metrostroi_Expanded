@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "1.0.0-alpha.1"
+MEXD.Version = "0.10.0"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -2819,6 +2819,50 @@ if SERVER then
             ZoneOutwardNormal(train, zone),
             "console"
         )
+    end)
+
+    concommand.Add("mex_damage_scrap_test", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+
+        local train = GetAimedTrain(ply)
+        if not IsValid(train) then
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            return
+        end
+
+        InitializeTrainDamage(train)
+        if CurTime() < (train.MEXDamageIgnoreUntil or 0) then
+            print("[Metrostroi Expanded/Damage] Damage system is still in the spawn grace period.")
+            return
+        end
+
+        local energy = math.Clamp(tonumber(args[1]) or 3.0, 0.1, 6.0)
+        local worldPos = train:LocalToWorld(
+            ZoneLocalImpactPoint(train, "front")
+        )
+
+        train:SetNW2Float(DamageKey("front"), 1)
+        train:SetNW2Float(CrushKey("front"), energy)
+        train:SetNW2Float("MEX.Damage.HitStrength.front", energy)
+        train:SetNW2Vector(
+            "MEX.Damage.HitLocal.front",
+            train:WorldToLocal(worldPos)
+        )
+
+        UpdateDamageState(train)
+        SendImpactEffect(
+            train,
+            "front",
+            math.Clamp(energy / 4, 0.12, 1),
+            worldPos,
+            ZoneOutwardNormal(train, "front")
+        )
+
+        print(string.format(
+            "[Metrostroi Expanded/Damage] front scrap test set to %.2f for %s",
+            energy,
+            train:GetClass()
+        ))
     end)
 
     concommand.Add("mex_damage_reset", function(ply)
@@ -6581,8 +6625,28 @@ if CLIENT then
         if prop.GetNoDraw and prop:GetNoDraw() then return false end
         if prop:GetColor().a <= 5 then return false end
 
-        local displacement = LocalDisplacement(cached.anchorPos, state):Length()
+        local displacement =
+            (
+                DeformMountedPointStrength(
+                    train,
+                    cached.anchorPos,
+                    state,
+                    cached.cabin
+                        and math.max(
+                            1.18,
+                            CabStrengthAtPoint(cached.anchorPos, state)
+                        )
+                        or 1
+                )
+                - cached.anchorPos
+            ):Length()
+
         if displacement <= 0.01 then return false end
+
+        local crushEnergy =
+            istable(state.crush)
+                and (state.crush.front or 0)
+                or (state.front or 0)
 
         local seed = StableFraction(name)
         local isGlass = IsGlassComponent(name, cached)
@@ -6593,6 +6657,18 @@ if CLIENT then
             cached,
             panelName
         )
+
+        local largest = math.max(
+            math.abs(cached.size.x),
+            math.abs(cached.size.y),
+            math.abs(cached.size.z)
+        )
+
+        local largeStructural =
+            cached.structural
+            and largest >= 58
+            and not isGlass
+            and not isControl
 
         if isGlass then
             local threshold = 0.20 + seed * 0.45
@@ -6617,7 +6693,17 @@ if CLIENT then
         end
 
         if isDoor then
-            local threshold = 2.2 + seed * 2.8
+            -- Large carbody doors should first bend with the shell. Only after
+            -- substantial crush energy has accumulated may the complete door
+            -- tear away as debris.
+            if largeStructural and crushEnergy < 1.25 then
+                return false
+            end
+
+            local threshold =
+                (2.2 + seed * 2.8)
+                * (largeStructural and 1.75 or 1)
+
             if displacement >= threshold then
                 local requested = RequestServerDetach(
                     train,
@@ -6676,7 +6762,18 @@ if CLIENT then
         end
 
         if isBreakaway then
-            local threshold = 1.0 + seed * 2.4
+            -- Body panels and shell sections are deformation material, not
+            -- ordinary props. Keep them attached through the normal crash
+            -- phase so they can buckle/accordion instead of instantly exposing
+            -- an empty frame. They can still tear away in the scrap phase.
+            if largeStructural and crushEnergy < 1.55 then
+                return false
+            end
+
+            local threshold =
+                (1.0 + seed * 2.4)
+                * (largeStructural and 2.2 or 1)
+
             if displacement >= threshold then
                 local requested = RequestServerDetach(
                     train,
@@ -7480,6 +7577,14 @@ if CLIENT then
         -- Ignore tiny detail props. Everything sheet-like / shell-sized is a
         -- candidate regardless of addon-specific naming convention.
         if largest < 46 or secondLargest < 18 then
+            return false
+        end
+
+        local isDoorLike =
+            string.find(text, "door", 1, true)
+            or string.find(text, "dver", 1, true)
+
+        if isDoorLike and crushEnergy < 1.25 then
             return false
         end
 
