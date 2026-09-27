@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.7**
+Current damage-system module version: **0.6.8**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -262,3 +262,13 @@ Controls now follow one strict rule:
 - shared ButtonEvent IDs are hidden globally only when no other attached physical provider remains
 - legacy doors/mechanisms can resolve their physical ClientEnt through `button.model.var` (for example `FrontDoor` -> `door1`) when that ClientEnt exists
 - reset restores all native Hidden overrides recorded by the damage system
+
+
+### Damage 0.6.8 – reverser key isolation
+
+- fixes the keyboard damage guard so modifier tables are no longer treated as one giant failure group
+- only the event actually selected by the current key/modifier combination is checked for damage
+- key releases always pass through so a control cannot remain latched after breaking
+- traction-controller damage no longer disables reverser-key insertion/removal or `KV_Unlock`
+- `KVWrenchKV`, `KVWrenchKV9`, `KVWrenchKRU`, `WrenchKRO`, `WrenchKRR`, `WrenchNone` and related reverser movement events are disabled only when a physical reverser/reverser-wrench mechanism detaches
+- classic `reverser` / `krureverser` / `rcureverser` and modern `KRO` / `KRR` hardware are recognized separately from the traction controller
