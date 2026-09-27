@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.8.0"
+MEXD.Version = "0.8.1"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -3380,6 +3380,207 @@ if CLIENT then
         return forward:AngleEx(up)
     end
 
+    -- Exact front visual deformation used by the generated main-body
+    -- crumple mesh. Mounted ClientEnts/panels/lights must sample this same
+    -- field or they appear to float in front of / behind the crushed shell.
+    local function DeformFrontVisualPointStrength(localPos, state, strength)
+        strength = tonumber(strength) or 1
+
+        local deformed = DeformLocalPointStrength(
+            localPos,
+            state,
+            strength
+        )
+
+        if not state then return deformed end
+
+        local damage = math.Clamp(state.front or 0, 0, 1)
+        if damage <= 0.001 then return deformed end
+
+        local hit = state.hits.front
+        local depth = state.maxs.x - localPos.x
+        local severe = Smooth01(
+            math.Clamp((damage - 0.42) / 0.58, 0, 1)
+        )
+        local reach = 82 + damage * 150 + severe * 110
+
+        if depth < -10 or depth > reach then
+            return deformed
+        end
+
+        local axial = Smooth01(
+            1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
+        )
+
+        local radiusY = 68 + damage * 58 + severe * 26
+        local radiusZ = 72 + damage * 62 + severe * 28
+        local dy = (localPos.y - hit.y) / math.max(radiusY, 1)
+        local dz = (localPos.z - hit.z) / math.max(radiusZ, 1)
+        local radial = Smooth01(
+            1 - math.Clamp(dy * dy + dz * dz, 0, 1)
+        )
+
+        local influence = axial * radial
+        if influence <= 0.0001 then
+            return deformed
+        end
+
+        local visualStrength = math.Clamp(strength, 0, 1.6)
+        local crush =
+            (4 + damage * 54 + severe * 34)
+            * influence
+            * visualStrength
+
+        deformed.x = deformed.x - crush
+
+        deformed.y = deformed.y
+            + (hit.y - localPos.y)
+                * (0.055 + damage * 0.055)
+                * influence
+                * visualStrength
+
+        deformed.z = deformed.z
+            + (hit.z - localPos.z)
+                * (0.045 + damage * 0.045)
+                * influence
+                * visualStrength
+
+        if damage >= 0.16 then
+            local depth01 = math.Clamp(
+                depth / math.max(reach, 1),
+                0,
+                1
+            )
+            local crease = math.exp(
+                -((depth01 - (0.32 + damage * 0.10))
+                    / (0.12 + damage * 0.05)) ^ 2
+            ) * radial
+                * Smooth01(
+                    math.Clamp((damage - 0.14) / 0.86, 0, 1)
+                )
+
+            local yEdge = math.Clamp(
+                (localPos.y - state.center.y)
+                    / math.max(state.halfWidth, 1),
+                -1,
+                1
+            )
+            local zEdge = math.Clamp(
+                (localPos.z - state.center.z)
+                    / math.max(state.halfHeight, 1),
+                -1,
+                1
+            )
+            local wave = math.sin(depth01 * math.pi * 4.0)
+
+            deformed.x = deformed.x
+                - math.abs(wave)
+                    * crease
+                    * (2 + damage * 7)
+                    * visualStrength
+            deformed.y = deformed.y
+                - yEdge
+                    * crease
+                    * (2 + damage * 7)
+                    * visualStrength
+            deformed.z = deformed.z
+                - zEdge
+                    * crease
+                    * (1.5 + damage * 5)
+                    * visualStrength
+        end
+
+        return deformed
+    end
+
+    local function DeformFrontVisualAngleStrength(
+        localPos,
+        localAng,
+        state,
+        strength
+    )
+        if not state then return CopyAngle(localAng) end
+
+        local step = 5
+        local p0 = DeformFrontVisualPointStrength(
+            localPos,
+            state,
+            strength
+        )
+        local pf = DeformFrontVisualPointStrength(
+            localPos + localAng:Forward() * step,
+            state,
+            strength
+        )
+        local pu = DeformFrontVisualPointStrength(
+            localPos + localAng:Up() * step,
+            state,
+            strength
+        )
+
+        local forward = pf - p0
+        local up = pu - p0
+
+        if forward:LengthSqr() < 0.001 or up:LengthSqr() < 0.001 then
+            return CopyAngle(localAng)
+        end
+
+        forward:Normalize()
+        up:Normalize()
+
+        local side = forward:Cross(up)
+        if side:LengthSqr() < 0.001 then
+            return CopyAngle(localAng)
+        end
+
+        side:Normalize()
+        up = side:Cross(forward)
+        up:Normalize()
+
+        return forward:AngleEx(up)
+    end
+
+    local function DeformMountedPointStrength(
+        train,
+        localPos,
+        state,
+        strength
+    )
+        if IsValid(train) and train.MEXDamageMeshOverrideInstalled then
+            return DeformFrontVisualPointStrength(
+                localPos,
+                state,
+                strength
+            )
+        end
+
+        return DeformLocalPointStrength(localPos, state, strength)
+    end
+
+    local function DeformMountedAngleStrength(
+        train,
+        localPos,
+        localAng,
+        state,
+        strength
+    )
+        if IsValid(train) and train.MEXDamageMeshOverrideInstalled then
+            return DeformFrontVisualAngleStrength(
+                localPos,
+                localAng,
+                state,
+                strength
+            )
+        end
+
+        return DeformLocalAngleStrength(
+            localPos,
+            localAng,
+            state,
+            strength
+        )
+    end
+
     local function CabStrengthAtPoint(localPos, state)
         if not state then return 1 end
 
@@ -3760,12 +3961,14 @@ if CLIENT then
                 state
             )
 
-            panel.pos = DeformLocalPointStrength(
+            panel.pos = DeformMountedPointStrength(
+                train,
                 panel.MEXDamageBasePos,
                 state,
                 strength
             )
-            panel.ang = DeformLocalAngleStrength(
+            panel.ang = DeformMountedAngleStrength(
+                train,
                 panel.MEXDamageBasePos,
                 panel.MEXDamageBaseAng,
                 state,
@@ -3927,6 +4130,7 @@ if CLIENT then
     end
 
     local function ApplyLocalStructuralCrushMatrix(
+        train,
         name,
         prop,
         cached,
@@ -3979,7 +4183,17 @@ if CLIENT then
         if largest < 42 then return end
 
         local displacement =
-            DeformLocalPoint(cached.anchorPos, state)
+            DeformMountedPointStrength(
+                train,
+                cached.anchorPos,
+                state,
+                cached.cabin
+                    and math.max(
+                        1.18,
+                        CabStrengthAtPoint(cached.anchorPos, state)
+                    )
+                    or 1
+            )
             - cached.anchorPos
 
         if displacement:LengthSqr() < 0.16 then
@@ -4044,12 +4258,14 @@ if CLIENT then
             and math.max(1.18, CabStrengthAtPoint(cached.anchorPos, state))
             or 1
 
-        local desiredAnchor = DeformLocalPointStrength(
+        local desiredAnchor = DeformMountedPointStrength(
+            train,
             cached.anchorPos,
             state,
             strength
         )
-        local desiredAng = DeformLocalAngleStrength(
+        local desiredAng = DeformMountedAngleStrength(
+            train,
             cached.anchorPos,
             cached.baseAng,
             state,
@@ -6736,100 +6952,7 @@ if CLIENT then
     end
 
     local function DeformMainBodyMeshPoint(localPos, state)
-        local deformed = DeformLocalPoint(localPos, state)
-        local damage = math.Clamp(state.front or 0, 0, 1)
-
-        if damage <= 0.001 then
-            return deformed
-        end
-
-        local hit = state.hits.front
-        local depth = state.maxs.x - localPos.x
-        local severe = Smooth01(
-            math.Clamp((damage - 0.42) / 0.58, 0, 1)
-        )
-        local reach = 82 + damage * 150 + severe * 110
-
-        if depth < -10 or depth > reach then
-            return deformed
-        end
-
-        local axial = Smooth01(
-            1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
-        )
-
-        -- Wider than the bone field on purpose: stock body meshes often have
-        -- sparse triangles at the nose, so an extremely small bullet radius
-        -- would miss every useful vertex and appear to do nothing.
-        local radiusY = 68 + damage * 58 + severe * 26
-        local radiusZ = 72 + damage * 62 + severe * 28
-        local dy = (localPos.y - hit.y) / math.max(radiusY, 1)
-        local dz = (localPos.z - hit.z) / math.max(radiusZ, 1)
-        local radial = Smooth01(
-            1 - math.Clamp(dy * dy + dz * dz, 0, 1)
-        )
-
-        local influence = axial * radial
-        if influence <= 0.0001 then
-            return deformed
-        end
-
-        -- Strong, plainly visible plastic crush. This is additional to the
-        -- common structural field because the rigid stock MDL otherwise hides
-        -- the moving mask/cab pieces almost completely.
-        local crush =
-            (4 + damage * 54 + severe * 34)
-            * influence
-
-        deformed.x = deformed.x - crush
-
-        -- Pull sheet metal into the impact bowl.
-        deformed.y = deformed.y
-            + (hit.y - localPos.y)
-                * (0.055 + damage * 0.055)
-                * influence
-
-        deformed.z = deformed.z
-            + (hit.z - localPos.z)
-                * (0.045 + damage * 0.045)
-                * influence
-
-        -- Accordion fold around the boundary of the crushed zone.
-        if damage >= 0.16 then
-            local depth01 = math.Clamp(
-                depth / math.max(reach, 1),
-                0,
-                1
-            )
-            local crease = math.exp(
-                -((depth01 - (0.32 + damage * 0.10))
-                    / (0.12 + damage * 0.05)) ^ 2
-            ) * radial
-                * Smooth01(math.Clamp((damage - 0.14) / 0.86, 0, 1))
-
-            local yEdge = math.Clamp(
-                (localPos.y - state.center.y)
-                    / math.max(state.halfWidth, 1),
-                -1,
-                1
-            )
-            local zEdge = math.Clamp(
-                (localPos.z - state.center.z)
-                    / math.max(state.halfHeight, 1),
-                -1,
-                1
-            )
-            local wave = math.sin(depth01 * math.pi * 4.0)
-
-            deformed.x = deformed.x
-                - math.abs(wave) * crease * (2 + damage * 7)
-            deformed.y = deformed.y
-                - yEdge * crease * (2 + damage * 7)
-            deformed.z = deformed.z
-                - zEdge * crease * (1.5 + damage * 5)
-        end
-
-        return deformed
+        return DeformFrontVisualPointStrength(localPos, state, 1)
     end
 
     local function CopyDeformedMeshVertex(vertex, state)
@@ -7101,13 +7224,20 @@ if CLIENT then
         for _, light in pairs(train.Lights) do
             if not istable(light) or not light.MEXDamageBasePos then continue end
 
-            light[2] = DeformLocalPoint(light.MEXDamageBasePos, state)
+            light[2] = DeformMountedPointStrength(
+                train,
+                light.MEXDamageBasePos,
+                state,
+                1
+            )
 
             if light.MEXDamageBaseAng then
-                light[3] = DeformLocalAngle(
+                light[3] = DeformMountedAngleStrength(
+                    train,
                     light.MEXDamageBasePos,
                     light.MEXDamageBaseAng,
-                    state
+                    state,
+                    1
                 )
             end
         end
@@ -7116,6 +7246,23 @@ if CLIENT then
     ---------------------------------------------------------------------------
     -- Apply / clear the complete visual deformation
     ---------------------------------------------------------------------------
+
+    local function ShouldFollowDeformedBody(cached, state)
+        if not cached or not state then return false end
+        if cached.localPiece then return true end
+        if cached.fullLength then return false end
+        if (state.front or 0) <= 0.001 then return false end
+
+        local depth = state.maxs.x - cached.anchorPos.x
+        local reach = 105 + state.front * 190
+
+        -- Large but localized cab/front assemblies (cab shell, wide lamp
+        -- groups, masks, front equipment frames) may exceed the old 230 SU
+        -- localPiece box. They should still move rigidly with the crushed nose.
+        return depth >= -24
+            and depth <= reach
+            and math.abs(cached.size.x) < 330
+    end
 
     local function ApplyClientEnts(train, state)
         if not istable(train.ClientEnts) then return end
@@ -7183,12 +7330,14 @@ if CLIENT then
                 continue
             end
 
-            if cached.localPiece then
-                -- Doors, front masks, lamp groups, localized cab shells,
-                -- localized panel bodies etc. remain rigid but follow the
-                -- deformed mounting point. Their own child bones can still bend.
+            if ShouldFollowDeformedBody(cached, state) then
+                -- Doors, front masks, lamp groups, cab shells and other
+                -- localized equipment use the EXACT same deformation field as
+                -- the generated main-body mesh. They therefore remain glued to
+                -- the crushed shell instead of floating at the old coordinates.
                 ApplyRigidAttachment(train, prop, cached, state)
                 ApplyLocalStructuralCrushMatrix(
+                    train,
                     name,
                     prop,
                     cached,
