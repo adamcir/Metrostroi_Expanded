@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.10.1"
+MEXD.Version = "0.10.2"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -6690,6 +6690,19 @@ if CLIENT then
             and not isGlass
             and not isControl
 
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+        local interiorFixture =
+            string.find(text, "seat", 1, true)
+            or string.find(text, "couch", 1, true)
+            or string.find(text, "bench", 1, true)
+            or string.find(text, "chair", 1, true)
+            or string.find(text, "handrail", 1, true)
+            or string.find(text, "handler", 1, true)
+            or string.find(text, "interior", 1, true)
+            or string.find(text, "salon", 1, true)
+
         if isGlass then
             local threshold = 0.20 + seed * 0.45
             if displacement >= threshold then
@@ -6786,13 +6799,18 @@ if CLIENT then
             -- ordinary props. Keep them attached through the normal crash
             -- phase so they can buckle/accordion instead of instantly exposing
             -- an empty frame. They can still tear away in the scrap phase.
+            if interiorFixture and crushEnergy < 4.50 then
+                return false
+            end
+
             if largeStructural and crushEnergy < 2.80 then
                 return false
             end
 
             local threshold =
                 (1.0 + seed * 2.4)
-                * (largeStructural and 2.2 or 1)
+                * (interiorFixture and 3.2
+                    or (largeStructural and 2.2 or 1))
 
             if displacement >= threshold then
                 local requested = RequestServerDetach(
