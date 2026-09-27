@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.7.0**
+Current damage-system module version: **0.7.1**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -327,3 +327,13 @@ Controls now follow one strict rule:
 - light impacts remain concentrated in the sacrificial front structure; severe impacts propagate deeper toward the cab survival space
 - deformation is deterministic and persistent until `mex_damage_reset`; it does not jitter or accumulate every rendered frame
 - this is visual mesh deformation only: Source collision meshes remain unchanged
+
+
+### Damage 0.7.1 – weapon and physgun impact deformation
+
+- bullets, buckshot and melee hits now feed the structural damage accumulator instead of only detaching individual ClientProps
+- weapon hits use the real impact position for the deformation centre; the fallback aim trace was extended from 160 SU to 32768 SU
+- PhysicsCollide now uses `collisionData.Speed` in addition to old velocity vectors, which is important for physgun-driven motion
+- entities currently held or recently thrown with the physgun are tracked and use a lower collision threshold plus a stronger impact response
+- physgun collisions may register more frequently than ordinary train collisions so repeated destructive testing produces visible progressive crush
+- front structural ClientEnt shells receive stronger longitudinal compression as a fallback when the stock MDL has too few weighted front bones
