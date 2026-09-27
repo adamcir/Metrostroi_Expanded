@@ -3613,7 +3613,7 @@ if CLIENT then
                         * visualStrength
 
                 local foldGate = math.Clamp(
-                    (crushEnergy - 0.14) / 0.86,
+                    (frontCrushEnergy - 0.14) / 0.86,
                     0,
                     1
                 )
@@ -3672,7 +3672,7 @@ if CLIENT then
         end
 
         -- Extreme destruction mode: once the shell is already critically damaged,
-        -- additional front impacts progressively accordion-compress the entire
+        -- additional impacts progressively accordion-compress the entire
         -- wagon toward the rear and squash the occupied volume. This is the
         -- "turn it into scrap / a pancake" phase rather than a realistic
         -- survivable crash limit.
