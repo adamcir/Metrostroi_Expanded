@@ -5010,6 +5010,162 @@ if CLIENT then
         return true
     end
 
+    local function FindControlAccessoryChildren(
+        train,
+        parentName,
+        parentCached,
+        panelMap
+    )
+        local result = {}
+
+        if not IsSubwayTrain(train)
+            or not istable(train.ClientEnts)
+            or not parentCached
+        then
+            return result
+        end
+
+        panelMap = panelMap or train.MEXDamageV4PanelProps
+            or BuildPanelPropMap(train)
+
+        local function nearestFunctionalRootFor(childName, childCached)
+            local bestName = nil
+            local bestDistance = math.huge
+
+            for otherName, otherProp in pairs(train.ClientEnts) do
+                if otherName == childName or not IsValid(otherProp) then
+                    continue
+                end
+
+                if train.MEXDamageV4ServerDetached
+                    and train.MEXDamageV4ServerDetached[otherName]
+                then
+                    continue
+                end
+
+                local otherCached =
+                    CacheClientProp(train, otherName, otherProp)
+
+                if IsControlAccessory(otherName, otherCached) then
+                    continue
+                end
+
+                local otherPanel = panelMap[otherName]
+                if not IsSmallControlComponent(
+                    otherName,
+                    otherCached,
+                    otherPanel
+                ) then
+                    continue
+                end
+
+                local d = otherCached.anchorPos:Distance(
+                    childCached.anchorPos
+                )
+
+                if d < bestDistance then
+                    bestDistance = d
+                    bestName = otherName
+                end
+            end
+
+            return bestName, bestDistance
+        end
+
+        for childName, childProp in pairs(train.ClientEnts) do
+            if childName == parentName or not IsValid(childProp) then
+                continue
+            end
+
+            if train.MEXDamageV4ServerDetached
+                and train.MEXDamageV4ServerDetached[childName]
+            then
+                continue
+            end
+
+            if childProp.GetNoDraw and childProp:GetNoDraw() then
+                continue
+            end
+            if childProp:GetColor().a <= 5 then continue end
+
+            local childCached =
+                CacheClientProp(train, childName, childProp)
+
+            local generatedParent =
+                GeneratedAccessoryParent(childName)
+
+            local belongs = generatedParent == parentName
+
+            if not belongs
+                and generatedParent == nil
+                and IsControlAccessory(childName, childCached)
+            then
+                local nearestName, nearestDistance =
+                    nearestFunctionalRootFor(
+                        childName,
+                        childCached
+                    )
+
+                belongs =
+                    nearestName == parentName
+                    and nearestDistance <= 11
+            end
+
+            if belongs then
+                result[#result + 1] = {
+                    name = childName,
+                    prop = childProp,
+                    cached = childCached,
+                    panelName = panelMap[childName],
+                }
+            end
+        end
+
+        table.sort(result, function(a, b)
+            return a.cached.anchorPos:DistToSqr(parentCached.anchorPos)
+                < b.cached.anchorPos:DistToSqr(parentCached.anchorPos)
+        end)
+
+        return result
+    end
+
+    local function RequestControlAccessoryChildren(
+        train,
+        parentName,
+        parentCached,
+        state,
+        panelMap,
+        limit
+    )
+        local requested = 0
+        limit = math.max(math.floor(limit or 9), 0)
+
+        for _, child in ipairs(FindControlAccessoryChildren(
+            train,
+            parentName,
+            parentCached,
+            panelMap
+        )) do
+            if requested >= limit then break end
+
+            if RequestServerDetach(
+                train,
+                child.name,
+                child.prop,
+                child.cached,
+                state,
+                child.panelName,
+                false,
+                false
+            ) then
+                requested = requested + 1
+                ClearClientPropRenderTransform(child.prop)
+            end
+        end
+
+        return requested
+    end
+
     local function ComponentCandidateRadius(cached, isDoor, isControl)
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
@@ -5149,6 +5305,9 @@ if CLIENT then
                 continue
             end
 
+            local isAccessory =
+                IsControlAccessory(name, cached)
+
             candidates[#candidates + 1] = {
                 name = name,
                 prop = prop,
@@ -5157,17 +5316,42 @@ if CLIENT then
                 isGlass = isGlass,
                 isDoor = isDoor,
                 isControl = isControl,
+                isAccessory = isAccessory,
                 score = score,
                 predictedMove = predictedMove,
+                centerDistance = centerDistance,
                 edgeDistance = edgeDistance,
                 priority =
-                    isGlass and 5
+                    isAccessory and 6
+                    or (isGlass and 5)
                     or (isControl and 4)
                     or (isDoor and 2 or 3),
             }
         end
 
+        local preciseHit =
+            not isBlast and (maxDetach or 1) == 10
+
         table.sort(candidates, function(a, b)
+            if preciseHit then
+                local centerDelta = math.abs(
+                    (a.centerDistance or math.huge)
+                    - (b.centerDistance or math.huge)
+                )
+
+                if centerDelta > 1.25 then
+                    return (a.centerDistance or math.huge)
+                        < (b.centerDistance or math.huge)
+                end
+
+                if a.isAccessory ~= b.isAccessory then
+                    -- A cap/label physically sits on top of the switch. If the
+                    -- hit point cannot distinguish them better than ~1 SU,
+                    -- detach the outer accessory first, not the mechanism.
+                    return a.isAccessory == true
+                end
+            end
+
             if isBlast
                 and math.abs(
                     (a.predictedMove or 0)
@@ -5198,6 +5382,45 @@ if CLIENT then
         local requested = 0
         local limit = math.Clamp(maxDetach or 1, 1, 96)
 
+        if preciseHit then
+            local candidate = candidates[1]
+            if not candidate then return end
+
+            if RequestServerDetach(
+                train,
+                candidate.name,
+                candidate.prop,
+                candidate.cached,
+                state,
+                candidate.panelName,
+                candidate.isDoor,
+                candidate.isControl
+            ) then
+                requested = 1
+                ClearClientPropRenderTransform(candidate.prop)
+
+                -- One-way hierarchy:
+                -- accessory hit -> accessory only
+                -- switch/control hit -> switch + its labels/plomb/caps
+                if candidate.isControl
+                    and not candidate.isAccessory
+                    and requested < limit
+                then
+                    requested = requested
+                        + RequestControlAccessoryChildren(
+                            train,
+                            candidate.name,
+                            candidate.cached,
+                            state,
+                            panelMap,
+                            limit - requested
+                        )
+                end
+            end
+
+            return
+        end
+
         for _, candidate in ipairs(candidates) do
             if requested >= limit then break end
 
@@ -5213,8 +5436,6 @@ if CLIENT then
             ) then
                 requested = requested + 1
 
-                -- Do not let a fragile prop visibly ride away with a distorted
-                -- panel while waiting one network round-trip for confirmation.
                 ClearClientPropRenderTransform(candidate.prop)
             end
         end
@@ -5527,6 +5748,19 @@ if CLIENT then
 
                 if requested then
                     ClearClientPropRenderTransform(prop)
+
+                    if not IsControlAccessory(name, cached) then
+                        RequestControlAccessoryChildren(
+                            train,
+                            name,
+                            cached,
+                            state,
+                            train.MEXDamageV4PanelProps
+                                or BuildPanelPropMap(train),
+                            9
+                        )
+                    end
+
                     return true
                 end
             end
