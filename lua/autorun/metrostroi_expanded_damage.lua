@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.9"
+MEXD.Version = "0.6.10"
 
 local ZONES = {
     front = true,
@@ -32,6 +32,152 @@ local function IsSubwayTrain(ent)
     return isstring(className)
         and className ~= "gmod_subway_base"
         and string.sub(className, 1, 12) == "gmod_subway_"
+end
+
+local function NormalizedHardwareText(name, model)
+    local text = string.lower(
+        (name or "") .. " " .. (model or "")
+    )
+    local compact = string.gsub(text, "[^%w]", "")
+    return text, compact
+end
+
+local function AddKnownDetachedHardwareButtons(name, model, add)
+    if not isfunction(add) then return end
+
+    local text, compact = NormalizedHardwareText(name, model)
+    local nameLower = string.lower(name or "")
+
+    local disconnectLike =
+        string.find(compact, "disconnect", 1, true)
+        or string.find(compact, "isolation", 1, true)
+        or string.find(compact, "isolat", 1, true)
+
+    -- Driver's pneumatic brake valve is one multi-action physical mechanism.
+    -- Old 81-717 variants expose the moving handles as brake334/brake013
+    -- (models cabin_cran_334.mdl / cran13.mdl), not as brake_valve_*.
+    local driverBrake =
+        not disconnectLike
+        and (
+            string.find(compact, "brakevalve", 1, true)
+            or string.find(compact, "brake334", 1, true)
+            or string.find(compact, "brake013", 1, true)
+            or string.find(compact, "cran334", 1, true)
+            or string.find(compact, "cran013", 1, true)
+            or string.find(compact, "cran13", 1, true)
+            or string.find(compact, "crane334", 1, true)
+            or string.find(compact, "crane013", 1, true)
+            or string.find(compact, "kran334", 1, true)
+            or string.find(compact, "kran013", 1, true)
+        )
+
+    if driverBrake then
+        add("PneumaticBrakeUp")
+        add("PneumaticBrakeDown")
+        add("PneumaticBrakeSet1")
+        add("PneumaticBrakeSet2")
+        add("PneumaticBrakeSet3")
+        add("PneumaticBrakeSet4")
+        add("PneumaticBrakeSet5")
+        add("PneumaticBrakeSet6")
+        add("PneumaticBrakeSet7")
+        add("EmergencyBrake")
+    end
+
+    -- End-of-car brake/train-line isolation cocks.
+    if nameLower == "frontbrake"
+        or (
+            string.find(text, "front", 1, true)
+            and (
+                string.find(compact, "brakeline", 1, true)
+                or string.find(compact, "brakeisolation", 1, true)
+            )
+        )
+    then
+        add("FrontBrakeLineIsolationToggle")
+    end
+
+    if nameLower == "fronttrain"
+        or (
+            string.find(text, "front", 1, true)
+            and string.find(compact, "trainline", 1, true)
+        )
+    then
+        add("FrontTrainLineIsolationToggle")
+    end
+
+    if nameLower == "rearbrake"
+        or (
+            string.find(text, "rear", 1, true)
+            and (
+                string.find(compact, "brakeline", 1, true)
+                or string.find(compact, "brakeisolation", 1, true)
+            )
+        )
+    then
+        add("RearBrakeLineIsolationToggle")
+    end
+
+    if nameLower == "reartrain"
+        or (
+            string.find(text, "rear", 1, true)
+            and string.find(compact, "trainline", 1, true)
+        )
+    then
+        add("RearTrainLineIsolationToggle")
+    end
+
+    -- Cab pneumatic shut-off valves are separate physical devices.
+    if string.find(text, "brake_disconnect", 1, true)
+        or string.find(text, "driver_valve_bl", 1, true)
+    then
+        add("DriverValveBLDisconnect")
+        add("DriverValveBLDisconnectToggle")
+    end
+
+    if string.find(text, "train_disconnect", 1, true)
+        or string.find(text, "driver_valve_tl", 1, true)
+    then
+        add("DriverValveTLDisconnect")
+        add("DriverValveTLDisconnectToggle")
+    end
+
+    if string.find(text, "valve_disconnect", 1, true)
+        and not string.find(text, "brake_disconnect", 1, true)
+        and not string.find(text, "train_disconnect", 1, true)
+    then
+        add("DriverValveDisconnect")
+        add("DriverValveDisconnectToggle")
+    end
+
+    if string.find(text, "epk_disconnect", 1, true)
+        or string.find(text, "epv_disconnect", 1, true)
+    then
+        add("EPKToggle")
+    end
+
+    if string.find(compact, "airdistributor", 1, true)
+        and disconnectLike
+    then
+        add("AirDistributorDisconnectToggle")
+    end
+
+    if string.find(compact, "stopkran", 1, true)
+        or string.find(compact, "emergencybrakevalve", 1, true)
+    then
+        add("EmergencyBrake")
+        add("EmergencyBrakeValveToggle")
+    end
+
+    if string.find(compact, "parkingbrake", 1, true)
+        or string.find(compact, "manualbrake", 1, true)
+        or string.find(compact, "handbrake", 1, true)
+        or string.find(compact, "brakewheel", 1, true)
+    then
+        add("ParkingBrakeToggle")
+        add("ParkingBrakeLeft")
+        add("ParkingBrakeRight")
+    end
 end
 
 local function DamageKey(zone)
@@ -2103,18 +2249,39 @@ if SERVER then
             validButtons[#validButtons + 1] = button
         end
 
-        -- These IDs were resolved client-side from the actual physical
-        -- ClientEnt/ButtonMap relationship of the component whose detach the
-        -- server has just validated by location/model/recent impact. Some old
-        -- trains expose mouse-only ButtonMap IDs which do not exist in KeyMap
-        -- and used to be incorrectly discarded here.
+        -- Start with the client-resolved physical bindings, then derive
+        -- well-known multi-action pneumatic hardware again on the server from
+        -- the already validated component name/model. This makes a detached
+        -- valve authoritative even if an old train has no usable ButtonMap
+        -- relationship for that visual ClientEnt.
+        local authoritativeButtons = {}
+        local authoritativeSeen = {}
+
+        local function addAuthoritative(button)
+            if not isstring(button) or button == "" then return end
+            button = button:gsub("^.+:", "")
+            if authoritativeSeen[button] then return end
+            authoritativeSeen[button] = true
+            authoritativeButtons[#authoritativeButtons + 1] = button
+        end
+
         for _, button in ipairs(buttonIDs) do
+            addAuthoritative(button)
+        end
+
+        AddKnownDetachedHardwareButtons(
+            name,
+            model,
+            addAuthoritative
+        )
+
+        for _, button in ipairs(authoritativeButtons) do
             rememberAndBlock(button)
         end
 
         local expandedButtons = ExpandDetachedButtonAliases(
             train,
-            buttonIDs
+            authoritativeButtons
         )
 
         for _, button in ipairs(expandedButtons) do
@@ -4013,6 +4180,16 @@ if CLIENT then
                 end
             end
         end
+
+        -- Known multi-action mechanical hardware must contribute all of its
+        -- logical actions even when Metrostroi exposes one exact ButtonMap
+        -- binding. Otherwise removing the visible handle can leave keyboard
+        -- or alternate interaction paths alive.
+        AddKnownDetachedHardwareButtons(
+            propName,
+            cached.model,
+            add
+        )
 
         -- Core invariant: an attached physical button stays usable. When a
         -- generated ButtonMap prop has an exact identity, never infer nearby
