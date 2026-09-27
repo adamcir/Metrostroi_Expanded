@@ -406,3 +406,14 @@ The effect is intentionally plastic: the same damage state always produces the s
 This system can only deform vertices that are actually weighted to movable bones in the source MDL. A model with only a root bone cannot gain BeamNG-style soft-body deformation from Lua alone. Use `mex_damage_bones` while aiming at a train to inspect available body and front-region bones.
 
 Physics/collision are not changed by this visual bone deformation.
+
+
+## Weapon and physgun deformation inputs
+
+Damage System 0.7.1 makes the front crumple system react to more than train-on-train crashes.
+
+Weapon damage now contributes a small permanent structural deformation amount at the actual hit position. Repeated bullets, buckshot and melee strikes therefore progressively deform the front instead of only breaking detachable controls.
+
+Physgun-driven impacts are detected through both old velocity vectors and Source's collision `Speed` value. The addon also tracks entities currently held or recently released by the physgun, because their old velocity values can be unreliable while the physgun moves them kinematically.
+
+When a stock model does not contain enough weighted front bones, local structural ClientEnt shells use a stronger longitudinal crush fallback. This does not alter the collision mesh.
