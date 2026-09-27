@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.12"
+MEXD.Version = "0.6.13"
 
 local ZONES = {
     front = true,
@@ -128,24 +128,57 @@ local function AddKnownDetachedHardwareButtons(name, model, add)
     end
 
     -- Cab pneumatic shut-off valves are separate physical devices.
-    if string.find(text, "brake_disconnect", 1, true)
+    --
+    -- Classic 81-717/714 trains expose them through several different names:
+    -- the authored ClientProps are brake_disconnect/train_disconnect, while
+    -- generated ButtonMap props/actions may be named
+    -- DriverValveBLDisconnectToggle / DriverValveTLDisconnectToggle.
+    -- Normalize both forms here so the server does not depend on whichever
+    -- representation happened to be detached client-side.
+    local driverBLDisconnect =
+        string.find(text, "brake_disconnect", 1, true)
         or string.find(text, "driver_valve_bl", 1, true)
-    then
+        or string.find(compact, "drivervalvebldisconnect", 1, true)
+
+    local driverTLDisconnect =
+        string.find(text, "train_disconnect", 1, true)
+        or string.find(text, "driver_valve_tl", 1, true)
+        or string.find(compact, "drivervalvetldisconnect", 1, true)
+
+    local driverCombinedDisconnect =
+        (
+            string.find(text, "valve_disconnect", 1, true)
+            or string.find(
+                compact,
+                "drivervalvedisconnect",
+                1,
+                true
+            )
+        )
+        and not driverBLDisconnect
+        and not driverTLDisconnect
+
+    if driverBLDisconnect then
         add("DriverValveBLDisconnect")
         add("DriverValveBLDisconnectToggle")
+
+        -- 81-717 MVM maps NUM0 / Shift+L to DriverValveDisconnect. For
+        -- ValveType 1 that event directly toggles BOTH BL and TL cocks in
+        -- OnButtonPress, so it must not remain as a back door after the
+        -- physical BL valve has been torn off.
+        add("DriverValveDisconnect")
     end
 
-    if string.find(text, "train_disconnect", 1, true)
-        or string.find(text, "driver_valve_tl", 1, true)
-    then
+    if driverTLDisconnect then
         add("DriverValveTLDisconnect")
         add("DriverValveTLDisconnectToggle")
+
+        -- Same shared keyboard path as above: allowing it would still move
+        -- this missing physical valve even when its own ButtonMap is dead.
+        add("DriverValveDisconnect")
     end
 
-    if string.find(text, "valve_disconnect", 1, true)
-        and not string.find(text, "brake_disconnect", 1, true)
-        and not string.find(text, "train_disconnect", 1, true)
-    then
+    if driverCombinedDisconnect then
         add("DriverValveDisconnect")
         add("DriverValveDisconnectToggle")
     end
