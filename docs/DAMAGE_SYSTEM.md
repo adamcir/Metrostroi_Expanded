@@ -387,3 +387,22 @@ For generated ButtonMap controls, the damage system first resolves an exact phys
 Only after `MEX.ComponentDetached` confirms that exact component has become independent debris are its ButtonMap hitbox and related server-side keyboard aliases disabled.
 
 Legacy standalone hardware such as driver valves/controllers may still require spatial association because upstream Metrostroi does not expose a direct ButtonMap prop link. That fallback now uses only the nearest candidate, preventing one detached item from disabling multiple neighbouring controls that remain physically attached.
+
+
+## Front bone crumple deformation
+
+Damage System 0.7.0 adds a front-only plastic crumple layer driven by existing MDL bones.
+
+The deformation is evaluated in train-local space from the accumulated front damage and the stored front impact position. Bones near the front receive:
+
+- progressive longitudinal crush
+- local pull toward the impact centre
+- crease/buckle displacement near the crush boundary
+- small deterministic per-bone folding
+- pitch/yaw/roll from off-centre impacts
+
+The effect is intentionally plastic: the same damage state always produces the same deformed shape and remains until the wagon is reset.
+
+This system can only deform vertices that are actually weighted to movable bones in the source MDL. A model with only a root bone cannot gain BeamNG-style soft-body deformation from Lua alone. Use `mex_damage_bones` while aiming at a train to inspect available body and front-region bones.
+
+Physics/collision are not changed by this visual bone deformation.
