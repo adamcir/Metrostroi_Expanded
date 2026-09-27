@@ -6716,7 +6716,7 @@ if CLIENT then
             -- Large carbody doors should first bend with the shell. Only after
             -- substantial crush energy has accumulated may the complete door
             -- tear away as debris.
-            if largeStructural and crushEnergy < 1.25 then
+            if largeStructural and crushEnergy < 2.00 then
                 return false
             end
 
@@ -6786,7 +6786,7 @@ if CLIENT then
             -- ordinary props. Keep them attached through the normal crash
             -- phase so they can buckle/accordion instead of instantly exposing
             -- an empty frame. They can still tear away in the scrap phase.
-            if largeStructural and crushEnergy < 1.55 then
+            if largeStructural and crushEnergy < 2.80 then
                 return false
             end
 
