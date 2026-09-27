@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.13**
+Current damage-system module version: **0.7.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -316,3 +316,14 @@ Controls now follow one strict rule:
 - detaching either 334 cab cock blocks its own direct ButtonMap action
 - it also blocks the shared `DriverValveDisconnect` keyboard action used by 81-717 MVM (`NUM0` / `Shift+L`), because that path otherwise toggles both BL and TL valves together
 - the other physically intact cab cock remains independently usable through its own ButtonMap
+
+
+### Damage 0.7.0 – front bone crumple deformation
+
+- front impacts now add a dedicated plastic deformation layer on top of the existing structural deformation field
+- weighted front bones are progressively pushed inward according to crash severity and depth into the carbody
+- off-centre hits pull and twist the nose toward the impact point instead of producing a perfectly symmetric flat crush
+- neighbouring bones receive deterministic crease/fold offsets, creating an accordion-like crumple effect when the MDL has enough weighted bones
+- light impacts remain concentrated in the sacrificial front structure; severe impacts propagate deeper toward the cab survival space
+- deformation is deterministic and persistent until `mex_damage_reset`; it does not jitter or accumulate every rendered frame
+- this is visual mesh deformation only: Source collision meshes remain unchanged
