@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.7.2**
+Current damage-system module version: **0.7.3**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -344,3 +344,11 @@ Controls now follow one strict rule:
 - `GetButtonPhysicalPropName()` is now defined completely before `BuildPanelPropMap()`
 - removed the forward-declaration / later-assignment pattern that could still leave the resolver nil at runtime
 - fixes `attempt to call global 'GetButtonPhysicalPropName' (a nil value)` from `BuildPanelPropMap`
+
+
+### Damage 0.7.3 – remove early panel resolver dependency
+
+- `BuildPanelPropMap()` no longer calls `GetButtonPhysicalPropName()`; it resolves the small set of early physical-provider hints locally
+- this removes the exact crash path `BuildPanelPropMap -> GetButtonPhysicalPropName nil` even under hot reload / older initialization ordering
+- the damage module now prints its version and source path when loaded
+- added `mex_damage_version` so a running GMod instance can show the exact loaded module version and file path
