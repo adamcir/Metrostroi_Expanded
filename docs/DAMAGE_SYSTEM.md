@@ -462,3 +462,28 @@ On trains such as the 81-717, the visible front mask is a separate rigid model. 
 The front deformation field in 0.9.0 also has increased crush depth and radial reach so medium damage is easier to see.
 
 Use `mex_damage_mesh_status` to list currently active vertex-deformed ClientProps.
+
+
+## Cumulative crush and scrap phase
+
+Damage System 0.10.0 separates logical damage from plastic crush.
+
+Logical zone damage remains 0..1 for subsystem failures. Plastic crush energy is stored independently for each zone and can continue increasing after the zone is already fully damaged.
+
+For ordinary front damage, the system still produces a local dent/crumple region. After crush energy grows beyond the normal crash range, the deformation reach advances progressively through the wagon. A high-energy scrap phase then compresses the whole visual shell:
+
+- length collapses accordion-style toward the rear
+- roof/interior volume is pushed down toward a thin slab
+- width is reduced
+- large body ClientProps are vertex-deformed together with the main body
+- large structural panels remain attached longer before they are eligible to become debris
+
+The current visual crush energy limit is 6.0. Around the upper range the wagon can be compressed to a small fraction of its original dimensions. Collision geometry is still unchanged.
+
+Testing commands:
+
+- `mex_damage_scrap_test 3` — strong scrap deformation
+- `mex_damage_scrap_test 4.2` — near-full pancake test
+- `mex_damage_scrap_test 6` — maximum current visual crush
+- `mex_damage_reset` — restore the wagon
+- `mex_damage_mesh_status` — show front/overall crush and active vertex-deformed ClientProps
