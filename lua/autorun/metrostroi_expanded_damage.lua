@@ -8041,6 +8041,24 @@ if CLIENT then
                 and #train.MEXDamageMainBodyMesh.parts
                 or 0
         ))
+
+        local vertexProps = {}
+        if istable(train.ClientEnts) then
+            for name, prop in pairs(train.ClientEnts) do
+                if IsValid(prop)
+                    and prop.MEXDamageVertexOverrideInstalled
+                then
+                    vertexProps[#vertexProps + 1] = tostring(name)
+                end
+            end
+        end
+
+        table.sort(vertexProps)
+        print("vertex-deformed ClientProps: " .. tostring(#vertexProps))
+        if #vertexProps > 0 then
+            print("  " .. table.concat(vertexProps, ", "))
+        end
+
         print("------------------------------------------------------------")
     end)
 
