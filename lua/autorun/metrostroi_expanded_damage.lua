@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.7.1"
+MEXD.Version = "0.7.2"
 
 local ZONES = {
     front = true,
@@ -3490,9 +3490,122 @@ if CLIENT then
         train.MEXDamageV4PanelProps = nil
     end
 
-    -- Forward declaration: BuildPanelPropMap needs this resolver before its
-    -- implementation appears later in the client-side attachment section.
-    local GetButtonPhysicalPropName
+    local function GetButtonPhysicalPropName(train, button)
+        if not istable(button) then return nil end
+
+        local function existingClientEnt(name)
+            return isstring(name)
+                and name ~= ""
+                and istable(train and train.ClientEnts)
+                and IsValid(train.ClientEnts[name])
+        end
+
+        local function visibleClientEnt(name)
+            if not existingClientEnt(name) then return false end
+
+            local ent = train.ClientEnts[name]
+            return not ent:GetNoDraw() and ent:GetColor().a > 5
+        end
+
+        local function firstExisting(names)
+            -- Prefer the currently displayed variant (important for 334/013
+            -- cabs where EPK/EPV use alternate physical shut-off valves).
+            for _, name in ipairs(names or {}) do
+                if visibleClientEnt(name) then return name end
+            end
+
+            for _, name in ipairs(names or {}) do
+                if existingClientEnt(name) then return name end
+            end
+
+            return nil
+        end
+
+        if existingClientEnt(button.PropName) then
+            return button.PropName
+        end
+
+        local model = button.model
+
+        -- A number of classic Metrostroi cab valves use model.var only for the
+        -- logical state while model.sndid is the name of the actual moving
+        -- ClientProp. Treat that real valve as the physical provider.
+        if istable(model) and existingClientEnt(model.sndid) then
+            return model.sndid
+        end
+
+        -- Explicit aliases for old 81-717/714-style pneumatic hardware. These
+        -- keep the physical valve and its ButtonMap hitbox inseparable even on
+        -- trains whose ButtonMap does not expose PropName/model.name.
+        local buttonID = isstring(button.ID)
+            and button.ID:gsub("^.+:", "")
+            or ""
+
+        local knownPhysical = {
+            DriverValveBLDisconnectToggle = {"brake_disconnect"},
+            DriverValveTLDisconnectToggle = {"train_disconnect"},
+            DriverValveDisconnectToggle = {"valve_disconnect"},
+            EPKToggle = {"EPK_disconnect", "EPV_disconnect"},
+            ParkingBrakeToggle = {"parking_brake"},
+            EmergencyBrakeValveToggle = {"stopkran"},
+        }
+
+        local known = firstExisting(knownPhysical[buttonID])
+        if known then return known end
+
+        if istable(model) then
+            if existingClientEnt(model.name) then
+                return model.name
+            end
+
+            if istable(model.lamp)
+                and existingClientEnt(model.lamp.name)
+            then
+                return model.lamp.name
+            end
+        end
+
+        -- Generated Metrostroi button props default to button.ID.
+        if existingClientEnt(button.ID) then
+            return button.ID
+        end
+
+        -- Legacy manual doors/mechanisms often have no generated model at all:
+        -- the ButtonMap event is FrontDoor but model.var animates door1.
+        if istable(model) and existingClientEnt(model.var) then
+            return model.var
+        end
+
+        -- Fallback for pre-generation mapping. It is only used as an identity
+        -- hint; exact physical binding still requires the ClientEnt later.
+        if isstring(button.PropName) and button.PropName ~= "" then
+            return button.PropName
+        end
+
+        if istable(model) then
+            if isstring(model.sndid) and model.sndid ~= "" then
+                return model.sndid
+            end
+
+            if isstring(model.name) and model.name ~= "" then
+                return model.name
+            end
+
+            if istable(model.lamp)
+                and isstring(model.lamp.name)
+                and model.lamp.name ~= ""
+            then
+                return model.lamp.name
+            end
+
+            if isstring(button.ID) and button.ID ~= "" then
+                return button.ID
+            end
+        end
+
+        return nil
+    end
+
 
     local function BuildPanelPropMap(train)
         local map = {}
@@ -4203,122 +4316,6 @@ if CLIENT then
         end
 
         return result
-    end
-
-    GetButtonPhysicalPropName = function(train, button)
-        if not istable(button) then return nil end
-
-        local function existingClientEnt(name)
-            return isstring(name)
-                and name ~= ""
-                and istable(train and train.ClientEnts)
-                and IsValid(train.ClientEnts[name])
-        end
-
-        local function visibleClientEnt(name)
-            if not existingClientEnt(name) then return false end
-
-            local ent = train.ClientEnts[name]
-            return not ent:GetNoDraw() and ent:GetColor().a > 5
-        end
-
-        local function firstExisting(names)
-            -- Prefer the currently displayed variant (important for 334/013
-            -- cabs where EPK/EPV use alternate physical shut-off valves).
-            for _, name in ipairs(names or {}) do
-                if visibleClientEnt(name) then return name end
-            end
-
-            for _, name in ipairs(names or {}) do
-                if existingClientEnt(name) then return name end
-            end
-
-            return nil
-        end
-
-        if existingClientEnt(button.PropName) then
-            return button.PropName
-        end
-
-        local model = button.model
-
-        -- A number of classic Metrostroi cab valves use model.var only for the
-        -- logical state while model.sndid is the name of the actual moving
-        -- ClientProp. Treat that real valve as the physical provider.
-        if istable(model) and existingClientEnt(model.sndid) then
-            return model.sndid
-        end
-
-        -- Explicit aliases for old 81-717/714-style pneumatic hardware. These
-        -- keep the physical valve and its ButtonMap hitbox inseparable even on
-        -- trains whose ButtonMap does not expose PropName/model.name.
-        local buttonID = isstring(button.ID)
-            and button.ID:gsub("^.+:", "")
-            or ""
-
-        local knownPhysical = {
-            DriverValveBLDisconnectToggle = {"brake_disconnect"},
-            DriverValveTLDisconnectToggle = {"train_disconnect"},
-            DriverValveDisconnectToggle = {"valve_disconnect"},
-            EPKToggle = {"EPK_disconnect", "EPV_disconnect"},
-            ParkingBrakeToggle = {"parking_brake"},
-            EmergencyBrakeValveToggle = {"stopkran"},
-        }
-
-        local known = firstExisting(knownPhysical[buttonID])
-        if known then return known end
-
-        if istable(model) then
-            if existingClientEnt(model.name) then
-                return model.name
-            end
-
-            if istable(model.lamp)
-                and existingClientEnt(model.lamp.name)
-            then
-                return model.lamp.name
-            end
-        end
-
-        -- Generated Metrostroi button props default to button.ID.
-        if existingClientEnt(button.ID) then
-            return button.ID
-        end
-
-        -- Legacy manual doors/mechanisms often have no generated model at all:
-        -- the ButtonMap event is FrontDoor but model.var animates door1.
-        if istable(model) and existingClientEnt(model.var) then
-            return model.var
-        end
-
-        -- Fallback for pre-generation mapping. It is only used as an identity
-        -- hint; exact physical binding still requires the ClientEnt later.
-        if isstring(button.PropName) and button.PropName ~= "" then
-            return button.PropName
-        end
-
-        if istable(model) then
-            if isstring(model.sndid) and model.sndid ~= "" then
-                return model.sndid
-            end
-
-            if isstring(model.name) and model.name ~= "" then
-                return model.name
-            end
-
-            if istable(model.lamp)
-                and isstring(model.lamp.name)
-                and model.lamp.name ~= ""
-            then
-                return model.lamp.name
-            end
-
-            if isstring(button.ID) and button.ID ~= "" then
-                return button.ID
-            end
-        end
-
-        return nil
     end
 
     local function ButtonMatchesPhysicalProp(train, button, propName)
