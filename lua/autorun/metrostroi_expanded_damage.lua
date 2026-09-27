@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.13"
+MEXD.Version = "0.7.0"
 
 local ZONES = {
     front = true,
@@ -6155,6 +6155,161 @@ if CLIENT then
         return localAng
     end
 
+    -- Extra plastic front-end crumpling for weighted bones.
+    --
+    -- The continuous deformation field above keeps panels/props aligned with
+    -- the damaged body. This layer deliberately acts only on bone matrices and
+    -- adds the irregular folding you expect from a crumple zone: neighbouring
+    -- bones do not all translate by the same amount, so a sufficiently rigged
+    -- model develops a dent/crease instead of looking like a rigid front mask
+    -- that was merely pushed backwards.
+    local function FrontBonePlasticDeformation(
+        ent,
+        bone,
+        trainLocalPos,
+        state,
+        strength
+    )
+        local damage = state and state.front or 0
+        if damage <= 0.015 then
+            return vector_origin, angle_zero
+        end
+
+        local surfaceX = state.maxs.x
+        local depth = surfaceX - trainLocalPos.x
+
+        -- Keep early damage in the sacrificial end structure. Only severe
+        -- crashes are allowed to propagate into the cab survival space.
+        local severe = math.Clamp((damage - 0.42) / 0.58, 0, 1)
+        local reach = 72 + damage * 112 + severe * 92
+
+        if depth < -10 or depth > reach then
+            return vector_origin, angle_zero
+        end
+
+        local hit = state.hits.front
+        local axial = Smooth01(
+            1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
+        )
+
+        local radiusY = 46 + damage * 42 + severe * 18
+        local radiusZ = 48 + damage * 44 + severe * 18
+        local dy = (trainLocalPos.y - hit.y) / math.max(radiusY, 1)
+        local dz = (trainLocalPos.z - hit.z) / math.max(radiusZ, 1)
+        local radial = Smooth01(
+            1 - math.Clamp(dy * dy + dz * dz, 0, 1)
+        )
+
+        local influence = axial * radial
+        if influence <= 0.0001 then
+            return vector_origin, angle_zero
+        end
+
+        -- Stable per-bone phase. util.CRC gives us deterministic "material
+        -- imperfection" without any frame-to-frame random jitter.
+        local boneName = ent:GetBoneName(bone) or tostring(bone)
+        local hash = tonumber(util.CRC(
+            tostring(ent:GetModel()) .. ":" .. boneName .. ":" .. bone
+        )) or bone * 977
+        local phase = (hash % 6283) / 1000
+        local phase2 = (math.floor(hash / 17) % 6283) / 1000
+
+        local plastic = Smooth01(
+            math.Clamp((damage - 0.08) / 0.92, 0, 1)
+        )
+        local foldStart = Smooth01(
+            math.Clamp((damage - 0.24) / 0.76, 0, 1)
+        )
+
+        -- Primary permanent crush. This is additional to AddEndCrush(), but is
+        -- restricted to weighted bones so the visible sheet metal can wrinkle
+        -- while ButtonMaps and rigid attachments still follow the smoother
+        -- structural field.
+        local crush = (3 + damage * 26 + severe * 24)
+            * influence
+            * plastic
+            * (tonumber(strength) or 1)
+
+        local displacement = Vector(-crush, 0, 0)
+
+        -- Pull material towards the impact centre, then add alternating folds
+        -- around the crush boundary. Multiple bones therefore form a shallow
+        -- "accordion" rather than collapsing as one flat plane.
+        displacement.y = displacement.y
+            + (hit.y - trainLocalPos.y)
+                * (0.025 + damage * 0.045)
+                * influence
+                * plastic
+
+        displacement.z = displacement.z
+            + (hit.z - trainLocalPos.z)
+                * (0.020 + damage * 0.035)
+                * influence
+                * plastic
+
+        local depth01 = math.Clamp(depth / math.max(reach, 1), 0, 1)
+        local crease = math.exp(
+            -((depth01 - (0.28 + damage * 0.12))
+                / (0.13 + damage * 0.04)) ^ 2
+        ) * radial * foldStart
+
+        local yEdge = math.Clamp(
+            (trainLocalPos.y - state.center.y)
+                / math.max(state.halfWidth, 1),
+            -1,
+            1
+        )
+        local zEdge = math.Clamp(
+            (trainLocalPos.z - state.center.z)
+                / math.max(state.halfHeight, 1),
+            -1,
+            1
+        )
+
+        local foldWave = math.sin(depth01 * math.pi * 4.2 + phase)
+        local foldWave2 = math.sin(depth01 * math.pi * 3.1 + phase2)
+
+        displacement.x = displacement.x
+            - math.abs(foldWave) * crease * (1.5 + damage * 5.5)
+
+        displacement.y = displacement.y
+            - yEdge * crease * (2 + damage * 7)
+            + foldWave * crease * (1.1 + damage * 3.4)
+
+        displacement.z = displacement.z
+            - zEdge * crease * (1.6 + damage * 5.2)
+            + foldWave2 * crease * (0.9 + damage * 2.8)
+
+        -- Off-centre hits twist the crushed nose towards the contact point.
+        -- Small deterministic per-bone rotation makes adjacent weighted
+        -- sections buckle at slightly different angles.
+        local offY = math.Clamp(
+            (hit.y - state.center.y) / math.max(state.halfWidth, 1),
+            -1,
+            1
+        )
+        local offZ = math.Clamp(
+            (hit.z - state.center.z) / math.max(state.halfHeight, 1),
+            -1,
+            1
+        )
+
+        local rotation = Angle(
+            (-offZ * (2 + damage * 8) + foldWave2 * damage * 2.3)
+                * influence
+                * plastic,
+            (offY * (3 + damage * 10) + foldWave * damage * 2.8)
+                * influence
+                * plastic,
+            (foldWave - foldWave2)
+                * crease
+                * damage
+                * 3.2
+        )
+
+        return displacement, rotation
+    end
+
     local function InstallBoneField(
         modelEnt,
         train,
@@ -6190,7 +6345,25 @@ if CLIENT then
                         strength
                     )
                     local displacement = baseDeformed - trainLocalPos
-                    if displacement:LengthSqr() < 0.0025 then continue end
+
+                    local plasticOffset, plasticRotation =
+                        FrontBonePlasticDeformation(
+                            ent,
+                            bone,
+                            trainLocalPos,
+                            state,
+                            strength
+                        )
+
+                    displacement:Add(plasticOffset)
+
+                    if displacement:LengthSqr() < 0.0025
+                        and math.abs(plasticRotation.p) < 0.01
+                        and math.abs(plasticRotation.y) < 0.01
+                        and math.abs(plasticRotation.r) < 0.01
+                    then
+                        continue
+                    end
 
                     local worldAng = matrix:GetAngles()
                     local trainLocalAng = ToTrainLocalAngle(train, worldAng)
@@ -6201,6 +6374,13 @@ if CLIENT then
                         state,
                         strength
                     )
+
+                    -- Apply the local plastic fold after the smooth structural
+                    -- orientation so it behaves like permanent buckling rather
+                    -- than changing the whole attachment coordinate system.
+                    deformedAng.p = deformedAng.p + plasticRotation.p
+                    deformedAng.y = deformedAng.y + plasticRotation.y
+                    deformedAng.r = deformedAng.r + plasticRotation.r
 
                     matrix:SetTranslation(train:LocalToWorld(deformedPos))
                     matrix:SetAngles(train:LocalToWorldAngles(deformedAng))
