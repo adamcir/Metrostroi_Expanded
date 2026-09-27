@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.8"
+MEXD.Version = "0.6.9"
 
 local ZONES = {
     front = true,
@@ -2187,10 +2187,11 @@ if SERVER then
                 radius = math.Clamp(25 + rawDamage * 0.22, 26, 55)
                 maxDetach = math.Clamp(1 + math.floor(rawDamage / 35), 1, 4)
             else
-                -- Crowbar/pistol/rifle: a very local hit. Normally only the
-                -- nearest mounted object loses its attachment.
+                -- Crowbar/pistol/rifle: a very local hit. One physical ROOT
+                -- component is selected client-side. Spare slots are reserved
+                -- only for that root's attached label/plomb/cap children.
                 radius = math.Clamp(13 + rawDamage * 0.18, 14, 30)
-                maxDetach = 1
+                maxDetach = 10
             end
 
             local damageForce = dmginfo:GetDamageForce()
@@ -3608,6 +3609,42 @@ if CLIENT then
         return false
     end
 
+    local ACCESSORY_WORDS = {
+        "label", "sign", "plate", "plomb", "seal",
+        "cap", "cover", "plug", "blank", "zaglush",
+    }
+
+    local function GeneratedAccessoryParent(name)
+        if not isstring(name) then return nil end
+
+        return name:match("^(.-)_pl$")
+            or name:match("^(.-)_lamp%d*$")
+            or name:match("^(.-)_label%d+$")
+    end
+
+    local function IsControlAccessory(name, cached)
+        if GeneratedAccessoryParent(name) then return true end
+        if not cached then return false end
+
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+        if not ContainsAnyWord(text, ACCESSORY_WORDS) then
+            return false
+        end
+
+        local s = cached.size
+        local largest = math.max(
+            math.abs(s.x),
+            math.abs(s.y),
+            math.abs(s.z)
+        )
+
+        -- A generic cover/case can be a large structural panel. Only small
+        -- nearby detail hardware is treated as a child of a control.
+        return largest <= 30
+    end
+
     local function StableFraction(text)
         local crc = tonumber(util.CRC(text or "")) or 0
         return (crc % 1000) / 1000
@@ -3638,6 +3675,8 @@ if CLIENT then
     end
 
     local function IsSmallControlComponent(name, cached, panelName)
+        if IsControlAccessory(name, cached) then return false end
+
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
 
@@ -3931,6 +3970,12 @@ if CLIENT then
     end
 
     local function GetButtonIDsForProp(train, panelName, propName, cached)
+        -- A label, plomb, lamp lens or cap may physically detach on its own,
+        -- but it is not the functional switch underneath it.
+        if IsControlAccessory(propName, cached) then
+            return {}, false
+        end
+
         local out = {}
         local seen = {}
 
@@ -4036,6 +4081,11 @@ if CLIENT then
         -- cannot be bypassed with a shortcut after it tears off.
         if string.find(text, "parking", 1, true)
             or string.find(text, "manualbrake", 1, true)
+            or string.find(text, "manual_brake", 1, true)
+            or string.find(text, "handbrake", 1, true)
+            or string.find(text, "hand_brake", 1, true)
+            or string.find(text, "brakewheel", 1, true)
+            or string.find(text, "brake_wheel", 1, true)
         then
             add("ParkingBrakeToggle")
             add("ParkingBrakeLeft")
@@ -4111,6 +4161,49 @@ if CLIENT then
 
             add("KVReverserUp")
             add("KVReverserDown")
+        end
+
+        -- Pneumatic isolation cocks. These are independent physical
+        -- valves: once the corresponding handle/valve is torn away, its
+        -- InteractionZone/keyboard ButtonEvent must not remain usable.
+        local isIsolationHardware =
+            string.find(text, "isolation", 1, true)
+            or string.find(text, "isolat", 1, true)
+            or string.find(text, "disconnect", 1, true)
+            or string.find(text, "cock", 1, true)
+            or string.find(text, "kran", 1, true)
+            or string.find(text, "valve", 1, true)
+
+        if isIsolationHardware then
+            local front = string.find(text, "front", 1, true)
+            local rear = string.find(text, "rear", 1, true)
+            local brakeLine =
+                string.find(text, "brakeline", 1, true)
+                or string.find(text, "brake_line", 1, true)
+                or string.find(text, "brake line", 1, true)
+            local trainLine =
+                string.find(text, "trainline", 1, true)
+                or string.find(text, "train_line", 1, true)
+                or string.find(text, "train line", 1, true)
+
+            if front and brakeLine then
+                add("FrontBrakeLineIsolationToggle")
+            end
+            if front and trainLine then
+                add("FrontTrainLineIsolationToggle")
+            end
+            if rear and brakeLine then
+                add("RearBrakeLineIsolationToggle")
+            end
+            if rear and trainLine then
+                add("RearTrainLineIsolationToggle")
+            end
+
+            if string.find(text, "airdistributor", 1, true)
+                or string.find(text, "air_distributor", 1, true)
+            then
+                add("AirDistributorDisconnectToggle")
+            end
         end
 
         -- Driver brake valve / crane. The visible valve may be a standalone
@@ -4451,7 +4544,15 @@ if CLIENT then
                     and not prop:GetNoDraw()
                     and prop:GetColor().a > 5
 
-                if visiblyAttached then
+                local wasDead =
+                    istable(train.MEXDamageDeadBindings)
+                    and istable(
+                        train.MEXDamageDeadBindings[panelName]
+                    )
+                    and train.MEXDamageDeadBindings[panelName][key]
+                        == true
+
+                if visiblyAttached and wasDead then
                     SetPhysicalPropBindingsDetached(
                         train,
                         propName,
