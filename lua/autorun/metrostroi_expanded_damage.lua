@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.7.3"
+MEXD.Version = "0.8.0"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -6631,7 +6631,7 @@ if CLIENT then
 
         if count <= 1 or frontBones == 0 then
             print(string.format(
-                "[Metrostroi Expanded/Damage] %s: stock body model %s has no usable non-root bones near the front. True local front-sheet denting cannot be produced from Lua alone; separate front ClientEnt parts can still move/break away.",
+                "[Metrostroi Expanded/Damage] %s: stock body model %s has no usable non-root bones near the front; using main-body vertex mesh fallback for front deformation.",
                 train:GetClass(),
                 tostring(train:GetModel())
             ))
@@ -6642,6 +6642,387 @@ if CLIENT then
         if not IsValid(train) then return end
         CheckFrontBoneCapability(train)
         InstallBoneField(train, train, true, 1.12)
+    end
+
+    ---------------------------------------------------------------------------
+    -- Main body mesh fallback
+    --
+    -- Many stock Metrostroi bodies (notably 81-717/714) are effectively rigid:
+    -- the visible nose is part of the main MDL and has no useful weighted
+    -- front bones. In that case moving mask_* ClientProps cannot visibly dent
+    -- the carbody because the undeformed body remains behind them.
+    --
+    -- Build a deformed copy of the main visual mesh when front damage exists.
+    -- This keeps the normal bone path for properly rigged models, but gives
+    -- rigid stock bodies a real local front crumple instead of a translated
+    -- front accessory.
+    ---------------------------------------------------------------------------
+
+    local function DestroyMainBodyDamageMesh(train)
+        if not IsValid(train) then return end
+
+        local data = train.MEXDamageMainBodyMesh
+        if istable(data) and istable(data.parts) then
+            for _, part in ipairs(data.parts) do
+                if part.mesh and part.mesh:IsValid() then
+                    part.mesh:Destroy()
+                end
+            end
+        end
+
+        train.MEXDamageMainBodyMesh = nil
+        train.MEXDamageMainBodyMeshKey = nil
+    end
+
+    local function RestoreMainBodyRender(train)
+        if not IsValid(train) then return end
+
+        DestroyMainBodyDamageMesh(train)
+
+        if train.MEXDamageRenderOverrideCaptured then
+            train.RenderOverride = train.MEXDamageOriginalRenderOverride
+        end
+
+        train.MEXDamageOriginalRenderOverride = nil
+        train.MEXDamageRenderOverrideCaptured = nil
+        train.MEXDamageMeshOverrideInstalled = nil
+    end
+
+    local function MainBodyBodygroupMask(train)
+        if not IsValid(train) then return 0 end
+
+        local groups = train:GetBodyGroups()
+        if not istable(groups) or #groups == 0 then
+            return 0
+        end
+
+        local maxID = 0
+        for _, group in ipairs(groups) do
+            if istable(group) then
+                maxID = math.max(maxID, tonumber(group.id) or 0)
+            end
+        end
+
+        local digits = {}
+        for id = 0, maxID do
+            digits[#digits + 1] = tostring(
+                math.Clamp(train:GetBodygroup(id) or 0, 0, 9)
+            )
+        end
+
+        return table.concat(digits)
+    end
+
+    local function MainBodyMeshFallbackWanted(train, state)
+        if not IsValid(train) or not state then return false end
+        if (state.front or 0) <= 0.008 then return false end
+        if not util or not isfunction(util.GetModelMeshes) then return false end
+
+        local model = string.lower(train:GetModel() or "")
+        local className = string.lower(train:GetClass() or "")
+
+        -- Force the fallback for the 81-717/714 family: their visible outer
+        -- shell is mostly in the rigid main MDL even though several separate
+        -- mask/cab ClientProps exist.
+        if string.find(model, "/81-717/", 1, true)
+            or string.find(className, "81-717", 1, true)
+            or string.find(className, "81-714", 1, true)
+        then
+            return true
+        end
+
+        -- Generic fallback for other rigid bodies with no front-region bones.
+        return (train.MEXDamageV4FrontBoneCount or 0) <= 0
+    end
+
+    local function DeformMainBodyMeshPoint(localPos, state)
+        local deformed = DeformLocalPoint(localPos, state)
+        local damage = math.Clamp(state.front or 0, 0, 1)
+
+        if damage <= 0.001 then
+            return deformed
+        end
+
+        local hit = state.hits.front
+        local depth = state.maxs.x - localPos.x
+        local severe = Smooth01(
+            math.Clamp((damage - 0.42) / 0.58, 0, 1)
+        )
+        local reach = 82 + damage * 150 + severe * 110
+
+        if depth < -10 or depth > reach then
+            return deformed
+        end
+
+        local axial = Smooth01(
+            1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
+        )
+
+        -- Wider than the bone field on purpose: stock body meshes often have
+        -- sparse triangles at the nose, so an extremely small bullet radius
+        -- would miss every useful vertex and appear to do nothing.
+        local radiusY = 68 + damage * 58 + severe * 26
+        local radiusZ = 72 + damage * 62 + severe * 28
+        local dy = (localPos.y - hit.y) / math.max(radiusY, 1)
+        local dz = (localPos.z - hit.z) / math.max(radiusZ, 1)
+        local radial = Smooth01(
+            1 - math.Clamp(dy * dy + dz * dz, 0, 1)
+        )
+
+        local influence = axial * radial
+        if influence <= 0.0001 then
+            return deformed
+        end
+
+        -- Strong, plainly visible plastic crush. This is additional to the
+        -- common structural field because the rigid stock MDL otherwise hides
+        -- the moving mask/cab pieces almost completely.
+        local crush =
+            (4 + damage * 54 + severe * 34)
+            * influence
+
+        deformed.x = deformed.x - crush
+
+        -- Pull sheet metal into the impact bowl.
+        deformed.y = deformed.y
+            + (hit.y - localPos.y)
+                * (0.055 + damage * 0.055)
+                * influence
+
+        deformed.z = deformed.z
+            + (hit.z - localPos.z)
+                * (0.045 + damage * 0.045)
+                * influence
+
+        -- Accordion fold around the boundary of the crushed zone.
+        if damage >= 0.16 then
+            local depth01 = math.Clamp(
+                depth / math.max(reach, 1),
+                0,
+                1
+            )
+            local crease = math.exp(
+                -((depth01 - (0.32 + damage * 0.10))
+                    / (0.12 + damage * 0.05)) ^ 2
+            ) * radial
+                * Smooth01(math.Clamp((damage - 0.14) / 0.86, 0, 1))
+
+            local yEdge = math.Clamp(
+                (localPos.y - state.center.y)
+                    / math.max(state.halfWidth, 1),
+                -1,
+                1
+            )
+            local zEdge = math.Clamp(
+                (localPos.z - state.center.z)
+                    / math.max(state.halfHeight, 1),
+                -1,
+                1
+            )
+            local wave = math.sin(depth01 * math.pi * 4.0)
+
+            deformed.x = deformed.x
+                - math.abs(wave) * crease * (2 + damage * 7)
+            deformed.y = deformed.y
+                - yEdge * crease * (2 + damage * 7)
+            deformed.z = deformed.z
+                - zEdge * crease * (1.5 + damage * 5)
+        end
+
+        return deformed
+    end
+
+    local function CopyDeformedMeshVertex(vertex, state)
+        local copy = {}
+        for key, value in pairs(vertex) do
+            copy[key] = value
+        end
+
+        if isvector(vertex.pos) then
+            copy.pos = DeformMainBodyMeshPoint(vertex.pos, state)
+
+            if isvector(vertex.normal) then
+                local normalEnd = DeformMainBodyMeshPoint(
+                    vertex.pos + vertex.normal * 2,
+                    state
+                )
+                local normal = normalEnd - copy.pos
+                if normal:LengthSqr() > 0.0001 then
+                    normal:Normalize()
+                    copy.normal = normal
+                end
+            end
+        end
+
+        return copy
+    end
+
+    local function DrawMainBodyDamageMesh(train, flags)
+        local data = train.MEXDamageMainBodyMesh
+        if not istable(data)
+            or not istable(data.parts)
+            or #data.parts == 0
+        then
+            -- Defensive fallback. DrawModel is valid inside RenderOverride.
+            train:DrawModel(flags)
+            return
+        end
+
+        local matrix = Matrix()
+        matrix:SetAngles(train:GetAngles())
+        matrix:SetTranslation(train:GetPos())
+
+        local color = train:GetColor()
+        render.SetColorModulation(
+            color.r / 255,
+            color.g / 255,
+            color.b / 255
+        )
+        render.SetBlend(color.a / 255)
+
+        cam.PushModelMatrix(matrix)
+
+        for _, part in ipairs(data.parts) do
+            if part.mesh and part.mesh:IsValid() and part.material then
+                render.SetMaterial(part.material)
+                part.mesh:Draw()
+            end
+        end
+
+        cam.PopModelMatrix()
+
+        render.SetColorModulation(1, 1, 1)
+        render.SetBlend(1)
+    end
+
+    local function BuildMainBodyDamageMesh(train, state)
+        if not MainBodyMeshFallbackWanted(train, state) then
+            RestoreMainBodyRender(train)
+            return false
+        end
+
+        local model = train:GetModel()
+        if not isstring(model) or model == "" then
+            return false
+        end
+
+        local skin = train:GetSkin() or 0
+        local bodygroups = MainBodyBodygroupMask(train)
+        local hit = state.hits.front
+
+        local key = string.format(
+            "%s|%d|%s|%.4f|%.2f|%.2f|%.2f",
+            model,
+            skin,
+            tostring(bodygroups),
+            state.front or 0,
+            hit.x,
+            hit.y,
+            hit.z
+        )
+
+        if train.MEXDamageMainBodyMeshKey == key
+            and istable(train.MEXDamageMainBodyMesh)
+        then
+            return true
+        end
+
+        local ok, visualMeshes = pcall(
+            util.GetModelMeshes,
+            model,
+            0,
+            bodygroups,
+            skin
+        )
+
+        if not ok or not istable(visualMeshes) or #visualMeshes == 0 then
+            return false
+        end
+
+        local newParts = {}
+        local MAX_VERTICES = 65535
+
+        for _, meshData in ipairs(visualMeshes) do
+            local triangles = meshData.triangles
+            if not istable(triangles) or #triangles < 3 then
+                continue
+            end
+
+            local materialName = isstring(meshData.material)
+                and meshData.material
+                or "models/debug/debugwhite"
+            local material = Material(materialName)
+
+            local cursor = 1
+            while cursor <= #triangles do
+                local remaining = #triangles - cursor + 1
+                local count = math.min(remaining, MAX_VERTICES)
+
+                -- Mesh triangles must always be complete triplets.
+                count = count - (count % 3)
+                if count < 3 then break end
+
+                local chunk = {}
+                for i = 0, count - 1 do
+                    chunk[#chunk + 1] = CopyDeformedMeshVertex(
+                        triangles[cursor + i],
+                        state
+                    )
+                end
+
+                local meshObject = Mesh()
+                local built = pcall(
+                    meshObject.BuildFromTriangles,
+                    meshObject,
+                    chunk
+                )
+
+                if not built then
+                    if meshObject and meshObject:IsValid() then
+                        meshObject:Destroy()
+                    end
+
+                    for _, part in ipairs(newParts) do
+                        if part.mesh and part.mesh:IsValid() then
+                            part.mesh:Destroy()
+                        end
+                    end
+
+                    return false
+                end
+
+                newParts[#newParts + 1] = {
+                    mesh = meshObject,
+                    material = material,
+                }
+
+                cursor = cursor + count
+            end
+        end
+
+        if #newParts == 0 then
+            return false
+        end
+
+        DestroyMainBodyDamageMesh(train)
+
+        train.MEXDamageMainBodyMesh = {
+            parts = newParts,
+            model = model,
+            skin = skin,
+            bodygroups = bodygroups,
+        }
+        train.MEXDamageMainBodyMeshKey = key
+
+        if not train.MEXDamageRenderOverrideCaptured then
+            train.MEXDamageOriginalRenderOverride = train.RenderOverride
+            train.MEXDamageRenderOverrideCaptured = true
+        end
+
+        train.RenderOverride = DrawMainBodyDamageMesh
+        train.MEXDamageMeshOverrideInstalled = true
+
+        return true
     end
 
     ---------------------------------------------------------------------------
@@ -6818,6 +7199,7 @@ if CLIENT then
     local function ClearAllVisualDamage(train)
         RestoreInteractivePanels(train)
         ApplyLightDeformation(train, nil)
+        RestoreMainBodyRender(train)
 
         if istable(train.ClientEnts) then
             for _, prop in pairs(train.ClientEnts) do
@@ -6844,6 +7226,7 @@ if CLIENT then
         end
 
         InstallTrainBoneField(train)
+        BuildMainBodyDamageMesh(train, state)
         ApplyPanelDeformation(train, state)
 
         -- Panel props may be generated after the map was cloned.
@@ -7106,6 +7489,7 @@ if CLIENT then
 
     hook.Add("EntityRemoved", "MEX.Damage.V4Cleanup", function(ent)
         if not IsSubwayTrain(ent) then return end
+        RestoreMainBodyRender(ent)
         RestoreDetachedComponents(ent)
         RestoreInteractivePanels(ent)
     end)
