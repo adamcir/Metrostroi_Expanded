@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.11"
+MEXD.Version = "0.6.12"
 
 local ZONES = {
     front = true,
@@ -3325,6 +3325,10 @@ if CLIENT then
         train.MEXDamageV4PanelProps = nil
     end
 
+    -- Forward declaration: BuildPanelPropMap needs this resolver before its
+    -- implementation appears later in the client-side attachment section.
+    local GetButtonPhysicalPropName
+
     local function BuildPanelPropMap(train)
         local map = {}
 
@@ -4016,7 +4020,7 @@ if CLIENT then
         return result
     end
 
-    local function GetButtonPhysicalPropName(train, button)
+    GetButtonPhysicalPropName = function(train, button)
         if not istable(button) then return nil end
 
         local function existingClientEnt(name)
