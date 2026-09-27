@@ -3586,7 +3586,8 @@ if CLIENT then
     local CONTROL_WORDS = {
         "button", "switch", "tumbler", "toggle", "knob", "reverser",
         "controller", "handle", "lever", "valve", "kran", "wheel",
-        "parking", "manualbrake", "brake",
+        "parking", "manualbrake", "manual_brake", "handbrake",
+        "hand_brake", "brakewheel", "brake_wheel", "brake",
     }
 
     local BREAKAWAY_WORDS = {
@@ -3707,6 +3708,10 @@ if CLIENT then
         panelName
     )
         if cached.fullLength then return false end
+
+        if IsControlAccessory(name, cached) then
+            return true
+        end
 
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
