@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.10.0"
+MEXD.Version = "0.10.1"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -7588,21 +7588,34 @@ if CLIENT then
             (name or "") .. " " .. (cached.model or "")
         )
 
-        -- Mechanical running gear and small cab mechanisms should move/break
-        -- as rigid hardware, not be stretched like sheet metal.
-        local excluded = {
+        -- Running gear and independent mechanisms must never be stretched
+        -- together with the carbody. Interior furniture is different: before
+        -- the scrap phase it stays rigid, but during deep crush long seat rows,
+        -- handrails and similar assemblies may need vertex deformation so they
+        -- cannot remain floating in their original coordinates.
+        local alwaysRigid = {
             "bogey", "bogie", "truck", "wheel", "axle",
             "coupler", "autocouple", " сцеп", "pantograph",
             "collector", "compressor", "motor",
+        }
+
+        for _, word in ipairs(alwaysRigid) do
+            if string.find(text, word, 1, true) then
+                return false
+            end
+        end
+
+        local mechanism = {
             "button", "switch", "toggle", "tumbler", "knob",
             "reverser", "controller", "lever", "valve", "kran",
             "brake_valve", "gauge", "meter", "display",
-            "seat", "couch", "handrail", "handler",
         }
 
-        for _, word in ipairs(excluded) do
-            if string.find(text, word, 1, true) then
-                return false
+        if not scrapPhase then
+            for _, word in ipairs(mechanism) do
+                if string.find(text, word, 1, true) then
+                    return false
+                end
             end
         end
 
@@ -7646,6 +7659,14 @@ if CLIENT then
             or string.find(text, "door", 1, true)
             or string.find(text, "window", 1, true)
             or string.find(text, "glass", 1, true)
+            or string.find(text, "seat", 1, true)
+            or string.find(text, "couch", 1, true)
+            or string.find(text, "bench", 1, true)
+            or string.find(text, "chair", 1, true)
+            or string.find(text, "handrail", 1, true)
+            or string.find(text, "handler", 1, true)
+            or string.find(text, "interior", 1, true)
+            or string.find(text, "salon", 1, true)
 
         local depth = state.maxs.x - cached.anchorPos.x
 
@@ -8015,26 +8036,58 @@ if CLIENT then
     -- Apply / clear the complete visual deformation
     ---------------------------------------------------------------------------
 
-    local function ShouldFollowDeformedBody(cached, state)
+    local function ShouldFollowDeformedBody(name, cached, state)
         if not cached or not state then return false end
-        if cached.localPiece then return true end
-        if cached.fullLength then return false end
-        local crushEnergy =
+
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+
+        local frontCrushEnergy =
             istable(state.crush)
                 and (state.crush.front or 0)
                 or (state.front or 0)
+        local overallCrushEnergy =
+            istable(state.crush)
+                and (state.crush.overall or frontCrushEnergy)
+                or frontCrushEnergy
+        local scrapPhase = overallCrushEnergy >= 1.05
 
-        if crushEnergy <= 0.001 then return false end
+        -- Running gear remains attached to the original physics chassis. It is
+        -- intentionally excluded from the visual body/interior crush transform.
+        local runningGear = {
+            "bogey", "bogie", "truck", "wheel", "axle",
+            "coupler", "autocouple", " сцеп", "pantograph",
+            "collector", "compressor", "motor",
+        }
+
+        for _, word in ipairs(runningGear) do
+            if string.find(text, word, 1, true) then
+                return false
+            end
+        end
+
+        if scrapPhase then
+            -- Once the body enters the whole-wagon scrap phase, every remaining
+            -- cabin/saloon fixture must follow it. This deliberately ignores
+            -- the old localPiece/fullLength cutoff: a long bench, full seat row,
+            -- handrail assembly or cab cabinet must not stay suspended in the
+            -- original undamaged coordinates.
+            return true
+        end
+
+        if cached.localPiece then return true end
+        if cached.fullLength then return false end
+        if frontCrushEnergy <= 0.001 then return false end
 
         local depth = state.maxs.x - cached.anchorPos.x
         local reach =
             105
-            + math.min(crushEnergy, 1) * 190
-            + math.max(crushEnergy - 1, 0) * 220
+            + math.min(frontCrushEnergy, 1) * 190
+            + math.max(frontCrushEnergy - 1, 0) * 220
 
-        -- Large but localized cab/front assemblies (cab shell, wide lamp
-        -- groups, masks, front equipment frames) may exceed the old 230 SU
-        -- localPiece box. They should still move rigidly with the crushed nose.
+        -- During the ordinary crash phase only localized front/cab equipment
+        -- follows the deformed mount point.
         return depth >= -24
             and depth <= reach
             and math.abs(cached.size.x) < 330
@@ -8120,7 +8173,7 @@ if CLIENT then
                 continue
             end
 
-            if ShouldFollowDeformedBody(cached, state) then
+            if ShouldFollowDeformedBody(name, cached, state) then
                 -- Doors, front masks, lamp groups, cab shells and other
                 -- localized equipment use the EXACT same deformation field as
                 -- the generated main-body mesh. They therefore remain glued to
@@ -8134,9 +8187,9 @@ if CLIENT then
                     state
                 )
             else
-                -- Full saloon/interior models are kept at the train origin.
-                -- Only their existing child bones are allowed to deform. This
-                -- prevents the entire interior from "driving away" from the car.
+                -- Outside the affected region keep untouched models at their
+                -- authored transform. In the scrap phase this branch is reached
+                -- only for excluded running gear.
                 ClearClientPropRenderTransform(prop)
             end
         end
