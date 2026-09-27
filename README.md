@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.8.0**
+Current damage-system module version: **0.8.1**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -366,3 +366,12 @@ Controls now follow one strict rule:
 - `mex_damage_bones` now reports whether the mesh fallback is active
 - added `mex_damage_mesh_status` for exact client-side deformation diagnostics
 - collision geometry is unchanged; this remains a visual deformation system
+
+
+### Damage 0.8.1 – glue front equipment to the crumpled shell
+
+- front ClientEnts now sample the exact same visual deformation field as the generated main-body crumple mesh
+- masks, cab doors, windows, lamps, covers, cab shells and other localized front assemblies therefore stay attached to the deformed body instead of floating at their original coordinates
+- ButtonMap panel planes use the same deformed position and orientation, keeping clickable areas aligned with moved controls
+- dynamic Metrostroi light positions/angles follow the crushed shell as well
+- larger localized cab/front assemblies that exceeded the old 230 SU local-piece cutoff can now follow the front deformation, while full-length saloon/interior shells remain protected from being moved as one rigid object
