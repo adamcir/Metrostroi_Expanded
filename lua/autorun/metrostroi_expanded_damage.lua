@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.6.10"
+MEXD.Version = "0.6.11"
 
 local ZONES = {
     front = true,
@@ -3352,6 +3352,17 @@ if CLIENT then
                         map[button.PropName] = panelName
                     end
 
+                    -- Resolve the actual physical ClientProp as well. Classic
+                    -- cab shut-off valves often use sndid/known aliases rather
+                    -- than PropName, so without this the visible valve could
+                    -- detach while its original ButtonMap stayed clickable.
+                    local physicalProp =
+                        GetButtonPhysicalPropName(train, button)
+
+                    if isstring(physicalProp) and physicalProp ~= "" then
+                        map[physicalProp] = panelName
+                    end
+
                     local config = button.model
                     if istable(config) then
                         local generatedName = config.name or button.ID
@@ -4015,11 +4026,59 @@ if CLIENT then
                 and IsValid(train.ClientEnts[name])
         end
 
+        local function visibleClientEnt(name)
+            if not existingClientEnt(name) then return false end
+
+            local ent = train.ClientEnts[name]
+            return not ent:GetNoDraw() and ent:GetColor().a > 5
+        end
+
+        local function firstExisting(names)
+            -- Prefer the currently displayed variant (important for 334/013
+            -- cabs where EPK/EPV use alternate physical shut-off valves).
+            for _, name in ipairs(names or {}) do
+                if visibleClientEnt(name) then return name end
+            end
+
+            for _, name in ipairs(names or {}) do
+                if existingClientEnt(name) then return name end
+            end
+
+            return nil
+        end
+
         if existingClientEnt(button.PropName) then
             return button.PropName
         end
 
         local model = button.model
+
+        -- A number of classic Metrostroi cab valves use model.var only for the
+        -- logical state while model.sndid is the name of the actual moving
+        -- ClientProp. Treat that real valve as the physical provider.
+        if istable(model) and existingClientEnt(model.sndid) then
+            return model.sndid
+        end
+
+        -- Explicit aliases for old 81-717/714-style pneumatic hardware. These
+        -- keep the physical valve and its ButtonMap hitbox inseparable even on
+        -- trains whose ButtonMap does not expose PropName/model.name.
+        local buttonID = isstring(button.ID)
+            and button.ID:gsub("^.+:", "")
+            or ""
+
+        local knownPhysical = {
+            DriverValveBLDisconnectToggle = {"brake_disconnect"},
+            DriverValveTLDisconnectToggle = {"train_disconnect"},
+            DriverValveDisconnectToggle = {"valve_disconnect"},
+            EPKToggle = {"EPK_disconnect", "EPV_disconnect"},
+            ParkingBrakeToggle = {"parking_brake"},
+            EmergencyBrakeValveToggle = {"stopkran"},
+        }
+
+        local known = firstExisting(knownPhysical[buttonID])
+        if known then return known end
+
         if istable(model) then
             if existingClientEnt(model.name) then
                 return model.name
@@ -4050,6 +4109,10 @@ if CLIENT then
         end
 
         if istable(model) then
+            if isstring(model.sndid) and model.sndid ~= "" then
+                return model.sndid
+            end
+
             if isstring(model.name) and model.name ~= "" then
                 return model.name
             end
