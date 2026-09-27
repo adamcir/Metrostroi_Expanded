@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.7.1**
+Current damage-system module version: **0.7.2**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -337,3 +337,10 @@ Controls now follow one strict rule:
 - entities currently held or recently thrown with the physgun are tracked and use a lower collision threshold plus a stronger impact response
 - physgun collisions may register more frequently than ordinary train collisions so repeated destructive testing produces visible progressive crush
 - front structural ClientEnt shells receive stronger longitudinal compression as a fallback when the stock MDL has too few weighted front bones
+
+
+### Damage 0.7.2 – physical button resolver ordering fix
+
+- `GetButtonPhysicalPropName()` is now defined completely before `BuildPanelPropMap()`
+- removed the forward-declaration / later-assignment pattern that could still leave the resolver nil at runtime
+- fixes `attempt to call global 'GetButtonPhysicalPropName' (a nil value)` from `BuildPanelPropMap`
