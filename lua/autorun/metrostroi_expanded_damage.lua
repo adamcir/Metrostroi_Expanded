@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.9.0"
+MEXD.Version = "1.0.0-alpha.1"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -245,6 +245,15 @@ local function DamageKey(zone)
     return "MEX.Damage." .. zone
 end
 
+local function CrushKey(zone)
+    return "MEX.Crush." .. zone
+end
+
+function MEXD.GetCrushEnergy(train, zone)
+    if not IsValid(train) or not ZONES[zone] then return 0 end
+    return train:GetNW2Float(CrushKey(zone), 0)
+end
+
 function MEXD.GetZoneDamage(train, zone)
     if not IsValid(train) or not ZONES[zone] then return 0 end
     return train:GetNW2Float(DamageKey(zone), 0)
@@ -263,7 +272,7 @@ function MEXD.GetOverallDamage(train)
 end
 
 function MEXD.GetStructuralHealth(train)
-    return 1 - MEXD.GetOverallDamage(train)
+    return math.Clamp(1 - MEXD.GetOverallDamage(train), 0, 1)
 end
 
 local function ZoneLocalImpactPoint(train, zone)
@@ -310,7 +319,10 @@ local function UpdateDamageState(train)
     local overall = math.max(front, rear, left, right, roof, floor)
 
     train:SetNW2Float("MEX.Damage.overall", overall)
-    train:SetNW2Float("MEX.StructuralHealth", 1 - overall)
+    train:SetNW2Float(
+        "MEX.StructuralHealth",
+        math.Clamp(1 - overall, 0, 1)
+    )
 
     train:SetNW2Bool("MEX.Damage.Moderate", overall >= 0.35)
     train:SetNW2Bool("MEX.Damage.Heavy", overall >= 0.65)
@@ -1966,6 +1978,7 @@ if SERVER then
 
         for zone in pairs(ZONES) do
             train:SetNW2Float(DamageKey(zone), 0)
+            train:SetNW2Float(CrushKey(zone), 0)
             train:SetNW2Float("MEX.Damage.HitStrength." .. zone, 0)
             train:SetNW2Vector("MEX.Damage.HitLocal." .. zone, vector_origin)
         end
@@ -2034,12 +2047,33 @@ if SERVER then
 
         local old = MEXD.GetZoneDamage(train, zone)
 
-        -- Damage accumulation gets progressively less effective as the zone is
-        -- already crushed, so repeated tiny contacts cannot instantly destroy it.
+        -- Logical/system damage remains normalized to 0..1.
         local effective = amount * (1 - old * 0.45)
         local new = math.Clamp(old + effective, 0, 1)
-
         train:SetNW2Float(DamageKey(zone), new)
+
+        -- Plastic crush is deliberately NOT capped at 1.0. Once a wagon is
+        -- already "destroyed" logically, later impacts must still be able to
+        -- fold more metal. This lets repeated crashes/weapon hits continue
+        -- compressing the body until it can become scrap instead of freezing
+        -- at one final dent shape.
+        local oldCrush = MEXD.GetCrushEnergy(train, zone)
+        local sourceScale =
+            source == "physgun" and 1.28
+            or source == "physics" and 1.18
+            or source == "blast" and 1.22
+            or source == "bullet" and 0.82
+            or source == "buckshot" and 0.95
+            or source == "melee" and 0.62
+            or 1
+
+        local crushAdded = math.max(amount, 0.004) * sourceScale
+        local newCrush = math.Clamp(
+            oldCrush + crushAdded,
+            0,
+            6.0
+        )
+        train:SetNW2Float(CrushKey(zone), newCrush)
 
         if isvector(worldPos) then
             local hitLocal = train:WorldToLocal(worldPos)
@@ -2047,7 +2081,7 @@ if SERVER then
             local strengthKey = "MEX.Damage.HitStrength." .. zone
             local oldStrength = train:GetNW2Float(strengthKey, 0)
             local oldHit = train:GetNW2Vector(hitKey, hitLocal)
-            local combinedStrength = math.Clamp(oldStrength + amount, 0, 1)
+            local combinedStrength = math.Clamp(oldStrength + amount, 0, 6)
 
             if oldStrength <= 0.001 then
                 oldHit = hitLocal
@@ -2810,7 +2844,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h | detached %d | blocked controls %d",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h | detached %d | blocked controls %d",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -2818,6 +2852,7 @@ if SERVER then
             MEXD.GetZoneDamage(train, "right"),
             MEXD.GetZoneDamage(train, "roof"),
             MEXD.GetZoneDamage(train, "floor"),
+            MEXD.GetCrushEnergy(train, "front"),
             train:GetNW2Float("MEX.StructuralHealth", 1),
             train:GetNW2Float("MEX.Damage.electrical", 0),
             train:GetNW2Float("MEX.Damage.LastImpactKmh", 0),
@@ -2954,6 +2989,14 @@ if CLIENT then
         local right = train:GetNW2Float("MEX.Damage.right", 0)
         local roof = train:GetNW2Float("MEX.Damage.roof", 0)
         local floor = train:GetNW2Float("MEX.Damage.floor", 0)
+
+        local crushFront = train:GetNW2Float("MEX.Crush.front", front)
+        local crushRear = train:GetNW2Float("MEX.Crush.rear", rear)
+        local crushLeft = train:GetNW2Float("MEX.Crush.left", left)
+        local crushRight = train:GetNW2Float("MEX.Crush.right", right)
+        local crushRoof = train:GetNW2Float("MEX.Crush.roof", roof)
+        local crushFloor = train:GetNW2Float("MEX.Crush.floor", floor)
+
         local blastStrength =
             train:GetNW2Float("MEX.Damage.BlastStrength", 0)
         local overall = math.max(
@@ -2980,6 +3023,22 @@ if CLIENT then
             roof = roof,
             floor = floor,
             overall = overall,
+            crush = {
+                front = crushFront,
+                rear = crushRear,
+                left = crushLeft,
+                right = crushRight,
+                roof = crushRoof,
+                floor = crushFloor,
+                overall = math.max(
+                    crushFront,
+                    crushRear,
+                    crushLeft,
+                    crushRight,
+                    crushRoof,
+                    crushFloor
+                ),
+            },
             blast = {
                 strength = blastStrength,
                 radius = train:GetNW2Float(
@@ -3394,100 +3453,215 @@ if CLIENT then
 
         if not state then return deformed end
 
-        local damage = math.Clamp(state.front or 0, 0, 1)
-        if damage <= 0.001 then return deformed end
+        local logicalDamage = math.Clamp(state.front or 0, 0, 1)
+        local crushEnergy = math.Clamp(
+            math.max(
+                logicalDamage,
+                istable(state.crush)
+                    and (state.crush.front or 0)
+                    or logicalDamage
+            ),
+            0,
+            6
+        )
+
+        if crushEnergy <= 0.001 then return deformed end
+
+        local overcrush = math.max(crushEnergy - 1, 0)
+        local severe = Smooth01(
+            math.Clamp((logicalDamage - 0.42) / 0.58, 0, 1)
+        )
+        local scrap = Smooth01(
+            math.Clamp(overcrush / 3.2, 0, 1)
+        )
 
         local hit = state.hits.front
         local depth = state.maxs.x - localPos.x
-        local severe = Smooth01(
-            math.Clamp((damage - 0.42) / 0.58, 0, 1)
-        )
-        local reach = 96 + damage * 205 + severe * 125
 
-        if depth < -10 or depth > reach then
-            return deformed
+        -- At ordinary damage only the nose/cab is involved. Once crush energy
+        -- exceeds 1, every later impact pushes the fold boundary farther into
+        -- the wagon. Around crush ~= 4 the field spans essentially the entire
+        -- carbody.
+        local reach =
+            96
+            + logicalDamage * 205
+            + severe * 125
+            + overcrush * 235
+
+        if depth >= -12 and depth <= reach then
+            local axial = Smooth01(
+                1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
+            )
+
+            local radiusY =
+                82
+                + logicalDamage * 72
+                + severe * 32
+                + overcrush * 28
+            local radiusZ =
+                86
+                + logicalDamage * 76
+                + severe * 34
+                + overcrush * 32
+
+            local dy = (localPos.y - hit.y) / math.max(radiusY, 1)
+            local dz = (localPos.z - hit.z) / math.max(radiusZ, 1)
+            local radial = Smooth01(
+                1 - math.Clamp(dy * dy + dz * dz, 0, 1)
+            )
+
+            -- When the shell is already being scrapped, do not let a single
+            -- old impact point protect the opposite corners from collapse.
+            radial = math.max(radial, scrap * 0.72)
+
+            local influence = axial * radial
+
+            if influence > 0.0001 then
+                local visualStrength = math.Clamp(strength, 0, 1.8)
+                local crush =
+                    (
+                        6
+                        + logicalDamage * 82
+                        + severe * 52
+                        + overcrush * 128
+                    )
+                    * influence
+                    * visualStrength
+
+                deformed.x = deformed.x - crush
+
+                deformed.y = deformed.y
+                    + (hit.y - localPos.y)
+                        * (
+                            0.070
+                            + logicalDamage * 0.075
+                            + overcrush * 0.018
+                        )
+                        * influence
+                        * visualStrength
+
+                deformed.z = deformed.z
+                    + (hit.z - localPos.z)
+                        * (
+                            0.060
+                            + logicalDamage * 0.060
+                            + overcrush * 0.014
+                        )
+                        * influence
+                        * visualStrength
+
+                local foldGate = math.Clamp(
+                    (crushEnergy - 0.14) / 0.86,
+                    0,
+                    1
+                )
+
+                if foldGate > 0 then
+                    local depth01 = math.Clamp(
+                        depth / math.max(reach, 1),
+                        0,
+                        1
+                    )
+                    local crease = math.exp(
+                        -((depth01
+                            - (0.32 + logicalDamage * 0.10))
+                            / (0.12 + logicalDamage * 0.05)) ^ 2
+                    ) * radial * Smooth01(foldGate)
+
+                    local yEdge = math.Clamp(
+                        (localPos.y - state.center.y)
+                            / math.max(state.halfWidth, 1),
+                        -1,
+                        1
+                    )
+                    local zEdge = math.Clamp(
+                        (localPos.z - state.center.z)
+                            / math.max(state.halfHeight, 1),
+                        -1,
+                        1
+                    )
+                    local wave = math.sin(
+                        depth01
+                        * math.pi
+                        * (4.0 + math.min(overcrush, 3) * 1.2)
+                    )
+
+                    deformed.x = deformed.x
+                        - math.abs(wave)
+                            * crease
+                            * (2 + logicalDamage * 7 + overcrush * 13)
+                            * visualStrength
+
+                    deformed.y = deformed.y
+                        - yEdge
+                            * crease
+                            * (2 + logicalDamage * 7 + overcrush * 9)
+                            * visualStrength
+
+                    deformed.z = deformed.z
+                        - zEdge
+                            * crease
+                            * (1.5 + logicalDamage * 5 + overcrush * 7)
+                            * visualStrength
+                end
+            end
         end
 
-        local axial = Smooth01(
-            1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
-        )
+        -- Extreme destruction mode: once the nose has already collapsed,
+        -- additional front impacts progressively accordion-compress the entire
+        -- wagon toward the rear and squash the occupied volume. This is the
+        -- "turn it into scrap / a pancake" phase rather than a realistic
+        -- survivable crash limit.
+        if scrap > 0.001 then
+            local length = math.max(state.maxs.x - state.mins.x, 1)
+            local width = math.max(state.maxs.y - state.mins.y, 1)
+            local height = math.max(state.maxs.z - state.mins.z, 1)
 
-        local radiusY = 82 + damage * 72 + severe * 32
-        local radiusZ = 86 + damage * 76 + severe * 34
-        local dy = (localPos.y - hit.y) / math.max(radiusY, 1)
-        local dz = (localPos.z - hit.z) / math.max(radiusZ, 1)
-        local radial = Smooth01(
-            1 - math.Clamp(dy * dy + dz * dz, 0, 1)
-        )
-
-        local influence = axial * radial
-        if influence <= 0.0001 then
-            return deformed
-        end
-
-        local visualStrength = math.Clamp(strength, 0, 1.6)
-        local crush =
-            (6 + damage * 82 + severe * 52)
-            * influence
-            * visualStrength
-
-        deformed.x = deformed.x - crush
-
-        deformed.y = deformed.y
-            + (hit.y - localPos.y)
-                * (0.070 + damage * 0.075)
-                * influence
-                * visualStrength
-
-        deformed.z = deformed.z
-            + (hit.z - localPos.z)
-                * (0.060 + damage * 0.060)
-                * influence
-                * visualStrength
-
-        if damage >= 0.16 then
-            local depth01 = math.Clamp(
-                depth / math.max(reach, 1),
+            local x01 = math.Clamp(
+                (localPos.x - state.mins.x) / length,
                 0,
                 1
             )
-            local crease = math.exp(
-                -((depth01 - (0.32 + damage * 0.10))
-                    / (0.12 + damage * 0.05)) ^ 2
-            ) * radial
-                * Smooth01(
-                    math.Clamp((damage - 0.14) / 0.86, 0, 1)
-                )
-
-            local yEdge = math.Clamp(
-                (localPos.y - state.center.y)
-                    / math.max(state.halfWidth, 1),
+            local y01 = math.Clamp(
+                (localPos.y - state.center.y) / (width * 0.5),
                 -1,
                 1
             )
-            local zEdge = math.Clamp(
-                (localPos.z - state.center.z)
-                    / math.max(state.halfHeight, 1),
-                -1,
+            local z01 = math.Clamp(
+                (localPos.z - state.mins.z) / height,
+                0,
                 1
             )
-            local wave = math.sin(depth01 * math.pi * 4.0)
 
-            deformed.x = deformed.x
-                - math.abs(wave)
-                    * crease
-                    * (2 + damage * 7)
-                    * visualStrength
-            deformed.y = deformed.y
-                - yEdge
-                    * crease
-                    * (2 + damage * 7)
-                    * visualStrength
-            deformed.z = deformed.z
-                - zEdge
-                    * crease
-                    * (1.5 + damage * 5)
-                    * visualStrength
+            -- Rear end is the "anvil"; everything ahead of it shortens.
+            local compressedLength = length * Lerp(scrap, 1.0, 0.16)
+            local targetX =
+                state.mins.x + x01 * compressedLength
+
+            -- Keep a thin underframe/slab rather than collapsing all vertices
+            -- to exactly one Z plane (which would z-fight badly).
+            local slabBase = state.mins.z + height * 0.08
+            local slabHeight = height * Lerp(scrap, 1.0, 0.17)
+            local targetZ = slabBase + z01 * slabHeight
+
+            local targetY =
+                state.center.y
+                + y01
+                    * (width * 0.5)
+                    * Lerp(scrap, 1.0, 0.42)
+
+            local accordion =
+                math.sin(x01 * math.pi * (8 + overcrush * 2.5))
+                * (4 + overcrush * 7)
+                * scrap
+                * (0.35 + 0.65 * math.abs(y01))
+
+            targetX = targetX - math.abs(accordion)
+            targetZ = targetZ + accordion * 0.18
+
+            deformed.x = Lerp(scrap, deformed.x, targetX)
+            deformed.y = Lerp(scrap, deformed.y, targetY)
+            deformed.z = Lerp(scrap, deformed.z, targetZ)
         end
 
         return deformed
@@ -6937,7 +7111,13 @@ if CLIENT then
 
     local function MainBodyMeshFallbackWanted(train, state)
         if not IsValid(train) or not state then return false end
-        if (state.front or 0) <= 0.008 then return false end
+
+        local crushEnergy =
+            istable(state.crush)
+                and (state.crush.front or 0)
+                or (state.front or 0)
+
+        if crushEnergy <= 0.008 then return false end
         if not util or not isfunction(util.GetModelMeshes) then return false end
 
         local model = string.lower(train:GetModel() or "")
@@ -6953,7 +7133,14 @@ if CLIENT then
             return true
         end
 
-        -- Generic fallback for other rigid bodies with no front-region bones.
+        -- Any train may enter the scrap phase even if its stock body has bones:
+        -- vertex deformation is what lets the complete shell keep collapsing
+        -- beyond the authored rig's limited range.
+        if crushEnergy >= 0.35 then
+            return true
+        end
+
+        -- Otherwise use it for rigid bodies with no usable front-region bones.
         return (train.MEXDamageV4FrontBoneCount or 0) <= 0
     end
 
@@ -7044,7 +7231,9 @@ if CLIENT then
             model,
             skin,
             tostring(bodygroups),
-            state.front or 0,
+            istable(state.crush)
+                and (state.crush.front or state.front or 0)
+                or (state.front or 0),
             hit.x,
             hit.y,
             hit.z
@@ -7250,34 +7439,94 @@ if CLIENT then
         state
     )
         if not cached or not state then return false end
-        if (state.front or 0) <= 0.008 then return false end
-        if cached.fullLength then return false end
+
+        local crushEnergy =
+            istable(state.crush)
+                and (state.crush.front or 0)
+                or (state.front or 0)
+
+        if crushEnergy <= 0.008 then return false end
 
         local text = string.lower(
             (name or "") .. " " .. (cached.model or "")
         )
 
-        -- These are actual large shell pieces, not controls attached to them.
-        local shellLike =
-            string.find(text, "mask", 1, true)
+        -- Mechanical running gear and small cab mechanisms should move/break
+        -- as rigid hardware, not be stretched like sheet metal.
+        local excluded = {
+            "bogey", "bogie", "truck", "wheel", "axle",
+            "coupler", "autocouple", " сцеп", "pantograph",
+            "collector", "compressor", "motor",
+            "button", "switch", "toggle", "tumbler", "knob",
+            "reverser", "controller", "lever", "valve", "kran",
+            "brake_valve", "gauge", "meter", "display",
+            "seat", "couch", "handrail", "handler",
+        }
+
+        for _, word in ipairs(excluded) do
+            if string.find(text, word, 1, true) then
+                return false
+            end
+        end
+
+        local sx = math.abs(cached.size.x)
+        local sy = math.abs(cached.size.y)
+        local sz = math.abs(cached.size.z)
+        local largest = math.max(sx, sy, sz)
+        local secondLargest = sx + sy + sz
+            - largest
+            - math.min(sx, sy, sz)
+
+        -- Ignore tiny detail props. Everything sheet-like / shell-sized is a
+        -- candidate regardless of addon-specific naming convention.
+        if largest < 46 or secondLargest < 18 then
+            return false
+        end
+
+        local structuralName =
+            cached.structural
+            or cached.cabin
+            or cached.glass
+            or string.find(text, "body", 1, true)
+            or string.find(text, "shell", 1, true)
+            or string.find(text, "mask", 1, true)
+            or string.find(text, "cabin", 1, true)
             or string.find(text, "cabine", 1, true)
-            or string.find(text, "cabin_shell", 1, true)
-            or string.find(text, "front_shell", 1, true)
-            or string.find(text, "nose", 1, true)
-
-        if not shellLike then return false end
-
-        local largest = math.max(
-            math.abs(cached.size.x),
-            math.abs(cached.size.y),
-            math.abs(cached.size.z)
-        )
-        if largest < 55 then return false end
+            or string.find(text, "interior", 1, true)
+            or string.find(text, "salon", 1, true)
+            or string.find(text, "roof", 1, true)
+            or string.find(text, "wall", 1, true)
+            or string.find(text, "side", 1, true)
+            or string.find(text, "panel", 1, true)
+            or string.find(text, "door", 1, true)
+            or string.find(text, "window", 1, true)
+            or string.find(text, "glass", 1, true)
 
         local depth = state.maxs.x - cached.anchorPos.x
-        local reach = 130 + state.front * 220
+        local reach =
+            135
+            + math.min(crushEnergy, 1) * 220
+            + math.max(crushEnergy - 1, 0) * 240
 
-        return depth >= -45 and depth <= reach
+        if depth < -55 or depth > reach then
+            return false
+        end
+
+        -- Before the wagon enters the scrap phase, be conservative and deform
+        -- only recognizable shell structures. Once crush > 1, large visual
+        -- body pieces are allowed too, which is necessary for custom trains
+        -- whose authors used arbitrary ClientProp names.
+        if crushEnergy < 1.05 then
+            return structuralName and true or false
+        end
+
+        if cached.fullLength then
+            return structuralName and true or crushEnergy >= 1.8
+        end
+
+        return structuralName
+            or largest >= 82
+            or (largest >= 62 and secondLargest >= 36)
     end
 
     local function PropVertexToTrainLocal(cached, vertexPos)
@@ -7410,7 +7659,9 @@ if CLIENT then
             model,
             skin,
             tostring(bodygroups),
-            state.front or 0,
+            istable(state.crush)
+                and (state.crush.front or state.front or 0)
+                or (state.front or 0),
             hit.x,
             hit.y,
             hit.z,
@@ -7619,10 +7870,18 @@ if CLIENT then
         if not cached or not state then return false end
         if cached.localPiece then return true end
         if cached.fullLength then return false end
-        if (state.front or 0) <= 0.001 then return false end
+        local crushEnergy =
+            istable(state.crush)
+                and (state.crush.front or 0)
+                or (state.front or 0)
+
+        if crushEnergy <= 0.001 then return false end
 
         local depth = state.maxs.x - cached.anchorPos.x
-        local reach = 105 + state.front * 190
+        local reach =
+            105
+            + math.min(crushEnergy, 1) * 190
+            + math.max(crushEnergy - 1, 0) * 220
 
         -- Large but localized cab/front assemblies (cab shell, wide lamp
         -- groups, masks, front equipment frames) may exceed the old 230 SU
@@ -8024,6 +8283,12 @@ if CLIENT then
         print("version: " .. tostring(MEXD.Version))
         print("front damage: " .. tostring(
             state and state.front or 0
+        ))
+        print("front crush energy: " .. tostring(
+            state
+                and istable(state.crush)
+                and state.crush.front
+                or 0
         ))
         print("body bones: " .. tostring(train:GetBoneCount() or 0))
         print("front bones: " .. tostring(
