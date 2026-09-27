@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.9.0**
+Current damage-system module version: **0.10.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -385,3 +385,16 @@ Controls now follow one strict rule:
 - front crush reach, radial area and longitudinal displacement were increased so medium accumulated damage is clearly visible
 - smaller lamps, windows, controls and other front equipment continue to follow the final damaged surface as mounted rigid parts
 - `mex_damage_mesh_status` now lists all ClientProps with an active vertex-deformation mesh
+
+
+### Damage 0.10.0 – cumulative crush and whole-wagon scrap phase
+
+- logical subsystem damage still stays normalized to 0..1, but each damage zone now also tracks separate plastic crush energy up to 6.0
+- further crashes, bullets, buckshot, blasts and physgun impacts keep increasing crush after logical damage has already reached 1.0
+- normal local denting is still front-focused, but once overall crush exceeds the critical range the wagon enters a whole-body scrap phase
+- scrap deformation progressively pushes the crush boundary through the entire carbody, accordion-compresses its length, pulls the sides inward and lowers the roof toward a thin slab
+- at very high crush energy a wagon can be visually compressed to a small fraction of its original length/height instead of freezing at one final dent
+- large structural ClientProps are selected by geometry as well as model/name heuristics, improving compatibility with custom trains that split the shell into arbitrary ClientProps
+- large body panels and doors are kept attached longer so they deform with the shell before being allowed to tear away; small glass, lights, covers and controls can still fail earlier
+- added `mex_damage_scrap_test [energy]` (default 3.0, max 6.0) for quickly testing deep crush without repeatedly hitting the train
+- `mex_damage_status` / `mex_damage_mesh_status` expose crush energy for debugging
