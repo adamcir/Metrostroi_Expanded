@@ -3498,7 +3498,8 @@ if CLIENT then
         if not state then return deformed end
 
         local logicalDamage = math.Clamp(state.front or 0, 0, 1)
-        local crushEnergy = math.Clamp(
+
+        local frontCrushEnergy = math.Clamp(
             math.max(
                 logicalDamage,
                 istable(state.crush)
@@ -3509,18 +3510,35 @@ if CLIENT then
             6
         )
 
-        if crushEnergy <= 0.001 then return deformed end
+        local overallCrushEnergy = math.Clamp(
+            math.max(
+                frontCrushEnergy,
+                istable(state.crush)
+                    and (state.crush.overall or 0)
+                    or 0
+            ),
+            0,
+            6
+        )
 
-        local overcrush = math.max(crushEnergy - 1, 0)
+        if overallCrushEnergy <= 0.001 then return deformed end
+
+        local overcrush = math.max(frontCrushEnergy - 1, 0)
+        local scrapOvercrush = math.max(overallCrushEnergy - 1, 0)
         local severe = Smooth01(
             math.Clamp((logicalDamage - 0.42) / 0.58, 0, 1)
         )
         local scrap = Smooth01(
-            math.Clamp(overcrush / 3.2, 0, 1)
+            math.Clamp(scrapOvercrush / 3.2, 0, 1)
         )
 
         local hit = state.hits.front
         local depth = state.maxs.x - localPos.x
+
+        -- Local dent/crumple remains front-specific for now. The global scrap
+        -- phase below may still collapse the whole wagon after extreme damage
+        -- from any direction.
+        if frontCrushEnergy > 0.001 then
 
         -- At ordinary damage only the nose/cab is involved. Once crush energy
         -- exceeds 1, every later impact pushes the fold boundary farther into
@@ -3651,7 +3669,9 @@ if CLIENT then
             end
         end
 
-        -- Extreme destruction mode: once the nose has already collapsed,
+        end
+
+        -- Extreme destruction mode: once the shell is already critically damaged,
         -- additional front impacts progressively accordion-compress the entire
         -- wagon toward the rear and squash the occupied volume. This is the
         -- "turn it into scrap / a pancake" phase rather than a realistic
@@ -3695,8 +3715,8 @@ if CLIENT then
                     * Lerp(scrap, 1.0, 0.42)
 
             local accordion =
-                math.sin(x01 * math.pi * (8 + overcrush * 2.5))
-                * (4 + overcrush * 7)
+                math.sin(x01 * math.pi * (8 + scrapOvercrush * 2.5))
+                * (4 + scrapOvercrush * 7)
                 * scrap
                 * (0.35 + 0.65 * math.abs(y01))
 
@@ -6645,7 +6665,7 @@ if CLIENT then
 
         local crushEnergy =
             istable(state.crush)
-                and (state.crush.front or 0)
+                and (state.crush.overall or state.crush.front or 0)
                 or (state.front or 0)
 
         local seed = StableFraction(name)
@@ -7209,12 +7229,20 @@ if CLIENT then
     local function MainBodyMeshFallbackWanted(train, state)
         if not IsValid(train) or not state then return false end
 
-        local crushEnergy =
+        local frontCrushEnergy =
             istable(state.crush)
                 and (state.crush.front or 0)
                 or (state.front or 0)
+        local overallCrushEnergy =
+            istable(state.crush)
+                and (state.crush.overall or frontCrushEnergy)
+                or frontCrushEnergy
 
-        if crushEnergy <= 0.008 then return false end
+        if frontCrushEnergy <= 0.008
+            and overallCrushEnergy < 1.05
+        then
+            return false
+        end
         if not util or not isfunction(util.GetModelMeshes) then return false end
 
         local model = string.lower(train:GetModel() or "")
@@ -7233,7 +7261,9 @@ if CLIENT then
         -- Any train may enter the scrap phase even if its stock body has bones:
         -- vertex deformation is what lets the complete shell keep collapsing
         -- beyond the authored rig's limited range.
-        if crushEnergy >= 0.35 then
+        if frontCrushEnergy >= 0.35
+            or overallCrushEnergy >= 1.05
+        then
             return true
         end
 
@@ -7324,12 +7354,15 @@ if CLIENT then
         local hit = state.hits.front
 
         local key = string.format(
-            "%s|%d|%s|%.4f|%.2f|%.2f|%.2f",
+            "%s|%d|%s|%.4f|%.4f|%.2f|%.2f|%.2f",
             model,
             skin,
             tostring(bodygroups),
             istable(state.crush)
                 and (state.crush.front or state.front or 0)
+                or (state.front or 0),
+            istable(state.crush)
+                and (state.crush.overall or state.crush.front or 0)
                 or (state.front or 0),
             hit.x,
             hit.y,
@@ -7537,12 +7570,19 @@ if CLIENT then
     )
         if not cached or not state then return false end
 
-        local crushEnergy =
+        local frontCrushEnergy =
             istable(state.crush)
                 and (state.crush.front or 0)
                 or (state.front or 0)
+        local overallCrushEnergy =
+            istable(state.crush)
+                and (state.crush.overall or frontCrushEnergy)
+                or frontCrushEnergy
+        local scrapPhase = overallCrushEnergy >= 1.05
 
-        if crushEnergy <= 0.008 then return false end
+        if frontCrushEnergy <= 0.008 and not scrapPhase then
+            return false
+        end
 
         local text = string.lower(
             (name or "") .. " " .. (cached.model or "")
@@ -7584,7 +7624,7 @@ if CLIENT then
             string.find(text, "door", 1, true)
             or string.find(text, "dver", 1, true)
 
-        if isDoorLike and crushEnergy < 1.25 then
+        if isDoorLike and overallCrushEnergy < 1.25 then
             return false
         end
 
@@ -7608,25 +7648,26 @@ if CLIENT then
             or string.find(text, "glass", 1, true)
 
         local depth = state.maxs.x - cached.anchorPos.x
-        local reach =
-            135
-            + math.min(crushEnergy, 1) * 220
-            + math.max(crushEnergy - 1, 0) * 240
 
-        if depth < -55 or depth > reach then
-            return false
-        end
+        if not scrapPhase then
+            local reach =
+                135
+                + math.min(frontCrushEnergy, 1) * 220
+                + math.max(frontCrushEnergy - 1, 0) * 240
 
-        -- Before the wagon enters the scrap phase, be conservative and deform
-        -- only recognizable shell structures. Once crush > 1, large visual
-        -- body pieces are allowed too, which is necessary for custom trains
-        -- whose authors used arbitrary ClientProp names.
-        if crushEnergy < 1.05 then
+            if depth < -55 or depth > reach then
+                return false
+            end
+
+            -- Ordinary deformation is still local to the damaged front.
             return structuralName and true or false
         end
 
+        -- Scrap phase is deliberately whole-wagon: large shell pieces can be
+        -- vertex-deformed even far from the original impact point.
         if cached.fullLength then
-            return structuralName and true or crushEnergy >= 1.8
+            return structuralName and true
+                or overallCrushEnergy >= 1.8
         end
 
         return structuralName
@@ -7760,12 +7801,15 @@ if CLIENT then
             or 1
 
         local key = string.format(
-            "%s|%d|%s|%.4f|%.2f|%.2f|%.2f|%.3f",
+            "%s|%d|%s|%.4f|%.4f|%.2f|%.2f|%.2f|%.3f",
             model,
             skin,
             tostring(bodygroups),
             istable(state.crush)
                 and (state.crush.front or state.front or 0)
+                or (state.front or 0),
+            istable(state.crush)
+                and (state.crush.overall or state.crush.front or 0)
                 or (state.front or 0),
             hit.x,
             hit.y,
@@ -8393,6 +8437,12 @@ if CLIENT then
             state
                 and istable(state.crush)
                 and state.crush.front
+                or 0
+        ))
+        print("overall crush energy: " .. tostring(
+            state
+                and istable(state.crush)
+                and state.crush.overall
                 or 0
         ))
         print("body bones: " .. tostring(train:GetBoneCount() or 0))
