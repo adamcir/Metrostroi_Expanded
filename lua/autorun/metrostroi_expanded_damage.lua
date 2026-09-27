@@ -4186,16 +4186,24 @@ if CLIENT then
                 or string.find(text, "train_line", 1, true)
                 or string.find(text, "train line", 1, true)
 
-            if front and brakeLine then
+            if front and brakeLine
+                or propNameLower == "frontbrake"
+            then
                 add("FrontBrakeLineIsolationToggle")
             end
-            if front and trainLine then
+            if front and trainLine
+                or propNameLower == "fronttrain"
+            then
                 add("FrontTrainLineIsolationToggle")
             end
-            if rear and brakeLine then
+            if rear and brakeLine
+                or propNameLower == "rearbrake"
+            then
                 add("RearBrakeLineIsolationToggle")
             end
-            if rear and trainLine then
+            if rear and trainLine
+                or propNameLower == "reartrain"
+            then
                 add("RearTrainLineIsolationToggle")
             end
 
@@ -4233,6 +4241,14 @@ if CLIENT then
         then
             add("EmergencyBrake")
             add("EmergencyBrakeValveToggle")
+        end
+
+        if propNameLower == "epk_disconnect"
+            or propNameLower == "epv_disconnect"
+            or string.find(text, "epk_disconnect", 1, true)
+            or string.find(text, "epv_disconnect", 1, true)
+        then
+            add("EPKToggle")
         end
 
         if string.find(text, "driver_valve_bl", 1, true)
@@ -5156,7 +5172,7 @@ if CLIENT then
                 state,
                 child.panelName,
                 false,
-                false
+                true
             ) then
                 requested = requested + 1
                 ClearClientPropRenderTransform(child.prop)
