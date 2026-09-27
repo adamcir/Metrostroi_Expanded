@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.10.0**
+Current damage-system module version: **0.10.2**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -398,3 +398,12 @@ Controls now follow one strict rule:
 - large body panels and doors are kept attached longer so they deform with the shell before being allowed to tear away; small glass, lights, covers and controls can still fail earlier
 - added `mex_damage_scrap_test [energy]` (default 3.0, max 6.0) for quickly testing deep crush without repeatedly hitting the train
 - `mex_damage_status` / `mex_damage_mesh_status` expose crush energy for debugging
+
+
+### Damage 0.10.2 – interior and seat attachment during scrap crush
+
+- once whole-wagon scrap deformation starts, remaining cabin/saloon ClientProps no longer use the old local-piece/full-length cutoff
+- seats, benches, couches, handrails, cabinets and other interior fixtures now follow the same crushed mounting field as the body
+- long seat rows and large interior assemblies may be vertex-deformed in the scrap phase instead of remaining at their original coordinates
+- only true running gear such as bogies, wheels, axles, couplers and traction/mechanical equipment stays on the original physics chassis
+- interior fixtures are kept attached much deeper into the scrap phase so they crumple with the cabin instead of becoming floating debris too early
