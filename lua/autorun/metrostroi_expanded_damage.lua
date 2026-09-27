@@ -6935,7 +6935,22 @@ if CLIENT then
             skin
         )
 
+        -- Some workshop models use bodygroup layouts that cannot be expressed
+        -- by the compact string accepted by util.GetModelMeshes. A deformed
+        -- default-bodygroup mesh is still much better than silently disabling
+        -- the entire crumple fallback.
         if not ok or not istable(visualMeshes) or #visualMeshes == 0 then
+            ok, visualMeshes = pcall(
+                util.GetModelMeshes,
+                model,
+                0,
+                0,
+                skin
+            )
+        end
+
+        if not ok or not istable(visualMeshes) or #visualMeshes == 0 then
+            train.MEXDamageMainBodyMeshFailed = true
             return false
         end
 
@@ -7021,6 +7036,17 @@ if CLIENT then
 
         train.RenderOverride = DrawMainBodyDamageMesh
         train.MEXDamageMeshOverrideInstalled = true
+        train.MEXDamageMainBodyMeshFailed = nil
+
+        if not train.MEXDamageMeshFallbackAnnounced then
+            train.MEXDamageMeshFallbackAnnounced = true
+            print(string.format(
+                "[Metrostroi Expanded/Damage] main-body crumple mesh active for %s (%s), %d render parts",
+                tostring(train:GetClass()),
+                tostring(model),
+                #newParts
+            ))
+        end
 
         return true
     end
@@ -7400,10 +7426,17 @@ if CLIENT then
         print("front-region non-root bones: " .. tostring(train.MEXDamageV4FrontBoneCount or 0))
 
         if (train.MEXDamageV4FrontBoneCount or 0) == 0 then
-            print("front sheet deformation: NOT AVAILABLE on this stock body MDL")
-            print("reason: no usable weighted front-region bone can be driven from Lua")
+            print("front bone deformation: no usable weighted front-region bone")
+            print("main-body mesh fallback: " .. (
+                train.MEXDamageMeshOverrideInstalled
+                    and "ACTIVE"
+                    or "waiting for front damage / unavailable"
+            ))
         else
-            print("front sheet deformation: bone candidates exist (vertex weighting still determines the visible result)")
+            print("front bone deformation: bone candidates exist (vertex weighting still determines the visible result)")
+            print("main-body mesh fallback: " .. (
+                train.MEXDamageMeshOverrideInstalled and "ACTIVE" or "not required"
+            ))
         end
 
         for bone = 0, math.max(train:GetBoneCount() - 1, -1) do
@@ -7441,6 +7474,41 @@ if CLIENT then
             end
         end
 
+        print("------------------------------------------------------------")
+    end)
+
+    concommand.Add("mex_damage_mesh_status", function()
+        local train = GetAimedClientTrain()
+        if not IsValid(train) then
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            return
+        end
+
+        local state = BuildDamageState(train)
+        print("------------------------------------------------------------")
+        print("[Metrostroi Expanded/Damage] mesh deformation status")
+        print("class: " .. tostring(train:GetClass()))
+        print("model: " .. tostring(train:GetModel()))
+        print("version: " .. tostring(MEXD.Version))
+        print("front damage: " .. tostring(
+            state and state.front or 0
+        ))
+        print("body bones: " .. tostring(train:GetBoneCount() or 0))
+        print("front bones: " .. tostring(
+            train.MEXDamageV4FrontBoneCount or 0
+        ))
+        print("mesh override: " .. tostring(
+            train.MEXDamageMeshOverrideInstalled == true
+        ))
+        print("mesh build failed: " .. tostring(
+            train.MEXDamageMainBodyMeshFailed == true
+        ))
+        print("mesh parts: " .. tostring(
+            istable(train.MEXDamageMainBodyMesh)
+                and istable(train.MEXDamageMainBodyMesh.parts)
+                and #train.MEXDamageMainBodyMesh.parts
+                or 0
+        ))
         print("------------------------------------------------------------")
     end)
 
