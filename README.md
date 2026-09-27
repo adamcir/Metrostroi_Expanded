@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.8**
+Current damage-system module version: **0.6.9**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -272,3 +272,14 @@ Controls now follow one strict rule:
 - traction-controller damage no longer disables reverser-key insertion/removal or `KV_Unlock`
 - `KVWrenchKV`, `KVWrenchKV9`, `KVWrenchKRU`, `WrenchKRO`, `WrenchKRR`, `WrenchNone` and related reverser movement events are disabled only when a physical reverser/reverser-wrench mechanism detaches
 - classic `reverser` / `krureverser` / `rcureverser` and modern `KRO` / `KRR` hardware are recognized separately from the traction controller
+
+
+### Damage 0.6.9 – control hierarchy and valve reliability
+
+- generated control accessories now have one-way ownership: `*_pl`, `*_lamp*` and `*_label*` can detach independently without disabling the parent switch
+- detaching the actual parent switch/control automatically requests detachment of its attached label/plomb/lamp/cap children
+- a precise crowbar/pistol/rifle hit selects one physical root component only; spare detach capacity is reserved for that root's children, preventing a hit on a label from also ripping out the switch underneath it
+- healthy ButtonMap slots are no longer copied/replaced every render frame; only previously dead bindings are reconciled, improving click reliability of undamaged switches after any damage event
+- parking/manual/hand-brake hardware disables its complete parking-brake event family after physical detachment
+- classic `FrontBrake`, `FrontTrain`, `RearBrake`, `RearTrain` valve props are bound directly to their corresponding line-isolation events
+- `brake_disconnect`, `train_disconnect`, `EPK_disconnect` and `EPV_disconnect` are handled as independent physical valve failures
