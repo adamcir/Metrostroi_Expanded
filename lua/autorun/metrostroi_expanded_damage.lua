@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.8.1"
+MEXD.Version = "0.9.0"
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -3402,7 +3402,7 @@ if CLIENT then
         local severe = Smooth01(
             math.Clamp((damage - 0.42) / 0.58, 0, 1)
         )
-        local reach = 82 + damage * 150 + severe * 110
+        local reach = 96 + damage * 205 + severe * 125
 
         if depth < -10 or depth > reach then
             return deformed
@@ -3412,8 +3412,8 @@ if CLIENT then
             1 - math.Clamp(depth / math.max(reach, 1), 0, 1)
         )
 
-        local radiusY = 68 + damage * 58 + severe * 26
-        local radiusZ = 72 + damage * 62 + severe * 28
+        local radiusY = 82 + damage * 72 + severe * 32
+        local radiusZ = 86 + damage * 76 + severe * 34
         local dy = (localPos.y - hit.y) / math.max(radiusY, 1)
         local dz = (localPos.z - hit.z) / math.max(radiusZ, 1)
         local radial = Smooth01(
@@ -3427,7 +3427,7 @@ if CLIENT then
 
         local visualStrength = math.Clamp(strength, 0, 1.6)
         local crush =
-            (4 + damage * 54 + severe * 34)
+            (6 + damage * 82 + severe * 52)
             * influence
             * visualStrength
 
@@ -3435,13 +3435,13 @@ if CLIENT then
 
         deformed.y = deformed.y
             + (hit.y - localPos.y)
-                * (0.055 + damage * 0.055)
+                * (0.070 + damage * 0.075)
                 * influence
                 * visualStrength
 
         deformed.z = deformed.z
             + (hit.z - localPos.z)
-                * (0.045 + damage * 0.045)
+                * (0.060 + damage * 0.060)
                 * influence
                 * visualStrength
 
@@ -4310,6 +4310,8 @@ if CLIENT then
         return true
     end
 
+    local RestoreClientPropDamageMesh
+
     local function ClearClientPropRenderTransform(prop)
         if not IsValid(prop) then return end
 
@@ -4327,6 +4329,10 @@ if CLIENT then
         if prop.MEXDamageMatrixApplied then
             prop:DisableMatrix("RenderMultiply")
             prop.MEXDamageMatrixApplied = nil
+        end
+
+        if RestoreClientPropDamageMesh then
+            RestoreClientPropDamageMesh(prop)
         end
     end
 
@@ -7175,6 +7181,368 @@ if CLIENT then
     end
 
     ---------------------------------------------------------------------------
+    -- Front structural ClientEnt vertex deformation
+    --
+    -- 81-717 front masks are separate rigid ClientProps. Moving them as one
+    -- object leaves the most visible part of the nose perfectly flat. Build a
+    -- deformed mesh for those large front shells using the exact same train-
+    -- local deformation field as the main body.
+    ---------------------------------------------------------------------------
+
+    local function DestroyClientPropDamageMesh(prop)
+        if not IsValid(prop) then return end
+
+        local data = prop.MEXDamageVertexMesh
+        if istable(data) and istable(data.parts) then
+            for _, part in ipairs(data.parts) do
+                if part.mesh and part.mesh:IsValid() then
+                    part.mesh:Destroy()
+                end
+            end
+        end
+
+        prop.MEXDamageVertexMesh = nil
+        prop.MEXDamageVertexMeshKey = nil
+    end
+
+    RestoreClientPropDamageMesh = function(prop)
+        if not IsValid(prop) then return end
+
+        DestroyClientPropDamageMesh(prop)
+
+        if prop.MEXDamageVertexRenderCaptured then
+            prop.RenderOverride =
+                prop.MEXDamageOriginalVertexRenderOverride
+        end
+
+        prop.MEXDamageOriginalVertexRenderOverride = nil
+        prop.MEXDamageVertexRenderCaptured = nil
+        prop.MEXDamageVertexOverrideInstalled = nil
+        prop.MEXDamageVertexOwner = nil
+    end
+
+    local function ClientPropBodygroupMask(prop)
+        if not IsValid(prop) then return 0 end
+
+        local groups = prop:GetBodyGroups()
+        if not istable(groups) or #groups == 0 then return 0 end
+
+        local maxID = 0
+        for _, group in ipairs(groups) do
+            if istable(group) then
+                maxID = math.max(maxID, tonumber(group.id) or 0)
+            end
+        end
+
+        local digits = {}
+        for id = 0, maxID do
+            digits[#digits + 1] = tostring(
+                math.Clamp(prop:GetBodygroup(id) or 0, 0, 9)
+            )
+        end
+
+        return table.concat(digits)
+    end
+
+    local function ShouldVertexDeformClientProp(
+        name,
+        cached,
+        state
+    )
+        if not cached or not state then return false end
+        if (state.front or 0) <= 0.008 then return false end
+        if cached.fullLength then return false end
+
+        local text = string.lower(
+            (name or "") .. " " .. (cached.model or "")
+        )
+
+        -- These are actual large shell pieces, not controls attached to them.
+        local shellLike =
+            string.find(text, "mask", 1, true)
+            or string.find(text, "cabine", 1, true)
+            or string.find(text, "cabin_shell", 1, true)
+            or string.find(text, "front_shell", 1, true)
+            or string.find(text, "nose", 1, true)
+
+        if not shellLike then return false end
+
+        local largest = math.max(
+            math.abs(cached.size.x),
+            math.abs(cached.size.y),
+            math.abs(cached.size.z)
+        )
+        if largest < 55 then return false end
+
+        local depth = state.maxs.x - cached.anchorPos.x
+        local reach = 130 + state.front * 220
+
+        return depth >= -45 and depth <= reach
+    end
+
+    local function PropVertexToTrainLocal(cached, vertexPos)
+        local trainPos = LocalToWorld(
+            vertexPos,
+            angle_zero,
+            cached.basePos,
+            cached.baseAng
+        )
+        return trainPos
+    end
+
+    local function CopyDeformedClientPropVertex(
+        vertex,
+        cached,
+        state,
+        strength
+    )
+        local copy = {}
+        for key, value in pairs(vertex) do
+            copy[key] = value
+        end
+
+        if not isvector(vertex.pos) then return copy end
+
+        local trainPos = PropVertexToTrainLocal(
+            cached,
+            vertex.pos
+        )
+        copy.pos = DeformFrontVisualPointStrength(
+            trainPos,
+            state,
+            strength
+        )
+
+        -- The generated mesh is rendered directly in train-local space, so its
+        -- normal must be converted/deformed into train-local space as well.
+        if isvector(vertex.normal) then
+            local normalEndTrain = PropVertexToTrainLocal(
+                cached,
+                vertex.pos + vertex.normal * 2
+            )
+            normalEndTrain = DeformFrontVisualPointStrength(
+                normalEndTrain,
+                state,
+                strength
+            )
+
+            local normal = normalEndTrain - copy.pos
+            if normal:LengthSqr() > 0.0001 then
+                normal:Normalize()
+                copy.normal = normal
+            end
+        end
+
+        return copy
+    end
+
+    local function DrawClientPropDamageMesh(prop)
+        local data = prop.MEXDamageVertexMesh
+        local train = prop.MEXDamageVertexOwner
+
+        if not IsValid(train)
+            or not istable(data)
+            or not istable(data.parts)
+            or #data.parts == 0
+        then
+            prop:DrawModel()
+            return
+        end
+
+        local matrix = Matrix()
+        matrix:SetAngles(train:GetAngles())
+        matrix:SetTranslation(train:GetPos())
+
+        local color = prop:GetColor()
+        render.SetColorModulation(
+            color.r / 255,
+            color.g / 255,
+            color.b / 255
+        )
+        render.SetBlend(color.a / 255)
+
+        cam.PushModelMatrix(matrix)
+
+        for _, part in ipairs(data.parts) do
+            if part.mesh and part.mesh:IsValid() and part.material then
+                render.SetMaterial(part.material)
+                part.mesh:Draw()
+            end
+        end
+
+        cam.PopModelMatrix()
+
+        render.SetColorModulation(1, 1, 1)
+        render.SetBlend(1)
+    end
+
+    local function BuildClientPropDamageMesh(
+        train,
+        name,
+        prop,
+        cached,
+        state
+    )
+        if not ShouldVertexDeformClientProp(
+            name,
+            cached,
+            state
+        ) then
+            RestoreClientPropDamageMesh(prop)
+            return false
+        end
+
+        local model = prop:GetModel()
+        if not isstring(model) or model == "" then return false end
+
+        local skin = prop:GetSkin() or 0
+        local bodygroups = ClientPropBodygroupMask(prop)
+        local hit = state.hits.front
+        local strength = cached.cabin
+            and math.max(
+                1.18,
+                CabStrengthAtPoint(cached.anchorPos, state)
+            )
+            or 1
+
+        local key = string.format(
+            "%s|%d|%s|%.4f|%.2f|%.2f|%.2f|%.3f",
+            model,
+            skin,
+            tostring(bodygroups),
+            state.front or 0,
+            hit.x,
+            hit.y,
+            hit.z,
+            strength
+        )
+
+        if prop.MEXDamageVertexMeshKey == key
+            and istable(prop.MEXDamageVertexMesh)
+        then
+            return true
+        end
+
+        local ok, visualMeshes = pcall(
+            util.GetModelMeshes,
+            model,
+            0,
+            bodygroups,
+            skin
+        )
+
+        if not ok or not istable(visualMeshes) or #visualMeshes == 0 then
+            ok, visualMeshes = pcall(
+                util.GetModelMeshes,
+                model,
+                0,
+                0,
+                skin
+            )
+        end
+
+        if not ok or not istable(visualMeshes) or #visualMeshes == 0 then
+            return false
+        end
+
+        local parts = {}
+        local MAX_VERTICES = 65535
+
+        for _, meshData in ipairs(visualMeshes) do
+            local triangles = meshData.triangles
+            if not istable(triangles) or #triangles < 3 then
+                continue
+            end
+
+            local material = Material(
+                isstring(meshData.material)
+                    and meshData.material
+                    or "models/debug/debugwhite"
+            )
+
+            local cursor = 1
+            while cursor <= #triangles do
+                local remaining = #triangles - cursor + 1
+                local count = math.min(remaining, MAX_VERTICES)
+                count = count - (count % 3)
+                if count < 3 then break end
+
+                local chunk = {}
+                for i = 0, count - 1 do
+                    chunk[#chunk + 1] =
+                        CopyDeformedClientPropVertex(
+                            triangles[cursor + i],
+                            cached,
+                            state,
+                            strength
+                        )
+                end
+
+                local meshObject = Mesh()
+                local built = pcall(
+                    meshObject.BuildFromTriangles,
+                    meshObject,
+                    chunk
+                )
+
+                if not built then
+                    if meshObject and meshObject:IsValid() then
+                        meshObject:Destroy()
+                    end
+
+                    for _, part in ipairs(parts) do
+                        if part.mesh and part.mesh:IsValid() then
+                            part.mesh:Destroy()
+                        end
+                    end
+
+                    return false
+                end
+
+                parts[#parts + 1] = {
+                    mesh = meshObject,
+                    material = material,
+                }
+
+                cursor = cursor + count
+            end
+        end
+
+        if #parts == 0 then return false end
+
+        DestroyClientPropDamageMesh(prop)
+
+        prop.MEXDamageVertexMesh = {
+            parts = parts,
+            model = model,
+        }
+        prop.MEXDamageVertexMeshKey = key
+        prop.MEXDamageVertexOwner = train
+
+        if not prop.MEXDamageVertexRenderCaptured then
+            prop.MEXDamageOriginalVertexRenderOverride =
+                prop.RenderOverride
+            prop.MEXDamageVertexRenderCaptured = true
+        end
+
+        prop.RenderOverride = DrawClientPropDamageMesh
+        prop.MEXDamageVertexOverrideInstalled = true
+
+        -- Vertex positions are already expressed in final train-local space.
+        -- Any additional SetRenderOrigin/RenderMultiply would double-apply the
+        -- deformation.
+        prop:SetRenderOrigin(nil)
+        prop:SetRenderAngles(nil)
+        if prop.MEXDamageMatrixApplied then
+            prop:DisableMatrix("RenderMultiply")
+            prop.MEXDamageMatrixApplied = nil
+        end
+        prop.MEXDamageV4RenderMoved = nil
+
+        return true
+    end
+
+    ---------------------------------------------------------------------------
     -- Lights follow the same deformed mounting points.
     ---------------------------------------------------------------------------
 
@@ -7287,6 +7655,14 @@ if CLIENT then
             local cached = CacheClientProp(train, name, prop)
             local panelName = panelMap[name]
 
+            local vertexDeformed = BuildClientPropDamageMesh(
+                train,
+                name,
+                prop,
+                cached,
+                state
+            )
+
             -- A sufficiently damaged mounting point can release a door or a
             -- small panel control. Its original Metrostroi ClientEnt is hidden
             -- and a physics debris copy takes over.
@@ -7304,7 +7680,7 @@ if CLIENT then
             -- Existing bones deform the actual mesh instead of stretching the
             -- complete client entity. Root is skipped because it would move the
             -- whole full-length shell.
-            if cached.structural then
+            if cached.structural and not vertexDeformed then
                 local boneStrength = cached.cabin
                     and math.max(
                         1.22,
@@ -7320,13 +7696,19 @@ if CLIENT then
                 )
             end
 
-            if panelName and ApplyPanelAttachment(
+            if not vertexDeformed
+                and panelName
+                and ApplyPanelAttachment(
                 train,
                 name,
                 prop,
                 cached,
                 panelName
             ) then
+                continue
+            end
+
+            if vertexDeformed then
                 continue
             end
 
@@ -7363,6 +7745,7 @@ if CLIENT then
         for name in pairs(train.MEXDamageV4ServerDetached) do
             local prop = train.ClientEnts[name]
             if IsValid(prop) then
+                RestoreClientPropDamageMesh(prop)
                 prop:SetRenderOrigin(nil)
                 prop:SetRenderAngles(nil)
                 prop:DisableMatrix("RenderMultiply")
@@ -7707,6 +8090,15 @@ if CLIENT then
     hook.Add("EntityRemoved", "MEX.Damage.V4Cleanup", function(ent)
         if not IsSubwayTrain(ent) then return end
         RestoreMainBodyRender(ent)
+
+        if istable(ent.ClientEnts) then
+            for _, prop in pairs(ent.ClientEnts) do
+                if IsValid(prop) then
+                    RestoreClientPropDamageMesh(prop)
+                end
+            end
+        end
+
         RestoreDetachedComponents(ent)
         RestoreInteractivePanels(ent)
     end)
