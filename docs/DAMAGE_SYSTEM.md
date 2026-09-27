@@ -440,3 +440,14 @@ Useful client commands:
 - `mex_damage_bones` — body/front bone capability plus mesh fallback state
 - `mex_damage_mesh_status` — front damage, bone counts, mesh build state and render-part count
 - `mex_damage_version` — exact loaded module version and source path
+
+
+## Deformed-body attachments
+
+Damage System 0.8.1 makes mounted front equipment follow the same final deformation field as the main-body mesh fallback.
+
+This applies to localized ClientEnt assemblies such as masks, cab doors/windows, lamp groups, covers and cab shells. Their rigid anchor position and orientation are evaluated from the same crushed surface used by the deformed body mesh.
+
+ButtonMap panel transforms and dynamic light transforms also use that field, so the visual control, clickable area and emitted light stay together after a front crash.
+
+Full-length salon/interior shells are intentionally not translated as one rigid object.
