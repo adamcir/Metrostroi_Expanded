@@ -10,7 +10,35 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.7.2"
+MEXD.Version = "0.7.3"
+
+local MEXD_SOURCE_FILE = "unknown"
+if debug and isfunction(debug.getinfo) then
+    local sourceInfo = debug.getinfo(1, "S")
+    if istable(sourceInfo) then
+        MEXD_SOURCE_FILE = sourceInfo.short_src
+            or sourceInfo.source
+            or MEXD_SOURCE_FILE
+    end
+end
+
+MEXD.SourceFile = MEXD_SOURCE_FILE
+
+print(string.format(
+    "[Metrostroi Expanded/Damage] loaded v%s from %s (%s)",
+    tostring(MEXD.Version),
+    tostring(MEXD.SourceFile),
+    SERVER and "SERVER" or "CLIENT"
+))
+
+concommand.Add("mex_damage_version", function()
+    print(string.format(
+        "[Metrostroi Expanded/Damage] v%s | source: %s | realm: %s",
+        tostring(MEXD.Version),
+        tostring(MEXD.SourceFile),
+        SERVER and "SERVER" or "CLIENT"
+    ))
+end)
 
 local ZONES = {
     front = true,
@@ -3634,18 +3662,57 @@ if CLIENT then
                         map[button.PropName] = panelName
                     end
 
-                    -- Resolve the actual physical ClientProp as well. Classic
-                    -- cab shut-off valves often use sndid/known aliases rather
-                    -- than PropName, so without this the visible valve could
-                    -- detach while its original ButtonMap stayed clickable.
-                    local physicalProp =
-                        GetButtonPhysicalPropName(train, button)
+                    -- Resolve the physical provider locally. Do NOT call
+                    -- GetButtonPhysicalPropName() from this early mapping path:
+                    -- direct-impact processing may build the panel map before
+                    -- other attachment helpers have been initialized on older
+                    -- hot-reloaded addon copies.
+                    local config = button.model
+                    local physicalProp = nil
+
+                    if isstring(button.PropName)
+                        and button.PropName ~= ""
+                    then
+                        physicalProp = button.PropName
+                    elseif istable(config) then
+                        if isstring(config.sndid)
+                            and config.sndid ~= ""
+                        then
+                            physicalProp = config.sndid
+                        elseif isstring(config.name)
+                            and config.name ~= ""
+                        then
+                            physicalProp = config.name
+                        elseif isstring(config.var)
+                            and config.var ~= ""
+                            and istable(train.ClientEnts)
+                            and IsValid(train.ClientEnts[config.var])
+                        then
+                            physicalProp = config.var
+                        end
+                    end
+
+                    if not physicalProp and isstring(button.ID) then
+                        local buttonID = button.ID:gsub("^.+:", "")
+                        local knownPhysical = {
+                            DriverValveBLDisconnectToggle = "brake_disconnect",
+                            DriverValveTLDisconnectToggle = "train_disconnect",
+                            DriverValveDisconnectToggle = "valve_disconnect",
+                            EPKToggle = "EPK_disconnect",
+                            ParkingBrakeToggle = "parking_brake",
+                            EmergencyBrakeValveToggle = "stopkran",
+                        }
+
+                        local candidate = knownPhysical[buttonID]
+                        if isstring(candidate) then
+                            physicalProp = candidate
+                        end
+                    end
 
                     if isstring(physicalProp) and physicalProp ~= "" then
                         map[physicalProp] = panelName
                     end
 
-                    local config = button.model
                     if istable(config) then
                         local generatedName = config.name or button.ID
                         if isstring(generatedName) then
