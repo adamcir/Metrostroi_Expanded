@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.6.12**
+Current damage-system module version: **0.6.13**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -308,3 +308,11 @@ Controls now follow one strict rule:
 
 - fixed a Lua scope error where `BuildPanelPropMap()` could call `GetButtonPhysicalPropName` as an undefined global
 - the physical-control resolver is now forward-declared and assigned in the same client-side local scope
+
+
+### Damage 0.6.13 – 81-717 driver BL/TL valve back-door fix
+
+- generated `DriverValveBLDisconnect*` and `DriverValveTLDisconnect*` names are now recognized as the same physical cab cocks as `brake_disconnect` / `train_disconnect`
+- detaching either 334 cab cock blocks its own direct ButtonMap action
+- it also blocks the shared `DriverValveDisconnect` keyboard action used by 81-717 MVM (`NUM0` / `Shift+L`), because that path otherwise toggles both BL and TL valves together
+- the other physically intact cab cock remains independently usable through its own ButtonMap
