@@ -869,6 +869,26 @@ Network/debug state includes:
 - `MEX.Damage.BatteryFloodLevel`
 - `MEX.Damage.LowVoltageBlackout`
 
+### Brownout, blackout and rapid surfacing
+
+The battery/low-voltage failure is staged rather than a single binary switch:
+
+1. **Voltage sag / brownout** – while a flooded car is off the third rail, the simulated battery flood factor progressively pulls the low-voltage outputs down. Cars that normally publish fixed informational 65/80 V values are also scaled so control electronics can begin dropping out before the final blackout.
+2. **Blackout** – once the collapse threshold is reached, the battery and common 80 V outputs are forced to zero. A dead train is no longer considered an energized water-arc source, so cosmetic/electrical sparking stops with the power.
+3. **Rapid surfacing** – if a recently submerged car is pulled out of the water quickly, retained surface moisture remains electrically active for about 4–12 seconds. The last wet equipment area is reused as the likely arc position, so the car can continue to spark above the water if voltage becomes available again.
+4. **Battery rebound / second collapse** – an off-rail battery that died under the submerged short may temporarily recover enough terminal voltage after surfacing for the wet circuit to re-energize. Residual moisture can then short it again. If it reaches the second collapse, the battery is marked water-failed and remains unavailable until repair/reset.
+5. **Re-energized wet train** – if third-rail power is available after surfacing, auxiliary supply may keep other systems alive while residual moisture causes arcing, breaker operation and accumulated stress in the battery/charging branch. The battery itself can fail even though the train still has external supply.
+
+Rapid surfacing is tracked from the recent submerged state, not just a single exact wetness transition, so a brief partially-wet sample between underwater and dry does not suppress the effect.
+
+Additional debug state:
+
+- `MEX.Damage.LowVoltageBrownout`
+- `MEX.Damage.RecentlySurfaced`
+- `MEX.Damage.PostSurfaceWetness`
+- `MEX.Damage.BatteryWaterFailed`
+
+
 ### Wet light wiring and instruments
 
 Packed lamp/light outputs can still flicker, extinguish or flash because of wet wiring. Electrical gauges may show false values while supply remains alive. When the low-voltage blackout is active, electrical indications are forced off instead.
