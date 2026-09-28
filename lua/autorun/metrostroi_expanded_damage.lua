@@ -14511,8 +14511,18 @@ if CLIENT then
         train.MEXDamageDisabledLights = train.MEXDamageDisabledLights or {}
 
         train.SetLightPower = function(self, index, power, brightness)
-            if self.MEXDamageDisabledLights
-                and self.MEXDamageDisabledLights[index]
+            local wearFailed =
+                self:GetNW2Bool(
+                    "MEX.Damage.WearLight."
+                        .. tostring(index),
+                    false
+                )
+
+            if wearFailed
+                or (
+                    self.MEXDamageDisabledLights
+                    and self.MEXDamageDisabledLights[index]
+                )
             then
                 return self.MEXDamageOriginalSetLightPower(
                     self,
@@ -16367,6 +16377,7 @@ if CLIENT then
     local function ApplyCompleteDamage(train)
         if not IsSubwayTrain(train) then return end
 
+        EnsureDamagedLightGuard(train)
         ClearLegacyTransforms(train)
 
         if not MEXD.IsDeformationEnabled() then
