@@ -1104,8 +1104,7 @@ if SERVER then
         -- system is treated as mechanical, but it cannot make a known
         -- mechanical controller electrically fail-open.
         local mechanical =
-            clientMechanical == true
-            or IsMechanicalElectricalException(
+            IsMechanicalElectricalException(
                 name,
                 model,
                 buttonIDs
@@ -1136,6 +1135,15 @@ if SERVER then
             if FailElectricalSystemOpen(train, systemName) then
                 failed[#failed + 1] = systemName
             end
+        end
+
+        -- If the client identified an otherwise unrecognised mechanical
+        -- handle and no real relay/system matched any supplied target, do
+        -- nothing. This keeps custom mechanical controllers from being
+        -- guessed into an electrical failure while still preventing the hint
+        -- from suppressing a validated electrical relay.
+        if #failed == 0 and clientMechanical == true then
+            return {}
         end
 
         return failed
@@ -6500,10 +6508,26 @@ if CLIENT then
 
                     if isstring(button.ID) then
                         local id = button.ID:gsub("^.+:", "")
-                        local base = id:gsub(
-                            "(Toggle|Set|On|Off)$",
-                            ""
-                        )
+                        local base = id
+                        local suffixes = {
+                            "Toggle",
+                            "Set",
+                            "On",
+                            "Off",
+                        }
+
+                        for _, suffix in ipairs(suffixes) do
+                            if string.sub(base, -#suffix) == suffix
+                                and #base > #suffix
+                            then
+                                base = string.sub(
+                                    base,
+                                    1,
+                                    #base - #suffix
+                                )
+                                break
+                            end
+                        end
 
                         if base ~= id then add(base) end
                     end
