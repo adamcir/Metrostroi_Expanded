@@ -846,14 +846,14 @@ This keeps the simulated protection response on the train's own relay timing rat
 
 ### Third rail and flooded battery collapse
 
-When available, `TR.Main750V` is used for contact-rail voltage, but physical connection is determined from the TR collector `ContactState1..4` outputs when the train exposes them. If all collector contact states are open, the car is treated as disconnected even when a stale 750 V value survives for another simulation tick. Third-party trains without those contact states fall back to voltage detection.
+Contact-rail voltage still uses `TR.Main750V` where available, but physical connection is now checked directly at the bogey pickup-shoe positions (`PantLPos` / `PantRPos`) using solid-only traces. This remains meaningful even on maps where Metrostroi's compatibility mode otherwise supplies bogey voltage everywhere. Water contents are excluded so a submerged pickup shoe cannot count the water brush itself as a third-rail contact. If the bogey geometry cannot be probed, the addon falls back to TR contact-state/voltage information.
 
 If the car remains flooded without third-rail supply, a persistent low-voltage flood load accumulates. At electrical realism level `1.00`, a severe/full flood normally reaches the blackout threshold in about 9–12 seconds; partial/shallow flooding takes longer. Lower realism levels extend this time and reduce the other water-fault probabilities, while values above `1.00` deliberately accelerate them beyond the baseline.
 
 The collapse state:
 
 - progressively reduces the simulated battery voltage
-- at blackout, clamps the battery supply close to zero
+- at blackout, forces the battery voltage to zero on every water-damage update (and through the Battery Think wrapper when available)
 - forces common `Electric` low-voltage outputs such as `Aux80V`, `Lights80V`, `Battery80V` and `ControlVoltage` to zero on every Electric Think tick
 - shuts down sensitive electronics
 - forces non-manual low-voltage relay systems open after the blackout threshold
@@ -874,6 +874,10 @@ Network/debug state includes:
 Packed lamp/light outputs can still flicker, extinguish or flash because of wet wiring. Electrical gauges may show false values while supply remains alive. When the low-voltage blackout is active, electrical indications are forced off instead.
 
 The speedometer requires instrument/control power. Its displayed value is forced to zero when instrument power is gone; while wet but powered it may temporarily jump, drop to zero or show an incorrect value.
+
+### Positional damage sounds
+
+Water arcs, relay chatter, door-relay faults, battery-fault clicks and collision impact sounds are played from a world position near the actual fault/impact instead of from the train entity origin. Source's normal 3D sound attenuation therefore makes the sound clearer/louder to a nearby player and progressively quieter with distance. Relay sounds intentionally use lower sound levels than major electrical arcs or hard impacts.
 
 ### Reset and repair
 
