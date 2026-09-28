@@ -1830,7 +1830,6 @@ if SERVER then
         "igla",
         "asnp",
         "upo",
-        "pa",
         "puav",
         "vityaz",
         "inverter",
@@ -2311,6 +2310,9 @@ if SERVER then
             train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
             train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
             train:SetNW2Float("MEX.Damage.WaterHazard", 0)
+            train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
+            train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
+            train:SetNW2Float("MEX.Damage.DrySeconds", 0)
             return
         end
 
@@ -4926,7 +4928,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -4938,6 +4940,9 @@ if SERVER then
             train:GetNW2Float("MEX.StructuralHealth", 1),
             train:GetNW2Float("MEX.Damage.electrical", 0),
             train:GetNW2Float("MEX.Damage.WaterWetness", 0),
+            train:GetNW2Float("MEX.Damage.WaterMoisture", 0),
+            train:GetNW2Float("MEX.Damage.DeepMoisture", 0),
+            train:GetNW2Float("MEX.Damage.DrySeconds", 0),
             train:GetNW2Float("MEX.Damage.WaterVoltage", 0),
             train:GetNW2Float("MEX.Damage.WaterCurrent", 0),
             train:GetNW2Float("MEX.Damage.WaterHazard", 0),
