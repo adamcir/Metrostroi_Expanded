@@ -579,3 +579,24 @@ Replicated archived server ConVars:
 - **Admin Train Fixer**: left click repairs a full wagon, right click the connected consist, Reload repairs every Metrostroi wagon on the map
 - deformation behaviour was not expanded by this change
 
+
+
+### Damage 0.18.0 – persistent per-component wear
+
+- every normal ButtonMap control now accumulates its own operation count and lifetime instead of sharing one global failure timer
+- physical families that are one mechanism in real life are grouped correctly: pneumatic brake handle positions form one brake-valve wear item, parking-brake actions form one mechanism, KV positions form one controller and reverser/key actions form one reverser mechanism
+- ordinary buttons, toggles, disconnects, door controls, valves, brake handles and levers use high randomized service-life thresholds; failure is stochastic per wagon but deterministic during that wagon's life
+- a worn control remains physically attached but its contact/mechanism stops accepting input; keyboard aliases for the same physical mechanism are blocked too
+- hidden relay/contact systems now have individual operation wear. High-current switching accelerates contact wear, and each relay/contactor can fail open independently
+- GRKV/RheostatController keeps its dedicated position-cycle/current-load wear and may mechanically jam after very heavy use
+- headlights and lamps accumulate both switching-cycle wear and actual on-time wear; headlights have a shorter nominal hot-filament lifetime than low-power panel lamps
+- packed indicator lamps accumulate their own switching/on-time wear and can burn out independently
+- battery health is permanent damage state: water, crash shock, deep discharge, sustained high current and overvoltage reduce health; lower health reduces available voltage and effective capacity
+- all per-item failures are repairable without resetting the rest of the wagon:
+  - aim at a button/switch/lever/brake control to repair only that physical control
+  - aim at an individual light/headlight to replace only that lamp
+  - use the electrical-cabinet service hotspot to repair one hidden relay or indicator circuit at a time
+  - battery and GRKV retain their own underframe service hotspots
+  - detached parts, bogeys and couplers still require aiming at that exact part
+- **Admin Train Fixer** is admin-only: left click fully repairs one wagon, right click repairs its consist, Reload repairs every Metrostroi wagon on the map
+- `mex_damage_status` now reports failed control/relay/light/indicator counts and the last wear-related failure
