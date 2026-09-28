@@ -6727,9 +6727,17 @@ if SERVER then
             pcall(part.Decouple, part)
         end
 
-        SetRunningGearDamageFlag(
-            train,
-            kind,
+        local damageSuffix =
+            kind == "front_bogey"
+                and "FrontBogeyDetached"
+            or kind == "rear_bogey"
+                and "RearBogeyDetached"
+            or kind == "front_coupler"
+                and "FrontCouplerDetached"
+            or "RearCouplerDetached"
+
+        train:SetNW2Bool(
+            "MEX.Damage." .. damageSuffix,
             true
         )
 
