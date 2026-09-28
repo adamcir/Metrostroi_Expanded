@@ -1339,7 +1339,7 @@ if SERVER then
     -- Water + live electrical equipment
     ---------------------------------------------------------------------------
 
-    local WATER_SCAN_INTERVAL = 0.12
+    local WATER_SCAN_INTERVAL = 0.05
     local WATER_FAILURE_BASE_EXPOSURE = 0.34
     local WATER_PLAYER_RADIUS = 220
     local WATER_SHOCK_COOLDOWN = 0.32
@@ -5689,6 +5689,7 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.RearEquipment", false)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
 
+        RestoreElectricalFailures(train)
         RestoreTrippedProtection(train)
         RestoreSensitiveWaterSystems(train)
         RestoreWaterRelayChatter(train)
@@ -6958,7 +6959,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V | battery flood %.2f | blackout %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -6975,6 +6976,12 @@ if SERVER then
             train:GetNW2Float("MEX.Damage.DrySeconds", 0),
             train:GetNW2Float("MEX.Damage.WaterVoltage", 0),
             train:GetNW2Float("MEX.Damage.WaterCurrent", 0),
+            train:GetNW2Float("MEX.Damage.ThirdRailVoltage", 0),
+            train:GetNW2Float("MEX.Damage.BatteryFloodLevel", 0),
+            train:GetNW2Bool(
+                "MEX.Damage.LowVoltageBlackout",
+                false
+            ) and "YES" or "NO",
             train:GetNW2Float("MEX.Damage.WaterHazard", 0),
             train:GetNW2Float("MEX.Damage.LastImpactKmh", 0),
             istable(train.MEXDamageDetachedServer)
