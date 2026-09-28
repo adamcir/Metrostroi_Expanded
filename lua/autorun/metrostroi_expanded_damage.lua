@@ -3433,15 +3433,18 @@ if SERVER then
         end
 
         local lower = string.lower(systemName)
+        local relayType = tostring(system.relay_type or "")
         local related =
-            string.find(lower, "ars", 1, true) ~= nil
+            relayType == "ARS"
+            or string.find(lower, "ars", 1, true) ~= nil
             or string.find(lower, "als", 1, true) ~= nil
 
         if not related then return false end
 
         -- A panel ARS/ALS selector is a physical Switch and must not visibly
-        -- move by itself. Hidden relays/contactors and ARS relay types may.
-        return tostring(system.relay_type or "") ~= "Switch"
+        -- move by itself. Hidden relays/contactors and native ARS-type relays
+        -- may chatter electrically.
+        return relayType ~= "Switch"
             and not IsManualOperatorElectricalSystem(systemName, system)
     end
 
