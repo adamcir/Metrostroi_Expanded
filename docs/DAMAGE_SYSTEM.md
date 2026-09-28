@@ -805,84 +805,74 @@ After leaving the water, glitches may continue while moisture remains, but their
 - `chatter` – the internal relay currently receiving a chatter pulse
 
 
-## Door, lighting, speedometer and battery water faults
+## Door, relay, protection and battery water faults
 
-Damage System 0.16.0 extends transient moisture faults into several train subsystems.
+The current water-fault model separates **physical operator position** from the electrical circuit behind that operator.
 
-### Door relays
+### Door relays and contactors
 
-Door-control relay families can receive short false electrical pulses while the train is wet and energized.
+Water does not invoke the driver's `ButtonEvent` and no longer toggles visible door-control `Relay "Switch"` systems. Physical controls such as `KDL`, `KDP`, `VDL`, `VUD/VUD1/VUD2`, `DoorLeft`, `DoorRight` and `DoorClose` therefore remain visually where the player left them.
 
-Known classic/modern targets include:
+Instead, moisture can bridge downstream door hardware that actually drives the door circuit:
 
-- `KDL`
-- `KDLR`
-- `KDP`
-- `KDPK`
-- `KDLK`
-- `KDPH`
-- `VDL`
-- `VUD`, `VUD1`, `VUD2`
-- `DoorLeft`
-- `DoorRight`
-- `DoorLeft2`
-- `DoorRight2`
-- `DoorClose`
-- emergency door-close/open relay families
+- `VDOL` – left door distributor solenoid
+- `VDOP` – right door distributor solenoid
+- `VDZ` – close-door distributor solenoid
+- `U1/U2/U3` on compatible 81-718-style pneumatic door systems
+- compatible hidden `DoorLeftRelay`, `DoorRightRelay`, `DoorCloseRelay`
+- compatible hidden door contactor variants
 
-The fault is injected at the relay/contact level rather than through `ButtonEvent`, so the driver's physical switch does not need to be pressed for the circuit to energize. The relay is restored to its previous target after a short moisture-dependent pulse.
+Those relays/solenoids can briefly energize or drop out and are restored after the moisture-dependent pulse. Thus the electrical/pneumatic door circuit may react while the dashboard button itself does not move.
 
-### Wet light wiring
+### ARS / ALS water faults
 
-Packed lamp/light/lighting outputs participate in transient water corruption. This models wet wiring or insulation briefly bridging lighting conductors.
+ARS/ALS are handled at two levels:
 
-A lamp may therefore:
+- sensitive ARS/ALS/BARS electronic modules can be disabled by moisture and stop producing useful outputs
+- hidden relay/contact hardware whose name is ARS/ALS-related, or whose native Metrostroi relay type is `ARS`, can participate in transient wet relay chatter
 
-- flicker
-- extinguish despite its normal command
-- flash on despite its normal command
-- show unstable brightness when represented by a packed ratio
+A visible ARS/ALS selector modeled as `Relay "Switch"` is treated as a manual operator and is not moved by water.
 
-This visual wiring fault does not require the physical light switch to move.
+### Automatic breaker timing
 
-### Speedometer power and failure
+For significant energized flooding, all exposed closed automatic circuit breakers are tripped through their normal Metrostroi mechanism.
 
-Many Metrostroi entities continuously publish the physical train speed even with cab power off. Metrostroi Expanded now gates the displayed `Speed`/speedometer packed ratio by the detected low-voltage/instrument power state.
+- `VA21-29` breakers use the native `Check = -1` trip path
+- other supported A/AV/SF/QF/CB breaker families receive their normal open/set-off inputs
+- the water electrical scan and breaker re-trip cadence is 0.05 seconds
+- the generic Metrostroi relay model also uses a 0.05 second default opening time
 
-With no instrument/control supply the displayed speed is forced to zero.
+This keeps the simulated protection response on the train's own relay timing rather than adding a slow artificial delay. Exact real-world breaker timing varies by breaker design, so the addon follows the timing represented by the Metrostroi system being simulated.
 
-When wet electrical glitches are active and the instrument supply still exists, the displayed speed may temporarily:
+### Third rail and flooded battery collapse
 
-- drop to zero
-- jump to a random value
-- overshoot/undershoot the real value
-- flicker before returning to normal
+When available, `TR.Main750V` is treated as the authoritative contact-rail voltage. A value of zero means the car is not currently receiving third-rail supply even if a downstream electrical field has not yet updated.
 
-The actual physical train speed is not changed by this indication fault.
+If the car remains flooded without third-rail supply, a persistent low-voltage flood load accumulates. The battery/80 V network then collapses over several seconds instead of powering the car indefinitely.
 
-### Battery faults
+The collapse state:
 
-The Battery system receives a temporary Think wrapper while water-fault simulation is active. A wet battery/control-bus event can cause a short voltage factor below its normal value.
+- progressively reduces the simulated battery voltage
+- shuts down sensitive electronics
+- forces non-manual low-voltage relay systems open after the blackout threshold
+- forces electrical instruments, speed indication and electrical packed indicators dark
+- does **not** physically reposition manual switches, breaker handles, VB, door buttons, reversers or other mechanical operators
 
-Because the real simulated `Battery.Voltage` is modified during the short event, sufficiently deep sags can affect actual train control logic that depends on battery voltage.
+If third-rail supply returns, the simulated collapse can recover gradually, while ordinary moisture damage still follows its own drying/recovery rules.
 
-Battery meter indications may additionally be corrupted independently by the general false-gauge system.
+Network/debug state includes:
 
-### Faster protection/failure progression
+- `MEX.Damage.ThirdRailVoltage`
+- `MEX.Damage.BatteryFloodLevel`
+- `MEX.Damage.LowVoltageBlackout`
 
-0.16.0 intentionally makes serious immersion faults progress faster:
+### Wet light wiring and instruments
 
-- initial water-fault exposure threshold reduced
-- exposure growth increased under live voltage/current
-- automatic-breaker re-trip interval reduced
-- time between protection operation and the next fault stage reduced
+Packed lamp/light outputs can still flicker, extinguish or flash because of wet wiring. Electrical gauges may show false values while supply remains alive. When the low-voltage blackout is active, electrical indications are forced off instead.
 
-The exact result still depends on which electrical systems and protections the current train addon exposes.
+The speedometer requires instrument/control power. Its displayed value is forced to zero when instrument power is gone; while wet but powered it may temporarily jump, drop to zero or show an incorrect value.
 
-### Debugging
+### Reset and repair
 
-`mex_damage_status` additionally reports:
+`mex_damage_reset` / Train Fixer restores temporary flooded relay failures, sensitive-system wrappers, breaker state, battery flood state, visual glitch hooks and blackout state.
 
-- `doorfault` – door relay currently receiving a wet false pulse
-- `batt` – active battery voltage multiplier (1.00 = normal)
-- `instruments` – whether the cab/instrument supply is currently considered ON/OFF
