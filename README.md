@@ -1,6 +1,6 @@
-# Metrostroi Extended
+# Metrostroi Expanded
 
-**Metrostroi Extended** is an unofficial open-source expansion for the Garry's Mod addon **Metrostroi Subway Simulator**.
+**Metrostroi Expanded** is an unofficial open-source expansion for the Garry's Mod addon **Metrostroi Subway Simulator**.
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
@@ -45,7 +45,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 Current damage-system module version: **0.17.0**
 
-Metrostroi Extended now includes a first simple crash-damage system for all `gmod_subway_*` trains.
+Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
 It currently provides:
 
@@ -169,13 +169,13 @@ If the old standalone `metrostroi-passenger-seats` addon is present, the install
 
 ## Dependency
 
-Metrostroi Extended requires **Metrostroi Subway Simulator** to be installed separately.
+Metrostroi Expanded requires **Metrostroi Subway Simulator** to be installed separately.
 
 Original Metrostroi code, train models, textures and other assets are not redistributed by this repository and remain under their respective licenses.
 
 ## License
 
-Metrostroi Extended's own source code is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
+Metrostroi Expanded's own source code is licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
 
 
 ### Damage 0.5.2 fixes
@@ -411,11 +411,11 @@ Controls now follow one strict rule:
 
 ### Damage 0.10.3 – Utilities damage settings
 
-- added **Utilities → Metrostroi Extended → Damage**
+- added **Utilities → Metrostroi Expanded → Damage**
 - added a server-wide **Enable damage** checkbox
 - added a server-wide **Enable deformation** checkbox
 - deformation can only be enabled while damage itself is enabled
-- disabling damage also disables deformation and resets current Metrostroi Extended damage/debris state on spawned trains
+- disabling damage also disables deformation and resets current Metrostroi Expanded damage/debris state on spawned trains
 - damage disabled: collisions, weapons, physgun impacts and detach requests no longer feed the damage system
 - deformation disabled while damage remains enabled: subsystem failures, detached controls and damage state remain active, but carbody/interior visual deformation is cleared
 - settings are archived replicated server ConVars: `mex_damage_enabled` and `mex_damage_deformation_enabled`
@@ -462,7 +462,7 @@ The player-shock calculation is a gameplay model and is not intended as real-wor
 - already blown fuses are removed from later protection selection so a continuing fault can escalate to another protection stage or equipment damage
 - water arcing should stop naturally when the real Metrostroi electrical state loses voltage after protection operates
 - `mex_damage_status` now reports the last protection device that operated
-- added Toolgun **Metrostroi Extended → Train Fixer**
+- added Toolgun **Metrostroi Expanded → Train Fixer**
 - Train Fixer left click repairs one wagon
 - Train Fixer right click repairs the complete `WagonList` consist
 - repair restores deformation, detached parts, electrical failed-open states, blown fuses, tripped protection and water-exposure state
@@ -523,7 +523,7 @@ The protection model follows the actual systems exposed by each Metrostroi train
 
 The damage system is split into physical/component damage, optional visual deformation and electrical damage.
 
-**Utilities → Metrostroi Extended** now contains two pages:
+**Utilities → Metrostroi Expanded** now contains two pages:
 
 - **Physical Damage & Deformation**
   - `Enable physical damage`
