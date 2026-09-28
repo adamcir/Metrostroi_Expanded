@@ -381,13 +381,16 @@ if CLIENT then
             string.format(
                 "Battery: %.0f%% %s",
                 batteryHealth * 100,
-                train:GetNW2Bool(
-                    "MEX.Damage.BatteryFailed",
-                    false
-                ) or train:GetNW2Bool(
-                    "MEX.Damage.BatteryWaterFailed",
-                    false
-                ) and "FAILED" or ""
+                (
+                    train:GetNW2Bool(
+                        "MEX.Damage.BatteryFailed",
+                        false
+                    )
+                    or train:GetNW2Bool(
+                        "MEX.Damage.BatteryWaterFailed",
+                        false
+                    )
+                ) and "FAILED" or "OK"
             ),
             string.format(
                 "GRKV wear: %.0f%% %s",
