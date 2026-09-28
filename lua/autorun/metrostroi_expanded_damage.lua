@@ -7607,7 +7607,6 @@ if SERVER then
                 )
             end
         end
-        end
     end
 
     local function FindTrainPlayers(train)
