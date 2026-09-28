@@ -1,6 +1,6 @@
 # Metrostroi Expanded – Crash / Deformation Model
 
-Damage System version: **0.6.3**
+Damage System version: **0.17.0**
 
 This document describes the reasoning behind the v0.4 rewrite.
 
@@ -502,21 +502,67 @@ Interior fixtures are intentionally retained until much deeper crush energy so t
 
 ## Utilities settings
 
-Damage System 0.10.3 adds server-wide controls under **Utilities → Metrostroi Expanded → Damage**.
+Damage System 0.17.0 separates damage into three independent server-wide subsystems under **Utilities → Metrostroi Expanded**.
 
-- **Enable damage** controls the complete Metrostroi Expanded damage pipeline.
-- **Enable deformation** controls only visual carbody/interior deformation and is available only while damage is enabled.
+### Poškození
 
-When damage is disabled, deformation is automatically disabled and existing Metrostroi Expanded damage/debris state is reset. New collisions, weapon hits, physgun impacts and detach requests are ignored by the damage subsystem.
+Controls physical/component damage:
 
-When only deformation is disabled, logical damage and component failures remain active. Detached controls remain detached/disabled, while body, cabin and interior deformation is visually restored.
+- **Povolit fyzické poškození**
+- **Intenzita poškození** – 0.10 to 3.00, default 1.00
 
-The backing replicated archived server ConVars are:
+This subsystem handles local mounting failure and physical breakaway of doors, switches, controls, glass, lamps and other mounted ClientProps.
+
+It does **not** require visual deformation. Collision impacts are sent through the component-impact path even when deformation is disabled. If no deformation state exists, the component is detached from its normal authored/base transform.
+
+Backing ConVars:
 
 - `mex_damage_enabled`
-- `mex_damage_deformation_enabled`
+- `mex_damage_physical_scale`
 
-Only server administrators can change the Utilities controls.
+### Deformace (ALPHA - nedoporučované)
+
+Controls experimental carbody/interior deformation:
+
+- **Povolit deformaci**
+- **Intenzita deformace** – 0.10 to 3.00, default 1.00
+
+The Utilities page is explicitly labelled **ALPHA - nedoporučované**. On a fresh configuration deformation defaults to disabled.
+
+Deformation uses a separate state namespace (`MEX.Deformation.*`) plus `MEX.Crush.*`, so physical-damage intensity no longer implicitly changes body-crush intensity and vice versa.
+
+Disabling deformation clears/suppresses the visual deformation path but leaves physical component breakaway available.
+
+Backing ConVars:
+
+- `mex_damage_deformation_enabled`
+- `mex_damage_deformation_scale`
+
+### Elektrické poškození
+
+Controls electrical/environmental failures:
+
+- **Povolit elektrické poškození**
+- **Intenzita elektrických poruch** – 0.10 to 3.00, default 1.00
+
+This subsystem includes:
+
+- water/flooding electrical faults
+- relay chatter and false contacts
+- breaker/fuse behaviour
+- battery voltage glitches
+- electrical lamp/gauge/speedometer indication faults
+- electrical failed-open consequences of detached switches
+- electric shock hazards in conductive water
+
+Backing ConVars:
+
+- `mex_damage_electrical_enabled`
+- `mex_damage_electrical_scale`
+
+Disabling the electrical subsystem restores its temporary wrappers/failures so it cannot continue changing train electrical systems while disabled.
+
+All Utilities controls are server-wide and editable only by server administrators. `mex_damage_status` reports the current ON/OFF state and intensity of all three subsystems.
 
 
 ## Electrical switch failures
