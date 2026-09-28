@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.12.0**
+Current damage-system module version: **0.13.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -450,3 +450,21 @@ Controls now follow one strict rule:
 - `mex_damage_reset` clears accumulated water exposure together with the other damage/electrical failure state
 
 The player-shock calculation is a gameplay model and is not intended as real-world electrical-safety guidance.
+
+
+### Damage 0.13.0 – protection-first electrical faults + Train Fixer
+
+- flooded live electrical equipment now attempts to operate the train's real protective devices before permanently destroying arbitrary relays
+- classic Metrostroi `VA21-29` automatic breakers use their native `Check = -1` trip path, including Metrostroi's normal breaker-off behaviour/sound
+- older cars with YAP-57 fuse equipment can blow `PNB_1250_*` main-circuit fuses or the `PP_28` auxiliary fuse
+- a tripped breaker is not treated as a destroyed switch: it may be reset, but an unresolved live-water fault can trip it again
+- a blown fuse stays failed-open until the train is repaired/reset
+- already blown fuses are removed from later protection selection so a continuing fault can escalate to another protection stage or equipment damage
+- water arcing should stop naturally when the real Metrostroi electrical state loses voltage after protection operates
+- `mex_damage_status` now reports the last protection device that operated
+- added Toolgun **Metrostroi Expanded → Train Fixer**
+- Train Fixer left click repairs one wagon
+- Train Fixer right click repairs the complete `WagonList` consist
+- repair restores deformation, detached parts, electrical failed-open states, blown fuses, tripped protection and water-exposure state
+
+The protection model follows the actual systems exposed by each Metrostroi train. Exact real-world behaviour still depends on how completely that train addon models its breakers, fuses, wiring and protection logic.
