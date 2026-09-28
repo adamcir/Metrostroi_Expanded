@@ -599,6 +599,7 @@ if SERVER then
     util.AddNetworkString("MEX.DamageImpact")
     util.AddNetworkString("MEX.DetachRequest")
     util.AddNetworkString("MEX.ComponentDetached")
+    util.AddNetworkString("MEX.ComponentRepaired")
     util.AddNetworkString("MEX.DetachReset")
     util.AddNetworkString("MEX.ComponentImpact")
 
@@ -3493,6 +3494,21 @@ if SERVER then
                     0.015,
                     1
                 )
+                local batteryHealth = math.Clamp(
+                    train:GetNW2Float(
+                        "MEX.Damage.BatteryHealth",
+                        1
+                    ),
+                    0,
+                    1
+                )
+
+                factor = factor
+                    * Lerp(
+                        batteryHealth,
+                        0.62,
+                        1.0
+                    )
 
                 if (train.MEXDamageBatteryGlitchUntil or 0)
                     > CurTime()
@@ -3515,6 +3531,9 @@ if SERVER then
                         false
                     ) or train:GetNW2Bool(
                         "MEX.Damage.BatteryWaterFailed",
+                        false
+                    ) or train:GetNW2Bool(
+                        "MEX.Damage.BatteryFailed",
                         false
                     ) then
                         self.Voltage = 0
@@ -3664,6 +3683,18 @@ if SERVER then
 
         local hasThirdRail =
             thirdRailConnected == true
+
+        if wetness > 0.05 then
+            ApplyBatteryDamage(
+                train,
+                dT
+                    * wetness
+                    * 0.0025
+                    * MEXD.GetElectricalDamageScale(),
+                "water"
+            )
+        end
+
         local batteryWaterFailed =
             train:GetNW2Bool(
                 "MEX.Damage.BatteryWaterFailed",
@@ -3725,6 +3756,17 @@ if SERVER then
         end
 
         if batteryWaterFailed then
+            if not train:GetNW2Bool(
+                "MEX.Damage.BatteryWaterFailed",
+                false
+            ) then
+                ApplyBatteryDamage(
+                    train,
+                    0.52,
+                    "water short"
+                )
+            end
+
             train:SetNW2Bool(
                 "MEX.Damage.BatteryWaterFailed",
                 true
@@ -6685,17 +6727,9 @@ if SERVER then
             pcall(part.Decouple, part)
         end
 
-        train:SetNW2Bool(
-            "MEX.Damage."
-                .. (
-                    kind == "front_bogey"
-                        and "FrontBogeyDetached"
-                    or kind == "rear_bogey"
-                        and "RearBogeyDetached"
-                    or kind == "front_coupler"
-                        and "FrontCouplerDetached"
-                    or "RearCouplerDetached"
-                ),
+        SetRunningGearDamageFlag(
+            train,
+            kind,
             true
         )
 
@@ -6709,6 +6743,159 @@ if SERVER then
         )
 
         return true
+    end
+
+    local function SetRunningGearDamageFlag(
+        train,
+        kind,
+        value
+    )
+        local suffix =
+            kind == "front_bogey"
+                and "FrontBogeyDetached"
+            or kind == "rear_bogey"
+                and "RearBogeyDetached"
+            or kind == "front_coupler"
+                and "FrontCouplerDetached"
+            or "RearCouplerDetached"
+
+        train:SetNW2Bool(
+            "MEX.Damage." .. suffix,
+            value == true
+        )
+    end
+
+    local function ReattachTrainRunningGear(
+        train,
+        part,
+        kind
+    )
+        if not IsSubwayTrain(train)
+            or not IsValid(part)
+        then
+            return false
+        end
+
+        local isBogey =
+            kind == "front_bogey"
+            or kind == "rear_bogey"
+
+        local spawnPos =
+            isvector(part.SpawnPos)
+                and part.SpawnPos
+                or train:WorldToLocal(part:GetPos())
+        local spawnAng =
+            isangle(part.SpawnAng)
+                and part.SpawnAng
+                or angle_zero
+
+        if part.SetParent and part:GetParent() == train then
+            part:SetParent(nil)
+        end
+
+        part:SetPos(train:LocalToWorld(spawnPos))
+        part:SetAngles(train:GetAngles() + spawnAng)
+
+        local phys = part:GetPhysicsObject()
+        if IsValid(phys) then
+            phys:SetVelocity(train:GetVelocity())
+            phys:AddAngleVelocity(
+                -phys:GetAngleVelocity()
+            )
+            phys:Wake()
+        end
+
+        if isBogey then
+            constraint.Axis(
+                part,
+                train,
+                0,
+                0,
+                Vector(0, 0, 0),
+                Vector(0, 0, 0),
+                0,
+                0,
+                0,
+                1,
+                Vector(0, 0, 1),
+                false
+            )
+            part:SetNW2Bool(
+                "MEX.Damage.Detached",
+                false
+            )
+        else
+            constraint.AdvBallsocket(
+                train,
+                part,
+                0,
+                0,
+                spawnPos,
+                Vector(0, 0, 0),
+                1,
+                1,
+                -2,
+                -2,
+                -15,
+                2,
+                2,
+                15,
+                0.1,
+                0.1,
+                1,
+                0,
+                1
+            )
+        end
+
+        SetRunningGearDamageFlag(
+            train,
+            kind,
+            false
+        )
+
+        return true
+    end
+
+    local function RepairAllRunningGear(train)
+        if not IsSubwayTrain(train) then return end
+
+        local parts = {
+            {
+                ent = train.FrontBogey,
+                kind = "front_bogey",
+                flag = "FrontBogeyDetached",
+            },
+            {
+                ent = train.RearBogey,
+                kind = "rear_bogey",
+                flag = "RearBogeyDetached",
+            },
+            {
+                ent = train.FrontCouple,
+                kind = "front_coupler",
+                flag = "FrontCouplerDetached",
+            },
+            {
+                ent = train.RearCouple,
+                kind = "rear_coupler",
+                flag = "RearCouplerDetached",
+            },
+        }
+
+        for _, item in ipairs(parts) do
+            if train:GetNW2Bool(
+                "MEX.Damage." .. item.flag,
+                false
+            ) and IsValid(item.ent)
+            then
+                ReattachTrainRunningGear(
+                    train,
+                    item.ent,
+                    item.kind
+                )
+            end
+        end
     end
 
     local function ApplySevereCrashConsequences(
@@ -6998,6 +7185,15 @@ if SERVER then
                     ZoneOutwardNormal(ent, zone),
                     physgunImpact and "physgun" or "physics"
                 )
+
+                ApplySevereCrashConsequences(
+                    ent,
+                    zone,
+                    impactKmh,
+                    severity,
+                    impactVelocity,
+                    hitPos
+                )
             end)
         end
 
@@ -7022,6 +7218,8 @@ if SERVER then
     function MEXD.Reset(train)
         if not IsValid(train) then return end
 
+        RepairAllRunningGear(train)
+        RestoreGRKVWearFailure(train)
         RemoveDetachedServerComponents(train, train.MEXDamageInitialized == true)
 
         for zone in pairs(ZONES) do
@@ -7057,7 +7255,24 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.DoorsRight", false)
         train:SetNW2Bool("MEX.Damage.FrontEquipment", false)
         train:SetNW2Bool("MEX.Damage.RearEquipment", false)
+        train:SetNW2Bool("MEX.Damage.FrontBogeyDetached", false)
+        train:SetNW2Bool("MEX.Damage.RearBogeyDetached", false)
+        train:SetNW2Bool("MEX.Damage.FrontCouplerDetached", false)
+        train:SetNW2Bool("MEX.Damage.RearCouplerDetached", false)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
+        train:SetNW2Float("MEX.Damage.BatteryHealth", 1)
+        train:SetNW2Bool("MEX.Damage.BatteryFailed", false)
+        train:SetNW2String("MEX.Damage.BatteryLastCause", "")
+        train:SetNW2Float("MEX.Damage.GRKVWear", 0)
+        train:SetNW2Bool("MEX.Damage.GRKVFailed", false)
+        train:SetNW2Float("MEX.Damage.LegacyWear", 0)
+        train:SetNW2String("MEX.Damage.WearFailure", "")
+        train.MEXDamageGRKVWear = 0
+        train.MEXDamageGRKVLastPosition = nil
+        train.MEXDamageGRKVFailureThreshold = nil
+        train.MEXDamageLegacyWear = 0
+        train.MEXDamageLegacyRelaySnapshot = nil
+        train.MEXDamageLegacyFailureThreshold = nil
 
         RestoreElectricalFailures(train)
         RestoreTrippedProtection(train)
@@ -7856,6 +8071,8 @@ if SERVER then
             debrisList = debrisList,
             buttons = validButtons,
             electricalFailures = electricalFailures,
+            zone = zone,
+            model = model,
         }
 
         RebuildDetachedButtonGuard(train)
@@ -8089,6 +8306,37 @@ if SERVER then
         end
     end)
 
+    local nextWearScan = 0
+    local lastWearScan = CurTime()
+
+    hook.Add(
+        "Think",
+        "MEX.Damage.PersistentWear",
+        function()
+            local now = CurTime()
+            if now < nextWearScan then return end
+
+            local dT = math.Clamp(
+                now - lastWearScan,
+                0.05,
+                0.50
+            )
+
+            lastWearScan = now
+            nextWearScan = now + 0.20
+
+            for _, train in ipairs(ents.GetAll()) do
+                if IsSubwayTrain(train) then
+                    InitializeTrainDamage(train)
+                    UpdateMechanicalElectricalWear(
+                        train,
+                        dT
+                    )
+                end
+            end
+        end
+    )
+
     local nextVelocityScan = 0
 
     hook.Add("Think", "MEX.Damage.VelocityCrashDetection", function()
@@ -8186,6 +8434,15 @@ if SERVER then
                 worldImpact,
                 ZoneOutwardNormal(train, zone),
                 "velocity"
+            )
+
+            ApplySevereCrashConsequences(
+                train,
+                zone,
+                deltaKmh,
+                amount,
+                deltaVelocity,
+                worldImpact
             )
         end
     end)
