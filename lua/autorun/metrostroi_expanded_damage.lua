@@ -3415,6 +3415,7 @@ if SERVER then
         train.MEXDamageSurfaceArcUntil = nil
         train.MEXDamageSurfaceArcStrength = nil
         train.MEXDamageSurfaceReboundUsed = nil
+        train.MEXDamagePostSurfaceBatteryStress = nil
         train.MEXDamageLastWetArcLocal = nil
         train:SetNW2Bool("MEX.Damage.BatteryWaterFailed", false)
         train:SetNW2Bool("MEX.Damage.RecentlySurfaced", false)
@@ -3661,12 +3662,33 @@ if SERVER then
             level = math.max(0, level - dT * 0.006)
         end
 
-        if postSurfaceActive
-            and train.MEXDamageSurfaceReboundUsed
-            and not hasThirdRail
-            and level >= WATER_BATTERY_BLACKOUT_LEVEL
-        then
-            batteryWaterFailed = true
+        if postSurfaceActive and not batteryWaterFailed then
+            if train.MEXDamageSurfaceReboundUsed
+                and not hasThirdRail
+                and level >= WATER_BATTERY_BLACKOUT_LEVEL
+            then
+                batteryWaterFailed = true
+            elseif hasThirdRail
+                and wetness >= 0.08
+            then
+                -- Re-energizing still-wet equipment from the third rail can
+                -- cook the battery/charging branch even though the converter
+                -- may keep the rest of the train alive.
+                train.MEXDamagePostSurfaceBatteryStress =
+                    NumberOrZero(
+                        train.MEXDamagePostSurfaceBatteryStress
+                    )
+                    + dT
+                    * (0.08 + wetness * 0.18)
+                    * MEXD.GetElectricalDamageScale()
+
+                if train.MEXDamagePostSurfaceBatteryStress >= 1 then
+                    batteryWaterFailed = true
+                end
+            end
+        end
+
+        if batteryWaterFailed then
             train:SetNW2Bool(
                 "MEX.Damage.BatteryWaterFailed",
                 true
@@ -4565,21 +4587,75 @@ if SERVER then
         local thirdRailVoltage = GetThirdRailVoltage(train)
         local thirdRailConnected =
             HasThirdRailContact(train, thirdRailVoltage)
+
+        local surfaceMoisture, deepMoisture, drySeconds =
+            UpdateWaterMoistureState(
+                train,
+                wetness,
+                dT
+            )
+
+        local postSurfaceWetness,
+            postSurfaceActive,
+            faultSparkPos =
+            UpdatePostSurfaceWaterState(
+                train,
+                wetness,
+                surfaceMoisture,
+                thirdRailConnected,
+                sparkPos
+            )
+
+        local electricalWetness = math.Clamp(
+            math.max(
+                wetness,
+                postSurfaceWetness
+            ),
+            0,
+            1
+        )
+
         local voltage, current, hv, lv =
             GetTrainElectricalWaterState(train)
 
         UpdateFloodedBatteryCollapse(
             train,
             dT,
-            wetness,
-            thirdRailConnected
+            electricalWetness,
+            thirdRailConnected,
+            postSurfaceActive
         )
 
-        -- Battery collapse changes the low-voltage state after Battery:Think.
-        -- Refresh the electrical snapshot so the rest of this pass sees the
-        -- reduced supply as soon as possible.
+        -- Refresh after battery processing. On compatibility maps Metrostroi
+        -- may still publish 750 V away from the real contact rail, so discard
+        -- the HV side unless the pickup-shoe probe confirmed contact.
         voltage, current, hv, lv =
             GetTrainElectricalWaterState(train)
+
+        if not thirdRailConnected then
+            hv = 0
+            voltage = lv
+
+            if lv >= 18 then
+                current = math.max(
+                    8 + lv * 0.22,
+                    math.min(current, 80)
+                )
+            else
+                current = 0
+            end
+        end
+
+        if train:GetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            false
+        ) and not thirdRailConnected
+        then
+            voltage = 0
+            current = 0
+            hv = 0
+            lv = 0
+        end
 
         train:SetNW2Float(
             "MEX.Damage.ThirdRailVoltage",
@@ -4603,7 +4679,7 @@ if SERVER then
             current
         )
 
-        local powered = voltage >= 24
+        local powered = voltage >= 18 and current > 0.01
         local voltageFactor = math.Clamp(
             voltage / 750,
             0,
@@ -4617,9 +4693,9 @@ if SERVER then
         local electricalScale = MEXD.GetElectricalDamageScale()
 
         local hazard = math.Clamp(
-            wetness
+            electricalWetness
                 * electricalScale
-                * (powered and 0.35 or 0.08)
+                * (powered and 0.35 or 0)
                 * (0.25 + voltageFactor * 0.75)
                 * (0.30 + currentFactor * 0.70),
             0,
@@ -4631,13 +4707,6 @@ if SERVER then
             hazard
         )
 
-        local surfaceMoisture, deepMoisture, drySeconds =
-            UpdateWaterMoistureState(
-                train,
-                wetness,
-                dT
-            )
-
         RecoverDriedWaterFailures(
             train,
             surfaceMoisture,
@@ -4647,23 +4716,24 @@ if SERVER then
 
         UpdateWaterTransientGlitches(
             train,
-            wetness,
+            electricalWetness,
             surfaceMoisture,
             deepMoisture,
             voltage,
             current,
-            sparkPos
+            faultSparkPos
         )
 
         local exposure = NumberOrZero(
             train.MEXDamageWaterExposure
         )
 
-        if wetness > 0.015 then
-            -- Electronics can still be ruined by immersion while unpowered;
-            -- live HV accelerates the failure and adds arcing/shock hazards.
+        if electricalWetness > 0.015 then
+            -- Immersion and retained surface water both continue stressing
+            -- electrical insulation. No voltage means no arcing, but moisture
+            -- may still contribute to later equipment failure.
             local rate =
-                wetness
+                electricalWetness
                 * (
                     0.30
                     + math.Clamp(voltage / 750, 0, 1) * 1.25
@@ -4684,7 +4754,7 @@ if SERVER then
             math.Clamp(exposure, 0, 10)
         )
 
-        if wetness > 0.02 then
+        if electricalWetness > 0.02 then
             local electrical = train:GetNW2Float(
                 "MEX.Damage.electrical",
                 0
@@ -4711,17 +4781,17 @@ if SERVER then
             0.60
         )
 
-        if wetness >= breakerWetnessThreshold and powered then
+        if electricalWetness >= breakerWetnessThreshold and powered then
             TripAllFloodedCircuitBreakers(
                 train,
-                wetness,
+                electricalWetness,
                 voltage,
                 current,
-                sparkPos
+                faultSparkPos
             )
         end
 
-        if wetness > 0.02 and powered then
+        if electricalWetness > 0.02 and powered then
             local now = CurTime()
             local nextArc =
                 train.MEXDamageNextWaterArc or 0
@@ -4741,7 +4811,7 @@ if SERVER then
                 then
                     EmitWaterElectricalArc(
                         train,
-                        sparkPos,
+                        faultSparkPos,
                         voltage,
                         current,
                         hv >= 200
@@ -4754,7 +4824,7 @@ if SERVER then
             train.MEXDamageWaterNextFailureExposure
             or WATER_FAILURE_BASE_EXPOSURE
 
-        if wetness > 0.04
+        if electricalWetness > 0.04
             and exposure
                 >= train.MEXDamageWaterNextFailureExposure
         then
@@ -4764,7 +4834,7 @@ if SERVER then
                 protected = OperateWaterProtection(
                     train,
                     hv >= 200,
-                    sparkPos,
+                    faultSparkPos,
                     voltage,
                     current
                 )
@@ -4778,10 +4848,10 @@ if SERVER then
                     exposure + math.Rand(0.22, 0.55)
             elseif FailRandomWaterElectricalSystem(
                 train,
-                sparkPos,
+                faultSparkPos,
                 voltage,
                 current,
-                wetness
+                electricalWetness
             ) then
                 train.MEXDamageWaterNextFailureExposure =
                     exposure + math.Rand(0.26, 0.62)
@@ -4795,10 +4865,10 @@ if SERVER then
         if powered then
             RetripWaterProtectionIfNeeded(
                 train,
-                wetness,
+                electricalWetness,
                 voltage,
                 current,
-                sparkPos
+                faultSparkPos
             )
         end
 
