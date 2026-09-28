@@ -1,4 +1,4 @@
-# Metrostroi Extended – Crash / Deformation Model
+# Metrostroi Expanded – Crash / Deformation Model
 
 Damage System version: **0.17.0**
 
@@ -502,7 +502,7 @@ Interior fixtures are intentionally retained until much deeper crush energy so t
 
 ## Utilities settings
 
-Damage settings are available under **Utilities → Metrostroi Extended**.
+Damage settings are available under **Utilities → Metrostroi Expanded**.
 
 ### Physical Damage & Deformation
 
@@ -663,7 +663,7 @@ The simulation deliberately relies on the protection and electrical systems actu
 
 ## Train Fixer Toolgun
 
-Toolgun category: **Metrostroi Extended → Train Fixer**
+Toolgun category: **Metrostroi Expanded → Train Fixer**
 
 - **Left click** repairs the selected wagon.
 - **Right click** repairs all wagons in the selected train's `WagonList`.
@@ -847,7 +847,7 @@ This visual wiring fault does not require the physical light switch to move.
 
 ### Speedometer power and failure
 
-Many Metrostroi entities continuously publish the physical train speed even with cab power off. Metrostroi Extended now gates the displayed `Speed`/speedometer packed ratio by the detected low-voltage/instrument power state.
+Many Metrostroi entities continuously publish the physical train speed even with cab power off. Metrostroi Expanded now gates the displayed `Speed`/speedometer packed ratio by the detected low-voltage/instrument power state.
 
 With no instrument/control supply the displayed speed is forced to zero.
 
