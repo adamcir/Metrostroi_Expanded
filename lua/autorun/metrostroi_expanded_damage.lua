@@ -6620,11 +6620,136 @@ if CLIENT then
     -- Utilities -> Metrostroi Expanded
     ---------------------------------------------------------------------------
 
+    local function MEXUtilitiesCanEdit()
+        return IsValid(LocalPlayer())
+            and LocalPlayer():IsAdmin()
+    end
+
+    local function AddMEXUtilityCheck(
+        panel,
+        text,
+        command,
+        readValue
+    )
+        local control =
+            vgui.Create("DCheckBoxLabel", panel)
+
+        control:SetText(text)
+        control:SetDark(true)
+        control:SizeToContents()
+        panel:AddItem(control)
+
+        local updating = false
+
+        control.MEXRefresh = function()
+            if not IsValid(control) then return end
+
+            updating = true
+            control:SetChecked(readValue())
+            updating = false
+            control:SetEnabled(MEXUtilitiesCanEdit())
+        end
+
+        control.OnChange = function(_, enabled)
+            if updating then return end
+
+            if not MEXUtilitiesCanEdit() then
+                control:MEXRefresh()
+                return
+            end
+
+            RunConsoleCommand(
+                command,
+                enabled and "1" or "0"
+            )
+        end
+
+        return control
+    end
+
+    local function AddMEXUtilitySlider(
+        panel,
+        text,
+        command,
+        readValue
+    )
+        local control =
+            vgui.Create("DNumSlider", panel)
+
+        control:SetText(text)
+        control:SetMin(0.1)
+        control:SetMax(3.0)
+        control:SetDecimals(2)
+        panel:AddItem(control)
+
+        local updating = false
+
+        control.MEXRefresh = function()
+            if not IsValid(control) then return end
+
+            updating = true
+            control:SetValue(readValue())
+            updating = false
+            control:SetEnabled(MEXUtilitiesCanEdit())
+        end
+
+        control.OnValueChanged = function(_, value)
+            if updating then return end
+
+            if not MEXUtilitiesCanEdit() then
+                control:MEXRefresh()
+                return
+            end
+
+            RunConsoleCommand(
+                command,
+                string.format(
+                    "%.2f",
+                    math.Clamp(
+                        tonumber(value) or 1,
+                        0.1,
+                        3.0
+                    )
+                )
+            )
+        end
+
+        return control
+    end
+
+    local function InstallMEXUtilityRefresh(
+        panel,
+        controls
+    )
+        local nextRefresh = 0
+
+        panel.Think = function()
+            if RealTime() < nextRefresh then return end
+            nextRefresh = RealTime() + 0.35
+
+            for _, control in ipairs(controls) do
+                if IsValid(control)
+                    and isfunction(control.MEXRefresh)
+                then
+                    control:MEXRefresh()
+                end
+            end
+        end
+
+        for _, control in ipairs(controls) do
+            if IsValid(control)
+                and isfunction(control.MEXRefresh)
+            then
+                control:MEXRefresh()
+            end
+        end
+    end
+
     hook.Add("PopulateToolMenu", "MEX.Damage.PopulateUtilities", function()
         spawnmenu.AddToolMenuOption(
             "Utilities",
             "Metrostroi Expanded",
-            "MEXDamageSettings",
+            "MEXPhysicalDamageSettings",
             "Poškození",
             "",
             "",
@@ -6632,186 +6757,132 @@ if CLIENT then
                 panel:ClearControls()
 
                 panel:Help(
-                    "Metrostroi Expanded - serverové nastavení poškození."
+                    "Fyzické poškození vlaku. "
+                    .. "Je nezávislé na vizuální deformaci."
                 )
 
-                local function MakeCheck(text)
-                    local control =
-                        vgui.Create("DCheckBoxLabel", panel)
-                    control:SetText(text)
-                    control:SetDark(true)
-                    control:SizeToContents()
-                    panel:AddItem(control)
-                    return control
-                end
-
-                local function MakeSlider(text)
-                    local control =
-                        vgui.Create("DNumSlider", panel)
-                    control:SetText(text)
-                    control:SetMin(0.1)
-                    control:SetMax(3.0)
-                    control:SetDecimals(2)
-                    control:SetDark(true)
-                    panel:AddItem(control)
-                    return control
-                end
-
-                panel:Help("POŠKOZENÍ")
-                local damageCheck =
-                    MakeCheck("Povolit fyzické poškození")
-                local damageScale =
-                    MakeSlider("Intenzita poškození")
-                panel:Help(
-                    "Odtrhávání dveří, přepínačů, skel, světel a dalších částí. "
-                    .. "Funguje nezávisle na deformaci."
+                local enabled = AddMEXUtilityCheck(
+                    panel,
+                    "Povolit fyzické poškození",
+                    "mex_damage_set_enabled",
+                    MEXD.IsPhysicalDamageEnabled
                 )
 
-                panel:Help("DEFORMACE (ALPHA - nedoporučované)")
-                local deformationCheck =
-                    MakeCheck("Povolit deformaci")
-                local deformationScale =
-                    MakeSlider("Intenzita deformace")
-                panel:Help(
-                    "ALPHA - nedoporučované. Ohýbání a mačkání karoserie. "
-                    .. "Vypnutí deformace neblokuje fyzické odtrhávání částí."
-                )
-
-                panel:Help("ELEKTRICKÉ POŠKOZENÍ")
-                local electricalCheck =
-                    MakeCheck("Povolit elektrické poškození")
-                local electricalScale =
-                    MakeSlider("Intenzita elektrických poruch")
-                panel:Help(
-                    "Zkraty, voda, relé, jističe, baterie, blikání kontrolek "
-                    .. "a poruchy elektrických ukazatelů."
+                local scale = AddMEXUtilitySlider(
+                    panel,
+                    "Intenzita poškození",
+                    "mex_damage_set_physical_scale",
+                    MEXD.GetPhysicalDamageScale
                 )
 
                 panel:Help(
-                    "Hodnota 1.00 = standardní intenzita. "
-                    .. "Rozsah 0.10 až 3.00."
+                    "Ovlivňuje odtrhávání dveří, přepínačů, skel, "
+                    .. "světel a dalších částí při nárazu, výbuchu "
+                    .. "nebo přímém zásahu."
+                )
+                panel:Help(
+                    "I když je deformace vypnutá, části lze nárazem "
+                    .. "stále utrhnout."
+                )
+                panel:Help(
+                    "1.00 = standardní intenzita, rozsah 0.10 až 3.00."
                 )
 
-                local updating = false
-                local nextRefresh = 0
-
-                local function CanEdit()
-                    return IsValid(LocalPlayer())
-                        and LocalPlayer():IsAdmin()
-                end
-
-                local function RefreshSettings()
-                    if not IsValid(damageCheck)
-                        or not IsValid(deformationCheck)
-                        or not IsValid(electricalCheck)
-                    then
-                        return
-                    end
-
-                    local canEdit = CanEdit()
-
-                    updating = true
-
-                    damageCheck:SetChecked(
-                        MEXD.IsPhysicalDamageEnabled()
-                    )
-                    deformationCheck:SetChecked(
-                        MEXD.IsDeformationEnabled()
-                    )
-                    electricalCheck:SetChecked(
-                        MEXD.IsElectricalDamageEnabled()
-                    )
-
-                    damageScale:SetValue(
-                        MEXD.GetPhysicalDamageScale()
-                    )
-                    deformationScale:SetValue(
-                        MEXD.GetDeformationScale()
-                    )
-                    electricalScale:SetValue(
-                        MEXD.GetElectricalDamageScale()
-                    )
-
-                    updating = false
-
-                    damageCheck:SetEnabled(canEdit)
-                    deformationCheck:SetEnabled(canEdit)
-                    electricalCheck:SetEnabled(canEdit)
-                    damageScale:SetEnabled(canEdit)
-                    deformationScale:SetEnabled(canEdit)
-                    electricalScale:SetEnabled(canEdit)
-                end
-
-                local function BindCheck(control, command)
-                    control.OnChange = function(_, enabled)
-                        if updating then return end
-                        if not CanEdit() then
-                            RefreshSettings()
-                            return
-                        end
-
-                        RunConsoleCommand(
-                            command,
-                            enabled and "1" or "0"
-                        )
-                    end
-                end
-
-                local function BindSlider(control, command)
-                    control.OnValueChanged = function(_, value)
-                        if updating then return end
-                        if not CanEdit() then
-                            RefreshSettings()
-                            return
-                        end
-
-                        RunConsoleCommand(
-                            command,
-                            string.format(
-                                "%.2f",
-                                math.Clamp(
-                                    tonumber(value) or 1,
-                                    0.1,
-                                    3.0
-                                )
-                            )
-                        )
-                    end
-                end
-
-                BindCheck(
-                    damageCheck,
-                    "mex_damage_set_enabled"
+                InstallMEXUtilityRefresh(
+                    panel,
+                    { enabled, scale }
                 )
-                BindCheck(
-                    deformationCheck,
-                    "mex_damage_set_deformation_enabled"
+            end
+        )
+
+        spawnmenu.AddToolMenuOption(
+            "Utilities",
+            "Metrostroi Expanded",
+            "MEXDeformationSettings",
+            "Deformace (ALPHA - nedoporučované)",
+            "",
+            "",
+            function(panel)
+                panel:ClearControls()
+
+                panel:Help(
+                    "DEFORMACE - ALPHA, NEDOPORUČOVANÉ"
                 )
-                BindCheck(
-                    electricalCheck,
-                    "mex_damage_set_electrical_enabled"
+                panel:Help(
+                    "Experimentální vizuální mačkání a ohýbání "
+                    .. "karoserie. Může mít chyby s některými modely."
                 )
 
-                BindSlider(
-                    damageScale,
-                    "mex_damage_set_physical_scale"
-                )
-                BindSlider(
-                    deformationScale,
-                    "mex_damage_set_deformation_scale"
-                )
-                BindSlider(
-                    electricalScale,
-                    "mex_damage_set_electrical_scale"
+                local enabled = AddMEXUtilityCheck(
+                    panel,
+                    "Povolit deformaci",
+                    "mex_damage_set_deformation_enabled",
+                    MEXD.IsDeformationEnabled
                 )
 
-                panel.Think = function()
-                    if RealTime() < nextRefresh then return end
-                    nextRefresh = RealTime() + 0.35
-                    RefreshSettings()
-                end
+                local scale = AddMEXUtilitySlider(
+                    panel,
+                    "Intenzita deformace",
+                    "mex_damage_set_deformation_scale",
+                    MEXD.GetDeformationScale
+                )
 
-                RefreshSettings()
+                panel:Help(
+                    "Deformace je oddělená od fyzického poškození. "
+                    .. "Její vypnutí nevypíná odtrhávání komponent."
+                )
+                panel:Help(
+                    "1.00 = standardní intenzita, rozsah 0.10 až 3.00."
+                )
+
+                InstallMEXUtilityRefresh(
+                    panel,
+                    { enabled, scale }
+                )
+            end
+        )
+
+        spawnmenu.AddToolMenuOption(
+            "Utilities",
+            "Metrostroi Expanded",
+            "MEXElectricalDamageSettings",
+            "Elektrické poškození",
+            "",
+            "",
+            function(panel)
+                panel:ClearControls()
+
+                panel:Help(
+                    "Elektrické poruchy Metrostroi Expanded."
+                )
+
+                local enabled = AddMEXUtilityCheck(
+                    panel,
+                    "Povolit elektrické poškození",
+                    "mex_damage_set_electrical_enabled",
+                    MEXD.IsElectricalDamageEnabled
+                )
+
+                local scale = AddMEXUtilitySlider(
+                    panel,
+                    "Intenzita elektrických poruch",
+                    "mex_damage_set_electrical_scale",
+                    MEXD.GetElectricalDamageScale
+                )
+
+                panel:Help(
+                    "Ovlivňuje zkraty, vodu, relé, jističe, pojistky, "
+                    .. "baterii, blikání kontrolek, dveřová relé "
+                    .. "a chybné elektrické ukazatele."
+                )
+                panel:Help(
+                    "1.00 = standardní intenzita, rozsah 0.10 až 3.00."
+                )
+
+                InstallMEXUtilityRefresh(
+                    panel,
+                    { enabled, scale }
+                )
             end
         )
     end)
@@ -6904,7 +6975,7 @@ if CLIENT then
         end
 
         return train:GetNW2Vector(
-            "MEX.Damage.HitLocal." .. zone,
+            "MEX.Deformation.HitLocal." .. zone,
             DefaultHitLocal(train, zone)
         )
     end
