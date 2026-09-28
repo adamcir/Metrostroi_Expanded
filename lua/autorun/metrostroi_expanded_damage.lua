@@ -8185,6 +8185,8 @@ if SERVER then
 
         train.MEXDamageInitialized = true
         EnsureButtonEventGuard(train)
+        EnsureWearLightGuard(train)
+        EnsureIndicatorWearGuard(train)
         train.MEXDamageIgnoreUntil = CurTime() + SPAWN_GRACE_SECONDS
         train.MEXDamageLastVelocity = train:GetVelocity()
         train.MEXDamageLastPosition = train:GetPos()
@@ -8430,12 +8432,51 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.GRKVFailed", false)
         train:SetNW2Float("MEX.Damage.LegacyWear", 0)
         train:SetNW2String("MEX.Damage.WearFailure", "")
+        train:SetNW2Int("MEX.Damage.FailedControlCount", 0)
+        train:SetNW2Int("MEX.Damage.FailedRelayCount", 0)
+        train:SetNW2Int("MEX.Damage.FailedLightCount", 0)
+        train:SetNW2Int("MEX.Damage.FailedIndicatorCount", 0)
+
+        for index in pairs(
+            train.MEXDamageWearFailedLights or {}
+        ) do
+            train:SetNW2Bool(
+                "MEX.Damage.WearLight."
+                    .. tostring(index),
+                false
+            )
+        end
+
+        for index in pairs(
+            train.MEXDamageFailedIndicators or {}
+        ) do
+            train:SetNW2Bool(
+                "MEX.Damage.WearIndicator."
+                    .. tostring(index),
+                false
+            )
+        end
+
+        train.MEXDamageWearBlockedButtons = {}
+        train.MEXDamageFailedControls = {}
+        train.MEXDamageControlWear = {}
+        train.MEXDamageControlWearThreshold = {}
+        train.MEXDamageControlWearLastUse = {}
+        train.MEXDamageWearControlButtons = {}
+        train.MEXDamageRelayWear = {}
+        train.MEXDamageRelayWearThreshold = {}
+        train.MEXDamageWearFailedSystems = {}
+        train.MEXDamageWearLight = {}
+        train.MEXDamageWearLightThreshold = {}
+        train.MEXDamageWearFailedLights = {}
+        train.MEXDamageIndicatorWear = {}
+        train.MEXDamageIndicatorThreshold = {}
+        train.MEXDamageFailedIndicators = {}
         train.MEXDamageGRKVWear = 0
         train.MEXDamageGRKVLastPosition = nil
         train.MEXDamageGRKVFailureThreshold = nil
         train.MEXDamageLegacyWear = 0
         train.MEXDamageLegacyRelaySnapshot = nil
-        train.MEXDamageLegacyFailureThreshold = nil
 
         RestoreElectricalFailures(train)
         RestoreTrippedProtection(train)
