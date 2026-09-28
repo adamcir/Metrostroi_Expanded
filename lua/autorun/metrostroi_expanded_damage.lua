@@ -467,9 +467,21 @@ local function CrushKey(zone)
     return "MEX.Crush." .. zone
 end
 
+local function DeformationDamageKey(zone)
+    return "MEX.Deformation." .. zone
+end
+
 function MEXD.GetCrushEnergy(train, zone)
     if not IsValid(train) or not ZONES[zone] then return 0 end
     return train:GetNW2Float(CrushKey(zone), 0)
+end
+
+function MEXD.GetDeformationDamage(train, zone)
+    if not IsValid(train) or not ZONES[zone] then return 0 end
+    return train:GetNW2Float(
+        DeformationDamageKey(zone),
+        0
+    )
 end
 
 function MEXD.GetZoneDamage(train, zone)
@@ -998,7 +1010,7 @@ if SERVER then
             if amount <= 0.001 then continue end
 
             local hit = train:GetNW2Vector(
-                "MEX.Damage.HitLocal." .. zone,
+                "MEX.Deformation.HitLocal." .. zone,
                 ZoneLocalImpactPoint(train, zone)
             )
 
@@ -5288,9 +5300,18 @@ if SERVER then
 
         for zone in pairs(ZONES) do
             train:SetNW2Float(DamageKey(zone), 0)
+            train:SetNW2Float(DeformationDamageKey(zone), 0)
             train:SetNW2Float(CrushKey(zone), 0)
             train:SetNW2Float("MEX.Damage.HitStrength." .. zone, 0)
             train:SetNW2Vector("MEX.Damage.HitLocal." .. zone, vector_origin)
+            train:SetNW2Float(
+                "MEX.Deformation.HitStrength." .. zone,
+                0
+            )
+            train:SetNW2Vector(
+                "MEX.Deformation.HitLocal." .. zone,
+                vector_origin
+            )
         end
 
         train:SetNW2Float("MEX.Damage.electrical", 0)
@@ -5480,32 +5501,24 @@ if SERVER then
         amount = math.Clamp(tonumber(amount) or 0, 0, 1)
         if amount <= 0 then return MEXD.GetZoneDamage(train, zone) end
 
-        local physicalEnabled = MEXD.IsPhysicalDamageEnabled()
-        local deformationEnabled = MEXD.IsDeformationEnabled()
-        local electricalEnabled = MEXD.IsElectricalDamageEnabled()
-
-        local physicalScale = physicalEnabled
-            and MEXD.GetPhysicalDamageScale()
-            or 0
-        local deformationScale = deformationEnabled
-            and MEXD.GetDeformationScale()
-            or 0
-        local structuralScale = math.max(
-            physicalScale,
-            deformationScale
-        )
+        local physicalEnabled =
+            MEXD.IsPhysicalDamageEnabled()
+        local deformationEnabled =
+            MEXD.IsDeformationEnabled()
+        local electricalEnabled =
+            MEXD.IsElectricalDamageEnabled()
 
         local old = MEXD.GetZoneDamage(train, zone)
         local new = old
 
-        if structuralScale > 0 then
-            local structuralAmount = math.Clamp(
-                amount * structuralScale,
+        if physicalEnabled then
+            local physicalAmount = math.Clamp(
+                amount * MEXD.GetPhysicalDamageScale(),
                 0,
                 1.5
             )
             local effective =
-                structuralAmount * (1 - old * 0.45)
+                physicalAmount * (1 - old * 0.45)
             new = math.Clamp(old + effective, 0, 1)
             train:SetNW2Float(DamageKey(zone), new)
 
@@ -5518,20 +5531,20 @@ if SERVER then
                     train:GetNW2Float(strengthKey, 0)
                 local oldHit =
                     train:GetNW2Vector(hitKey, hitLocal)
-                local combinedStrength = math.Clamp(
-                    oldStrength + structuralAmount,
-                    0,
-                    6
-                )
 
                 if oldStrength <= 0.001 then
                     oldHit = hitLocal
                 end
 
+                local combined = math.Clamp(
+                    oldStrength + physicalAmount,
+                    0,
+                    6
+                )
                 local blend = math.Clamp(
-                    structuralAmount
+                    physicalAmount
                         / math.max(
-                            oldStrength + structuralAmount,
+                            oldStrength + physicalAmount,
                             0.001
                         ),
                     0,
@@ -5542,14 +5555,71 @@ if SERVER then
                     hitKey,
                     LerpVector(blend, oldHit, hitLocal)
                 )
-                train:SetNW2Float(
-                    strengthKey,
-                    combinedStrength
-                )
+                train:SetNW2Float(strengthKey, combined)
             end
+
+            UpdateDamageState(train)
         end
 
         if deformationEnabled then
+            local deformationAmount = math.Clamp(
+                amount * MEXD.GetDeformationScale(),
+                0,
+                1.5
+            )
+            local oldDeformation =
+                MEXD.GetDeformationDamage(train, zone)
+            local deformationEffective =
+                deformationAmount
+                * (1 - oldDeformation * 0.45)
+            local newDeformation = math.Clamp(
+                oldDeformation + deformationEffective,
+                0,
+                1
+            )
+
+            train:SetNW2Float(
+                DeformationDamageKey(zone),
+                newDeformation
+            )
+
+            if isvector(worldPos) then
+                local hitLocal = train:WorldToLocal(worldPos)
+                local hitKey =
+                    "MEX.Deformation.HitLocal." .. zone
+                local strengthKey =
+                    "MEX.Deformation.HitStrength." .. zone
+                local oldStrength =
+                    train:GetNW2Float(strengthKey, 0)
+                local oldHit =
+                    train:GetNW2Vector(hitKey, hitLocal)
+
+                if oldStrength <= 0.001 then
+                    oldHit = hitLocal
+                end
+
+                local combined = math.Clamp(
+                    oldStrength + deformationAmount,
+                    0,
+                    6
+                )
+                local blend = math.Clamp(
+                    deformationAmount
+                        / math.max(
+                            oldStrength + deformationAmount,
+                            0.001
+                        ),
+                    0,
+                    1
+                )
+
+                train:SetNW2Vector(
+                    hitKey,
+                    LerpVector(blend, oldHit, hitLocal)
+                )
+                train:SetNW2Float(strengthKey, combined)
+            end
+
             local oldCrush =
                 MEXD.GetCrushEnergy(train, zone)
             local sourceScale =
@@ -5592,8 +5662,7 @@ if SERVER then
             )
         end
 
-        if structuralScale > 0 then
-            UpdateDamageState(train)
+        if physicalEnabled or deformationEnabled then
             SendImpactEffect(
                 train,
                 zone,
@@ -6183,7 +6252,7 @@ if SERVER then
 
         local normal = ZoneOutwardNormal(ent, zone)
 
-        if isBlast then
+        if isBlast and MEXD.IsDeformationEnabled() then
             local blastWorldPos = DamageImpactWorldPosition(ent, dmginfo)
             local blastForce = dmginfo:GetDamageForce()
             local blastImpulseLocal = Vector(0, 0, 0)
@@ -6416,11 +6485,11 @@ if SERVER then
             ZoneLocalImpactPoint(train, "front")
         )
 
-        train:SetNW2Float(DamageKey("front"), 1)
+        train:SetNW2Float(DeformationDamageKey("front"), 1)
         train:SetNW2Float(CrushKey("front"), energy)
-        train:SetNW2Float("MEX.Damage.HitStrength.front", energy)
+        train:SetNW2Float("MEX.Deformation.HitStrength.front", energy)
         train:SetNW2Vector(
-            "MEX.Damage.HitLocal.front",
+            "MEX.Deformation.HitLocal.front",
             train:WorldToLocal(worldPos)
         )
 
@@ -6830,7 +6899,7 @@ if CLIENT then
     end
 
     local function ReadHitLocal(train, zone)
-        if train:GetNW2Float("MEX.Damage.HitStrength." .. zone, 0) <= 0.001 then
+        if train:GetNW2Float("MEX.Deformation.HitStrength." .. zone, 0) <= 0.001 then
             return DefaultHitLocal(train, zone)
         end
 
@@ -6843,12 +6912,12 @@ if CLIENT then
     local function BuildDamageState(train)
         if not train:GetNW2Bool("MEX.DamageReady", false) then return nil end
 
-        local front = train:GetNW2Float("MEX.Damage.front", 0)
-        local rear = train:GetNW2Float("MEX.Damage.rear", 0)
-        local left = train:GetNW2Float("MEX.Damage.left", 0)
-        local right = train:GetNW2Float("MEX.Damage.right", 0)
-        local roof = train:GetNW2Float("MEX.Damage.roof", 0)
-        local floor = train:GetNW2Float("MEX.Damage.floor", 0)
+        local front = train:GetNW2Float("MEX.Deformation.front", 0)
+        local rear = train:GetNW2Float("MEX.Deformation.rear", 0)
+        local left = train:GetNW2Float("MEX.Deformation.left", 0)
+        local right = train:GetNW2Float("MEX.Deformation.right", 0)
+        local roof = train:GetNW2Float("MEX.Deformation.roof", 0)
+        local floor = train:GetNW2Float("MEX.Deformation.floor", 0)
 
         local crushFront = train:GetNW2Float("MEX.Crush.front", front)
         local crushRear = train:GetNW2Float("MEX.Crush.rear", rear)
