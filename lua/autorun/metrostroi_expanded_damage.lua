@@ -4221,6 +4221,162 @@ if SERVER then
         return candidates
     end
 
+    local function WaterRelayWorldPosition(
+        train,
+        systemName
+    )
+        if not IsSubwayTrain(train) then
+            return nil
+        end
+
+        local mins = train:OBBMins()
+        local maxs = train:OBBMaxs()
+        local span = maxs - mins
+        local hash = tonumber(
+            util.CRC(tostring(systemName or "relay"))
+        ) or 1
+
+        local fx = (hash % 997) / 996
+        local fy = (math.floor(hash / 997) % 991) / 990
+        local fz = (math.floor(hash / 988027) % 983) / 982
+
+        -- Generic relay systems do not publish a physical model position.
+        -- Give every relay a stable cabinet/underframe point instead of
+        -- making every short circuit spark from the center of the wagon.
+        return train:LocalToWorld(Vector(
+            mins.x + span.x * (0.08 + fx * 0.84),
+            mins.y + span.y * (0.18 + fy * 0.64),
+            mins.z + span.z * (0.14 + fz * 0.34)
+        ))
+    end
+
+    local function WaterButtonCenterLocal(
+        panel,
+        button
+    )
+        if not istable(panel)
+            or not istable(button)
+            or not isvector(panel.pos)
+            or not isangle(panel.ang)
+        then
+            return nil
+        end
+
+        local x = tonumber(button.x) or 0
+        local y = tonumber(button.y) or 0
+
+        if not button.radius then
+            x = x + (tonumber(button.w) or 0) * 0.5
+            y = y + (tonumber(button.h) or 0) * 0.5
+        end
+
+        local pos = Vector(x, -y, 0)
+        pos:Rotate(panel.ang)
+
+        return panel.pos
+            + pos * (tonumber(panel.scale) or 1)
+    end
+
+    local function BuildWaterArcSourcePositions(train)
+        local positions = {}
+
+        -- Every Metrostroi light entry is a possible wet short: headlights,
+        -- marker lights, cab lamps, saloon lamps and other authored lamps.
+        for _, light in pairs(train.Lights or {}) do
+            if istable(light)
+                and isvector(light[2])
+            then
+                positions[#positions + 1] =
+                    train:LocalToWorld(light[2])
+            end
+        end
+
+        -- Many dashboard indicator lamps are not in train.Lights at all. Their
+        -- ButtonMap mount points give us the physical panel positions, so all
+        -- panel lamps/indicators can also become arc sources.
+        for panelName, panel in pairs(
+            train.ButtonMap or {}
+        ) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                local localPos =
+                    WaterButtonCenterLocal(
+                        panel,
+                        button
+                    )
+
+                if isvector(localPos) then
+                    positions[#positions + 1] =
+                        train:LocalToWorld(localPos)
+                end
+            end
+        end
+
+        -- Every relay/contactor may short. Since generic systems have no world
+        -- position, use their deterministic cabinet mounting point.
+        for systemName, system in pairs(
+            train.Systems or {}
+        ) do
+            if IsRelayLikeElectricalSystem(system) then
+                local pos =
+                    WaterRelayWorldPosition(
+                        train,
+                        systemName
+                    )
+
+                if isvector(pos) then
+                    positions[#positions + 1] = pos
+                end
+            end
+        end
+
+        return positions
+    end
+
+    local function PickWaterArcSourcePosition(
+        train,
+        fallback
+    )
+        if not IsSubwayTrain(train) then
+            return fallback
+        end
+
+        local now = CurTime()
+
+        if not istable(train.MEXDamageWaterArcSources)
+            or (
+                train.MEXDamageWaterArcSourcesExpire
+                or 0
+            ) <= now
+        then
+            train.MEXDamageWaterArcSources =
+                BuildWaterArcSourcePositions(train)
+            train.MEXDamageWaterArcSourcesExpire =
+                now + 4
+        end
+
+        local sources =
+            train.MEXDamageWaterArcSources
+
+        if istable(sources)
+            and #sources > 0
+        then
+            return sources[
+                math.random(1, #sources)
+            ]
+        end
+
+        return isvector(fallback)
+            and fallback
+            or train:WorldSpaceCenter()
+    end
+
     local function StartWaterDoorRelayFault(
         train,
         intensity,
@@ -4290,9 +4446,32 @@ if SERVER then
             item.name
         )
 
+        local relayArcPos =
+            WaterRelayWorldPosition(
+                train,
+                item.name
+            ) or worldPos
+
+        EmitWaterElectricalArc(
+            train,
+            relayArcPos,
+            train:GetNW2Float(
+                "MEX.Damage.WaterVoltage",
+                0
+            ),
+            train:GetNW2Float(
+                "MEX.Damage.WaterCurrent",
+                0
+            ),
+            train:GetNW2Float(
+                "MEX.Damage.WaterVoltage",
+                0
+            ) >= 200
+        )
+
         PlayLocalizedDamageSound(
             train,
-            worldPos,
+            relayArcPos,
             WATER_RELAY_CHATTER_SOUNDS[
                 math.random(
                     1,
@@ -4556,9 +4735,32 @@ if SERVER then
             item.name
         )
 
+        local relayArcPos =
+            WaterRelayWorldPosition(
+                train,
+                item.name
+            ) or worldPos
+
+        EmitWaterElectricalArc(
+            train,
+            relayArcPos,
+            train:GetNW2Float(
+                "MEX.Damage.WaterVoltage",
+                0
+            ),
+            train:GetNW2Float(
+                "MEX.Damage.WaterCurrent",
+                0
+            ),
+            train:GetNW2Float(
+                "MEX.Damage.WaterVoltage",
+                0
+            ) >= 200
+        )
+
         PlayLocalizedDamageSound(
             train,
-            worldPos,
+            relayArcPos,
             WATER_RELAY_CHATTER_SOUNDS[
                 math.random(
                     1,
@@ -5180,7 +5382,10 @@ if SERVER then
                 then
                     EmitWaterElectricalArc(
                         train,
-                        faultSparkPos,
+                        PickWaterArcSourcePosition(
+                            train,
+                            faultSparkPos
+                        ),
                         voltage,
                         current,
                         hv >= 200
