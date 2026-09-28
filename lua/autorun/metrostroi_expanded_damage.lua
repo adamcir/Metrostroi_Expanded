@@ -1786,6 +1786,217 @@ if SERVER then
         end
     end
 
+    local function ForceSensitiveSystemOutputsOff(
+        system,
+        data
+    )
+        if not istable(system) or not istable(data) then return end
+
+        for _, fieldName in ipairs(data.outputFields or {}) do
+            local value = system[fieldName]
+
+            if isnumber(value) then
+                system[fieldName] = 0
+            elseif isbool(value) then
+                system[fieldName] = false
+            end
+        end
+
+        local common = {
+            "Active",
+            "Power",
+            "Powered",
+            "Enabled",
+            "Enable",
+            "Working",
+            "Online",
+        }
+
+        for _, fieldName in ipairs(common) do
+            local value = system[fieldName]
+
+            if isnumber(value) then
+                system[fieldName] = 0
+            elseif isbool(value) then
+                system[fieldName] = false
+            end
+        end
+    end
+
+    local function GetSensitiveSystemOutputs(system)
+        local outputs = {}
+
+        if not istable(system) or not isfunction(system.Outputs) then
+            return outputs
+        end
+
+        local ok, result = pcall(system.Outputs, system)
+        if not ok or not istable(result) then
+            return outputs
+        end
+
+        local seen = {}
+        for _, fieldName in ipairs(result) do
+            if isstring(fieldName)
+                and fieldName ~= ""
+                and not seen[fieldName]
+            then
+                seen[fieldName] = true
+                outputs[#outputs + 1] = fieldName
+            end
+        end
+
+        return outputs
+    end
+
+    local function DisableSensitiveWaterSystem(
+        train,
+        systemName,
+        options
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(systemName)
+            or systemName == ""
+        then
+            return false
+        end
+
+        local system = train[systemName]
+        if not istable(system) or not isfunction(system.Think) then
+            return false
+        end
+
+        options = istable(options) and options or {}
+
+        train.MEXDamageWetSensitiveSystems =
+            train.MEXDamageWetSensitiveSystems or {}
+
+        local data =
+            train.MEXDamageWetSensitiveSystems[systemName]
+
+        if not data then
+            data = {
+                originalThink = system.Think,
+                originalTriggerInput = system.TriggerInput,
+                outputFields = GetSensitiveSystemOutputs(system),
+                permanent = false,
+            }
+
+            train.MEXDamageWetSensitiveSystems[systemName] = data
+
+            system.Think = function(self, ...)
+                local disabled =
+                    IsValid(train)
+                    and train.MEXDamageWetSensitiveSystems
+                    and train.MEXDamageWetSensitiveSystems[systemName]
+                    or nil
+
+                if disabled then
+                    ForceSensitiveSystemOutputsOff(self, disabled)
+                    return
+                end
+
+                return data.originalThink(self, ...)
+            end
+
+            if isfunction(data.originalTriggerInput) then
+                system.TriggerInput = function(self, ...)
+                    -- Inputs are still accepted while the module is wet. This
+                    -- lets the driver move physical switches normally; the
+                    -- electronics simply produces no useful output until it
+                    -- recovers.
+                    local result =
+                        data.originalTriggerInput(self, ...)
+
+                    local disabled =
+                        IsValid(train)
+                        and train.MEXDamageWetSensitiveSystems
+                        and train.MEXDamageWetSensitiveSystems[systemName]
+                        or nil
+
+                    if disabled then
+                        ForceSensitiveSystemOutputsOff(
+                            self,
+                            disabled
+                        )
+                    end
+
+                    return result
+                end
+            end
+        end
+
+        if options.permanent == true then
+            data.permanent = true
+        end
+
+        data.sensitivity =
+            options.sensitivity or data.sensitivity or "sensitive"
+        data.minDrySeconds = math.max(
+            tonumber(options.minDrySeconds) or 90,
+            tonumber(data.minDrySeconds) or 0
+        )
+        data.recoverMoisture = math.min(
+            tonumber(options.recoverMoisture) or 0.05,
+            tonumber(data.recoverMoisture) or 1
+        )
+
+        ForceSensitiveSystemOutputsOff(system, data)
+        return true
+    end
+
+    local function RestoreSensitiveWaterSystem(
+        train,
+        systemName
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageWetSensitiveSystems)
+        then
+            return false
+        end
+
+        local data =
+            train.MEXDamageWetSensitiveSystems[systemName]
+        local system = train[systemName]
+
+        if not istable(data) or not istable(system) then
+            train.MEXDamageWetSensitiveSystems[systemName] = nil
+            return false
+        end
+
+        if isfunction(data.originalThink) then
+            system.Think = data.originalThink
+        end
+
+        if data.originalTriggerInput ~= nil then
+            system.TriggerInput = data.originalTriggerInput
+        end
+
+        train.MEXDamageWetSensitiveSystems[systemName] = nil
+        return true
+    end
+
+    local function RestoreSensitiveWaterSystems(train)
+        if not IsValid(train)
+            or not istable(train.MEXDamageWetSensitiveSystems)
+        then
+            return
+        end
+
+        local names = {}
+        for systemName in pairs(
+            train.MEXDamageWetSensitiveSystems
+        ) do
+            names[#names + 1] = systemName
+        end
+
+        for _, systemName in ipairs(names) do
+            RestoreSensitiveWaterSystem(train, systemName)
+        end
+
+        train.MEXDamageWetSensitiveSystems = {}
+    end
+
     local function IsManualOperatorElectricalSystem(
         systemName,
         system
