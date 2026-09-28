@@ -7729,6 +7729,347 @@ if SERVER then
         return localPos.z >= centerZ and "roof" or "floor"
     end
 
+    local function BroadcastRepairedComponent(
+        train,
+        name,
+        receiver
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(name)
+        then
+            return
+        end
+
+        net.Start("MEX.ComponentRepaired")
+            net.WriteEntity(train)
+            net.WriteString(name)
+
+        if IsValid(receiver) then
+            net.Send(receiver)
+        else
+            net.Broadcast()
+        end
+    end
+
+    function MEXD.RepairDetachedComponent(
+        train,
+        name
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(name)
+            or not istable(train.MEXDamageDetachedServer)
+        then
+            return false
+        end
+
+        local data =
+            train.MEXDamageDetachedServer[name]
+
+        if not istable(data) then return false end
+
+        if IsValid(data.debris) then
+            data.debris:Remove()
+        end
+
+        if istable(data.debrisList) then
+            for _, debris in ipairs(data.debrisList) do
+                if IsValid(debris) then
+                    debris:Remove()
+                end
+            end
+        end
+
+        train.MEXDamageDetachedServer[name] = nil
+
+        if istable(data.electricalFailures) then
+            for _, systemName in ipairs(
+                data.electricalFailures
+            ) do
+                local stillRequired = false
+
+                for _, other in pairs(
+                    train.MEXDamageDetachedServer
+                ) do
+                    if not istable(other)
+                        or not istable(
+                            other.electricalFailures
+                        )
+                    then
+                        continue
+                    end
+
+                    for _, otherSystem in ipairs(
+                        other.electricalFailures
+                    ) do
+                        if otherSystem == systemName then
+                            stillRequired = true
+                            break
+                        end
+                    end
+
+                    if stillRequired then break end
+                end
+
+                if not stillRequired then
+                    RestoreSingleElectricalFailure(
+                        train,
+                        systemName,
+                        true
+                    )
+                end
+            end
+        end
+
+        RebuildDetachedButtonGuard(train)
+        BroadcastRepairedComponent(train, name)
+        return true
+    end
+
+    local function RepairBatteryOnly(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.Battery)
+        then
+            return false
+        end
+
+        train:SetNW2Float(
+            "MEX.Damage.BatteryHealth",
+            1
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.BatteryFailed",
+            false
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.BatteryWaterFailed",
+            false
+        )
+        train:SetNW2String(
+            "MEX.Damage.BatteryLastCause",
+            ""
+        )
+
+        train.MEXDamageBatteryFloodLevel = 0
+        train.MEXDamageBatteryFloodFactor = 1
+        train.MEXDamageBatteryVoltageFactor = 1
+        train.MEXDamageBatteryGlitchUntil = nil
+        train.MEXDamagePostSurfaceBatteryStress = nil
+        train.MEXDamageSurfaceReboundUsed = nil
+
+        train:SetNW2Float(
+            "MEX.Damage.BatteryFloodLevel",
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.BatteryGlitchFactor",
+            1
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.LowVoltageBrownout",
+            false
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            false
+        )
+
+        return true
+    end
+
+    local function RepairGRKVOnly(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.RheostatController)
+        then
+            return false
+        end
+
+        RestoreGRKVWearFailure(train)
+
+        train.MEXDamageGRKVWear = 0
+        train.MEXDamageGRKVLastPosition =
+            tonumber(
+                train.RheostatController.SelectedPosition
+            )
+        train.MEXDamageGRKVFailureThreshold =
+            math.Rand(0.86, 1.00)
+
+        train:SetNW2Float(
+            "MEX.Damage.GRKVWear",
+            0
+        )
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            ""
+        )
+
+        return true
+    end
+
+    local function RepairZoneOnly(train, zone)
+        if not IsSubwayTrain(train)
+            or not ZONES[zone]
+        then
+            return false
+        end
+
+        local old = MEXD.GetZoneDamage(train, zone)
+        if old <= 0.001 then return false end
+
+        train:SetNW2Float(
+            DamageKey(zone),
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.HitStrength." .. zone,
+            0
+        )
+        train:SetNW2Vector(
+            "MEX.Damage.HitLocal." .. zone,
+            vector_origin
+        )
+
+        UpdateDamageState(train)
+        return true
+    end
+
+    local function ServiceAnchors(train)
+        local mins = train:OBBMins()
+        local maxs = train:OBBMaxs()
+        local center = (mins + maxs) * 0.5
+        local length = math.max(maxs.x - mins.x, 1)
+        local width = math.max(maxs.y - mins.y, 1)
+        local height = math.max(maxs.z - mins.z, 1)
+
+        return {
+            battery = Vector(
+                center.x - length * 0.16,
+                maxs.y - width * 0.10,
+                mins.z + height * 0.16
+            ),
+            grkv = Vector(
+                center.x + length * 0.12,
+                mins.y + width * 0.10,
+                mins.z + height * 0.16
+            ),
+        }
+    end
+
+    function MEXD.GetServiceTargetAtPosition(
+        train,
+        worldPos
+    )
+        if not IsSubwayTrain(train)
+            or not isvector(worldPos)
+        then
+            return nil
+        end
+
+        local localPos = train:WorldToLocal(worldPos)
+        local anchors = ServiceAnchors(train)
+
+        local batteryDistance =
+            localPos:Distance(anchors.battery)
+        local grkvDistance =
+            localPos:Distance(anchors.grkv)
+
+        local serviceRadius = 115
+
+        if batteryDistance <= serviceRadius
+            and batteryDistance <= grkvDistance
+        then
+            return "battery"
+        end
+
+        if grkvDistance <= serviceRadius then
+            return "grkv"
+        end
+
+        return ClassifyFromWorldPosition(
+            train,
+            worldPos
+        )
+    end
+
+    function MEXD.RepairServiceTarget(
+        train,
+        target
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(target)
+        then
+            return false
+        end
+
+        if target == "battery" then
+            return RepairBatteryOnly(train)
+        elseif target == "grkv" then
+            return RepairGRKVOnly(train)
+        elseif target == "front_bogey" then
+            return ReattachTrainRunningGear(
+                train,
+                train.FrontBogey,
+                target
+            )
+        elseif target == "rear_bogey" then
+            return ReattachTrainRunningGear(
+                train,
+                train.RearBogey,
+                target
+            )
+        elseif target == "front_coupler" then
+            return ReattachTrainRunningGear(
+                train,
+                train.FrontCouple,
+                target
+            )
+        elseif target == "rear_coupler" then
+            return ReattachTrainRunningGear(
+                train,
+                train.RearCouple,
+                target
+            )
+        elseif ZONES[target] then
+            return RepairZoneOnly(train, target)
+        end
+
+        return false
+    end
+
+    function MEXD.RepairRunningGearEntity(ent)
+        if not IsValid(ent) then return false end
+
+        local train =
+            ent:GetNW2Entity("TrainEntity")
+
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        if ent == train.FrontBogey then
+            return MEXD.RepairServiceTarget(
+                train,
+                "front_bogey"
+            )
+        elseif ent == train.RearBogey then
+            return MEXD.RepairServiceTarget(
+                train,
+                "rear_bogey"
+            )
+        elseif ent == train.FrontCouple then
+            return MEXD.RepairServiceTarget(
+                train,
+                "front_coupler"
+            )
+        elseif ent == train.RearCouple then
+            return MEXD.RepairServiceTarget(
+                train,
+                "rear_coupler"
+            )
+        end
+
+        return false
+    end
+
     net.Receive("MEX.DetachRequest", function(_, ply)
         if not MEXD.IsDamageEnabled() then return end
 
