@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.17.0"
+MEXD.Version = "0.18.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -10530,7 +10530,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery %.1f V/health %.0f%% | LV %.1f V | GRKV %.0f%%/%s | legacy wear %.0f%% | battery flood %.2f | brownout %s | blackout %s | surfaced %s/%.2f | battery failed %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s | bogeys F:%s R:%s | couplers F:%s R:%s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery %.1f V/health %.0f%% | LV %.1f V | GRKV %.0f%%/%s | legacy wear %.0f%% | battery flood %.2f | brownout %s | blackout %s | surfaced %s/%.2f | battery failed %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s | bogeys F:%s R:%s | couplers F:%s R:%s | wear failures controls:%d relays:%d lights:%d indicators:%d | last wear %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -10648,7 +10648,27 @@ if SERVER then
             train:GetNW2Bool(
                 "MEX.Damage.RearCouplerDetached",
                 false
-            ) and "DETACHED" or "OK"
+            ) and "DETACHED" or "OK",
+            train:GetNW2Int(
+                "MEX.Damage.FailedControlCount",
+                0
+            ),
+            train:GetNW2Int(
+                "MEX.Damage.FailedRelayCount",
+                0
+            ),
+            train:GetNW2Int(
+                "MEX.Damage.FailedLightCount",
+                0
+            ),
+            train:GetNW2Int(
+                "MEX.Damage.FailedIndicatorCount",
+                0
+            ),
+            train:GetNW2String(
+                "MEX.Damage.WearFailure",
+                "none"
+            )
         ))
     end)
 
