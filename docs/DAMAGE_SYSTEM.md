@@ -1,4 +1,4 @@
-# Metrostroi Expanded – Crash / Deformation Model
+# Metrostroi Extended – Crash / Deformation Model
 
 Damage System version: **0.17.0**
 
@@ -502,48 +502,38 @@ Interior fixtures are intentionally retained until much deeper crush energy so t
 
 ## Utilities settings
 
-Damage System 0.17.0 separates damage into three independent server-wide subsystems under **Utilities → Metrostroi Expanded**.
+Damage settings are available under **Utilities → Metrostroi Extended**.
 
-### Poškození
+### Physical Damage & Deformation
 
-Controls physical/component damage:
+Physical/component damage controls local mounting failure and physical breakaway of doors, cab buttons, switches, controls, glass, lamps and other mounted ClientProps.
 
-- **Povolit fyzické poškození**
-- **Intenzita poškození** – 0.10 to 3.00, default 1.00
+Controls:
 
-This subsystem handles local mounting failure and physical breakaway of doors, switches, controls, glass, lamps and other mounted ClientProps.
+- **Enable physical damage**
+- **Physical damage intensity** – 0.10 to 3.00, default 1.00
+- **Enable deformation (ALPHA - not recommended)**
+- **Deformation intensity** – 0.10 to 3.00, default 1.00
 
-It does **not** require visual deformation. Collision impacts are sent through the component-impact path even when deformation is disabled. If no deformation state exists, the component is detached from its normal authored/base transform.
+Deformation is dependent on physical damage. It cannot be enabled while physical damage is disabled, and disabling physical damage automatically switches deformation off. Deformation itself can be disabled while physical component breakaway remains enabled.
+
+Collision impacts, explosions and direct hits use the component-impact path even when visual deformation is disabled. Small ButtonMap/control props on the driver's desk receive control-specific breakaway thresholds and local shock reach, so sufficiently strong impacts can tear buttons and switches from the console as physical debris. When a functional control detaches, its corresponding interaction is disabled.
+
+Deformation remains experimental and is labelled **ALPHA - not recommended**. It uses the separate `MEX.Deformation.*` state plus `MEX.Crush.*`.
 
 Backing ConVars:
 
 - `mex_damage_enabled`
 - `mex_damage_physical_scale`
-
-### Deformace (ALPHA - nedoporučované)
-
-Controls experimental carbody/interior deformation:
-
-- **Povolit deformaci**
-- **Intenzita deformace** – 0.10 to 3.00, default 1.00
-
-The Utilities page is explicitly labelled **ALPHA - nedoporučované**. On a fresh configuration deformation defaults to disabled.
-
-Deformation uses a separate state namespace (`MEX.Deformation.*`) plus `MEX.Crush.*`, so physical-damage intensity no longer implicitly changes body-crush intensity and vice versa.
-
-Disabling deformation clears/suppresses the visual deformation path but leaves physical component breakaway available.
-
-Backing ConVars:
-
 - `mex_damage_deformation_enabled`
 - `mex_damage_deformation_scale`
 
-### Elektrické poškození
+### Electrical Damage
 
 Controls electrical/environmental failures:
 
-- **Povolit elektrické poškození**
-- **Intenzita elektrických poruch** – 0.10 to 3.00, default 1.00
+- **Enable electrical damage**
+- **Electrical damage intensity** – 0.10 to 3.00, default 1.00
 
 This subsystem includes:
 
@@ -562,7 +552,7 @@ Backing ConVars:
 
 Disabling the electrical subsystem restores its temporary wrappers/failures so it cannot continue changing train electrical systems while disabled.
 
-All Utilities controls are server-wide and editable only by server administrators. `mex_damage_status` reports the current ON/OFF state and intensity of all three subsystems.
+All Utilities controls are server-wide and editable only by server administrators. `mex_damage_status` reports the current ON/OFF state and intensity of the damage subsystems.
 
 
 ## Electrical switch failures
@@ -673,7 +663,7 @@ The simulation deliberately relies on the protection and electrical systems actu
 
 ## Train Fixer Toolgun
 
-Toolgun category: **Metrostroi Expanded → Train Fixer**
+Toolgun category: **Metrostroi Extended → Train Fixer**
 
 - **Left click** repairs the selected wagon.
 - **Right click** repairs all wagons in the selected train's `WagonList`.
@@ -857,7 +847,7 @@ This visual wiring fault does not require the physical light switch to move.
 
 ### Speedometer power and failure
 
-Many Metrostroi entities continuously publish the physical train speed even with cab power off. Metrostroi Expanded now gates the displayed `Speed`/speedometer packed ratio by the detected low-voltage/instrument power state.
+Many Metrostroi entities continuously publish the physical train speed even with cab power off. Metrostroi Extended now gates the displayed `Speed`/speedometer packed ratio by the detected low-voltage/instrument power state.
 
 With no instrument/control supply the displayed speed is forced to zero.
 
