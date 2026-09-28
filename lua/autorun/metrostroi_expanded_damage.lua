@@ -6355,8 +6355,8 @@ if SERVER then
     concommand.Add("mex_damage_test", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
-        if not MEXD.IsDamageEnabled() then
-            print("[Metrostroi Expanded/Damage] Damage is disabled.")
+        if not MEXD.IsAnyDamageEnabled() then
+            print("[Metrostroi Expanded/Damage] All damage subsystems are disabled.")
             return
         end
 
@@ -6394,8 +6394,8 @@ if SERVER then
     concommand.Add("mex_damage_scrap_test", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
-        if not MEXD.IsDamageEnabled() then
-            print("[Metrostroi Expanded/Damage] Damage is disabled.")
+        if not MEXD.IsDeformationEnabled() then
+            print("[Metrostroi Expanded/Damage] Deformation is disabled.")
             return
         end
 
@@ -6556,106 +6556,189 @@ if CLIENT then
             "Utilities",
             "Metrostroi Expanded",
             "MEXDamageSettings",
-            "Damage",
+            "Poškození",
             "",
             "",
             function(panel)
                 panel:ClearControls()
 
                 panel:Help(
-                    "Metrostroi Expanded damage settings. "
-                    .. "These options are server-wide."
+                    "Metrostroi Expanded - serverové nastavení poškození."
                 )
 
-                local damageCheck = vgui.Create("DCheckBoxLabel", panel)
-                damageCheck:SetText("Enable damage")
-                damageCheck:SetDark(true)
-                damageCheck:SizeToContents()
-                panel:AddItem(damageCheck)
+                local function MakeCheck(text)
+                    local control =
+                        vgui.Create("DCheckBoxLabel", panel)
+                    control:SetText(text)
+                    control:SetDark(true)
+                    control:SizeToContents()
+                    panel:AddItem(control)
+                    return control
+                end
 
+                local function MakeSlider(text)
+                    local control =
+                        vgui.Create("DNumSlider", panel)
+                    control:SetText(text)
+                    control:SetMin(0.1)
+                    control:SetMax(3.0)
+                    control:SetDecimals(2)
+                    control:SetDark(true)
+                    panel:AddItem(control)
+                    return control
+                end
+
+                panel:Help("POŠKOZENÍ")
+                local damageCheck =
+                    MakeCheck("Povolit fyzické poškození")
+                local damageScale =
+                    MakeSlider("Intenzita poškození")
+                panel:Help(
+                    "Odtrhávání dveří, přepínačů, skel, světel a dalších částí. "
+                    .. "Funguje nezávisle na deformaci."
+                )
+
+                panel:Help("DEFORMACE (ALPHA - nedoporučované)")
                 local deformationCheck =
-                    vgui.Create("DCheckBoxLabel", panel)
-                deformationCheck:SetText("Enable deformation")
-                deformationCheck:SetDark(true)
-                deformationCheck:SizeToContents()
-                panel:AddItem(deformationCheck)
+                    MakeCheck("Povolit deformaci")
+                local deformationScale =
+                    MakeSlider("Intenzita deformace")
+                panel:Help(
+                    "ALPHA - nedoporučované. Ohýbání a mačkání karoserie. "
+                    .. "Vypnutí deformace neblokuje fyzické odtrhávání částí."
+                )
+
+                panel:Help("ELEKTRICKÉ POŠKOZENÍ")
+                local electricalCheck =
+                    MakeCheck("Povolit elektrické poškození")
+                local electricalScale =
+                    MakeSlider("Intenzita elektrických poruch")
+                panel:Help(
+                    "Zkraty, voda, relé, jističe, baterie, blikání kontrolek "
+                    .. "a poruchy elektrických ukazatelů."
+                )
 
                 panel:Help(
-                    "Deformation can only be enabled while damage is enabled."
+                    "Hodnota 1.00 = standardní intenzita. "
+                    .. "Rozsah 0.10 až 3.00."
                 )
 
                 local updating = false
                 local nextRefresh = 0
 
+                local function CanEdit()
+                    return IsValid(LocalPlayer())
+                        and LocalPlayer():IsAdmin()
+                end
+
                 local function RefreshSettings()
                     if not IsValid(damageCheck)
                         or not IsValid(deformationCheck)
+                        or not IsValid(electricalCheck)
                     then
                         return
                     end
 
-                    local damageEnabled = MEXD.IsDamageEnabled()
-                    local deformationEnabled =
-                        MEXD.IsDeformationEnabled()
-                    local canEdit =
-                        IsValid(LocalPlayer())
-                        and LocalPlayer():IsAdmin()
+                    local canEdit = CanEdit()
 
                     updating = true
-                    damageCheck:SetChecked(damageEnabled)
-                    deformationCheck:SetChecked(
-                        damageEnabled and deformationEnabled
+
+                    damageCheck:SetChecked(
+                        MEXD.IsPhysicalDamageEnabled()
                     )
+                    deformationCheck:SetChecked(
+                        MEXD.IsDeformationEnabled()
+                    )
+                    electricalCheck:SetChecked(
+                        MEXD.IsElectricalDamageEnabled()
+                    )
+
+                    damageScale:SetValue(
+                        MEXD.GetPhysicalDamageScale()
+                    )
+                    deformationScale:SetValue(
+                        MEXD.GetDeformationScale()
+                    )
+                    electricalScale:SetValue(
+                        MEXD.GetElectricalDamageScale()
+                    )
+
                     updating = false
 
                     damageCheck:SetEnabled(canEdit)
-                    deformationCheck:SetEnabled(
-                        canEdit and damageEnabled
-                    )
+                    deformationCheck:SetEnabled(canEdit)
+                    electricalCheck:SetEnabled(canEdit)
+                    damageScale:SetEnabled(canEdit)
+                    deformationScale:SetEnabled(canEdit)
+                    electricalScale:SetEnabled(canEdit)
                 end
 
-                damageCheck.OnChange = function(_, enabled)
-                    if updating then return end
-                    if not IsValid(LocalPlayer())
-                        or not LocalPlayer():IsAdmin()
-                    then
-                        RefreshSettings()
-                        return
-                    end
+                local function BindCheck(control, command)
+                    control.OnChange = function(_, enabled)
+                        if updating then return end
+                        if not CanEdit() then
+                            RefreshSettings()
+                            return
+                        end
 
-                    RunConsoleCommand(
-                        "mex_damage_set_enabled",
-                        enabled and "1" or "0"
-                    )
-
-                    if not enabled then
-                        updating = true
-                        deformationCheck:SetChecked(false)
-                        deformationCheck:SetEnabled(false)
-                        updating = false
+                        RunConsoleCommand(
+                            command,
+                            enabled and "1" or "0"
+                        )
                     end
                 end
 
-                deformationCheck.OnChange = function(_, enabled)
-                    if updating then return end
+                local function BindSlider(control, command)
+                    control.OnValueChanged = function(_, value)
+                        if updating then return end
+                        if not CanEdit() then
+                            RefreshSettings()
+                            return
+                        end
 
-                    if not MEXD.IsDamageEnabled()
-                        or not IsValid(LocalPlayer())
-                        or not LocalPlayer():IsAdmin()
-                    then
-                        RefreshSettings()
-                        return
+                        RunConsoleCommand(
+                            command,
+                            string.format(
+                                "%.2f",
+                                math.Clamp(
+                                    tonumber(value) or 1,
+                                    0.1,
+                                    3.0
+                                )
+                            )
+                        )
                     end
-
-                    RunConsoleCommand(
-                        "mex_damage_set_deformation_enabled",
-                        enabled and "1" or "0"
-                    )
                 end
+
+                BindCheck(
+                    damageCheck,
+                    "mex_damage_set_enabled"
+                )
+                BindCheck(
+                    deformationCheck,
+                    "mex_damage_set_deformation_enabled"
+                )
+                BindCheck(
+                    electricalCheck,
+                    "mex_damage_set_electrical_enabled"
+                )
+
+                BindSlider(
+                    damageScale,
+                    "mex_damage_set_physical_scale"
+                )
+                BindSlider(
+                    deformationScale,
+                    "mex_damage_set_deformation_scale"
+                )
+                BindSlider(
+                    electricalScale,
+                    "mex_damage_set_electrical_scale"
+                )
 
                 panel.Think = function()
                     if RealTime() < nextRefresh then return end
-                    nextRefresh = RealTime() + 0.25
+                    nextRefresh = RealTime() + 0.35
                     RefreshSettings()
                 end
 
@@ -9385,6 +9468,16 @@ if CLIENT then
     end
 
     local function GetRigidAttachedLocalTransform(cached, state)
+        if not cached then return nil, nil end
+
+        -- Physical breakaway is independent of visual deformation. When the
+        -- deformation subsystem is disabled (or its state has not replicated
+        -- to the client yet), detach the component from its normal authored
+        -- position instead of requiring a deformed transform.
+        if not MEXD.IsDeformationEnabled() or not state then
+            return cached.basePos, cached.baseAng
+        end
+
         local desiredAnchor = DeformLocalPoint(cached.anchorPos, state)
         local desiredAng = DeformLocalAngle(
             cached.anchorPos,
