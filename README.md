@@ -463,9 +463,9 @@ The player-shock calculation is a gameplay model and is not intended as real-wor
 - water arcing should stop naturally when the real Metrostroi electrical state loses voltage after protection operates
 - `mex_damage_status` now reports the last protection device that operated
 - added Toolgun **Metrostroi Expanded → Train Fixer**
-- Train Fixer left click repairs one wagon
-- Train Fixer right click repairs the complete `WagonList` consist
-- repair restores deformation, detached parts, electrical failed-open states, blown fuses, tripped protection and water-exposure state
+- the current Train Fixer is target-only: left click repairs only the exact detached component, running-gear item, hidden service point or structural damage zone being aimed at
+- hidden Battery and GRKV systems use lower-underframe service hotspots; the tool HUD identifies the active target and shows Battery/GRKV/bogey/coupler condition
+- whole-wagon/consist/map-wide repair was moved to the separate admin-only **Admin Train Fixer**
 
 The protection model follows the actual systems exposed by each Metrostroi train. Exact real-world behaviour still depends on how completely that train addon models its breakers, fuses, wiring and protection logic.
 
@@ -561,3 +561,21 @@ Replicated archived server ConVars:
 - `mex_damage_electrical_scale`
 
 `mex_damage_status` prints the ON/OFF state and realism level of each damage subsystem. `1.00` is the intended realistic baseline; values below `1.00` are deliberately more forgiving, while values above `1.00` deliberately exaggerate damage/failure behaviour and are not the normal realistic setting.
+
+
+### Damage 0.18.0 – persistent wear, severe crash damage and targeted repair
+
+- battery damage is persistent and separate from temporary flood state: `MEX.Damage.BatteryHealth` falls from crash shock, water/short damage and extreme electrical abuse
+- damaged batteries lose effective voltage and usable capacity; critical health or a severe water short can leave the battery failed until it is specifically repaired
+- classic rheostat-controller/GRKV trains now accumulate wear from actual `RheostatController.SelectedPosition` movement; high traction current accelerates wear
+- after very high accumulated use, GRKV can fail and physically/electrically jam in its current position instead of magically continuing to rotate
+- non-manual electromechanical relay/contact systems accumulate a much slower legacy-operation wear value; after very large operation counts one internal relay can fail open
+- collision severity is more energy-like: small impacts remain mild while large delta-v impacts rise much more sharply
+- severe front/rear/floor/side crashes can tear off a coupler or bogey mounting; the specific running-gear entity becomes physically detached and can later be reattached by repair
+- people inside the car receive crash injury from large delta-v; unseated occupants are more vulnerable and extreme crash impulses can be fatal
+- a player directly struck by a fast train can receive severe/fatal vehicle/crush damage based on impact speed
+- ordinary **Train Fixer** now repairs only the thing being aimed at; it no longer repairs a whole wagon/consist
+- detached debris repairs restore only that component and only electrical/button failures no longer required by another still-missing component
+- **Admin Train Fixer**: left click repairs a full wagon, right click the connected consist, Reload repairs every Metrostroi wagon on the map
+- deformation behaviour was not expanded by this change
+
