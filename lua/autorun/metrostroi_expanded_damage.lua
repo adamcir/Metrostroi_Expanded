@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.10.3"
+MEXD.Version = "0.11.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -115,6 +115,79 @@ local function NormalizedHardwareText(name, model)
     )
     local compact = string.gsub(text, "[^%w]", "")
     return text, compact
+end
+
+local function IsMechanicalElectricalException(
+    name,
+    model,
+    buttonIDs
+)
+    local text, compact = NormalizedHardwareText(name, model)
+
+    local function has(value)
+        return string.find(compact, value, 1, true) ~= nil
+    end
+
+    -- These controls mechanically position another mechanism. Losing the
+    -- external handle/key must not magically drive the internal mechanism to
+    -- zero; it simply becomes inaccessible in its last physical position.
+    local mechanical =
+        has("reverser")
+        or has("reversor")
+        or has("controller")
+        or has("grkv")
+        or has("rheostatcontroller")
+        or has("kvwrench")
+        or has("kru")
+        or has("kro")
+        or has("krr")
+        or has("rcu")
+        or has("gvwrench")
+        or has("brakevalve")
+        or has("parkingbrake")
+        or has("manualbrake")
+        or has("handbrake")
+        or has("brakewheel")
+        or has("disconnect")
+        or has("isolation")
+        or has("stopkran")
+        or has("emergencybrakevalve")
+
+    -- GV is a high-voltage mechanical disconnect/switch handle on the classic
+    -- cars. If the handle is broken off, retain the actual HV switch position.
+    if compact == "gv"
+        or string.find(compact, "gvtoggle", 1, true)
+        or string.find(text, "/gv.", 1, true)
+        or string.find(text, "/gv_", 1, true)
+    then
+        mechanical = true
+    end
+
+    for _, id in ipairs(buttonIDs or {}) do
+        local idCompact = string.lower(
+            tostring(id):gsub("[^%w]", "")
+        )
+
+        if string.find(idCompact, "reverser", 1, true)
+            or string.find(idCompact, "kvwrench", 1, true)
+            or string.find(idCompact, "kvup", 1, true)
+            or string.find(idCompact, "kvdown", 1, true)
+            or string.find(idCompact, "kvset", 1, true)
+            or string.find(idCompact, "kro", 1, true)
+            or string.find(idCompact, "krr", 1, true)
+            or string.find(idCompact, "driver", 1, true)
+                and string.find(idCompact, "valve", 1, true)
+            or string.find(idCompact, "parkingbrake", 1, true)
+            or string.find(idCompact, "brakeline", 1, true)
+            or string.find(idCompact, "trainline", 1, true)
+            or idCompact == "gvtoggle"
+        then
+            mechanical = true
+            break
+        end
+    end
+
+    return mechanical == true
 end
 
 local function AddKnownDetachedHardwareButtons(name, model, add)
@@ -863,6 +936,211 @@ if SERVER then
         end
     end
 
+    local function IsRelayLikeElectricalSystem(system)
+        if not istable(system) or not isfunction(system.TriggerInput) then
+            return false
+        end
+
+        return isnumber(system.Value)
+            or isnumber(system.TargetValue)
+            or system.relay_type ~= nil
+            or system.defaultvalue ~= nil
+            or system.three_position ~= nil
+            or system.maxvalue ~= nil
+    end
+
+    local function ElectricalInputWouldEnergize(system, input, value)
+        input = tostring(input or "")
+        value = tonumber(value) or 0
+
+        if input == "Open"
+            or input == "-"
+            or input == "OpenBypass"
+        then
+            return false
+        end
+
+        if input == "Set" then
+            return value > 0
+        end
+
+        if input == "Block"
+            or input == "OpenTime"
+            or input == "CloseTime"
+            or input == "Check"
+        then
+            return false
+        end
+
+        -- Toggle/Close/+ and any unknown manual activation path must not be
+        -- allowed to re-energize a switch whose physical operator is gone.
+        return true
+    end
+
+    local function RestoreElectricalFailures(train)
+        if not IsValid(train) then return end
+
+        if istable(train.MEXDamageElectricalFailureSystems) then
+            for systemName, data in pairs(
+                train.MEXDamageElectricalFailureSystems
+            ) do
+                local system = train[systemName]
+
+                if istable(data)
+                    and istable(system)
+                    and isfunction(data.originalTriggerInput)
+                then
+                    system.TriggerInput = data.originalTriggerInput
+                end
+            end
+        end
+
+        train.MEXDamageElectricalFailureSystems = {}
+    end
+
+    local function FailElectricalSystemOpen(train, systemName)
+        if not IsSubwayTrain(train)
+            or not isstring(systemName)
+            or systemName == ""
+        then
+            return false
+        end
+
+        local system = train[systemName]
+        if not IsRelayLikeElectricalSystem(system) then
+            return false
+        end
+
+        train.MEXDamageElectricalFailureSystems =
+            train.MEXDamageElectricalFailureSystems or {}
+
+        if not train.MEXDamageElectricalFailureSystems[systemName] then
+            local original = system.TriggerInput
+
+            train.MEXDamageElectricalFailureSystems[systemName] = {
+                originalTriggerInput = original,
+            }
+
+            system.TriggerInput = function(self, input, value, ...)
+                local failures =
+                    IsValid(train)
+                    and train.MEXDamageElectricalFailureSystems
+                    or nil
+
+                if failures and failures[systemName] then
+                    if ElectricalInputWouldEnergize(
+                        self,
+                        input,
+                        value
+                    ) then
+                        return
+                    end
+                end
+
+                return original(self, input, value, ...)
+            end
+        end
+
+        -- Use the original Metrostroi input API to open the circuit. Relay
+        -- systems then update Value/TargetValue through their normal logic.
+        local data =
+            train.MEXDamageElectricalFailureSystems[systemName]
+        local trigger =
+            data and data.originalTriggerInput
+            or system.TriggerInput
+
+        if isfunction(trigger) then
+            pcall(trigger, system, "Set", 0)
+            pcall(trigger, system, "Open", 1)
+        end
+
+        return true
+    end
+
+    local function AddElectricalCandidate(out, seen, value)
+        if not isstring(value) then return end
+        value = value:gsub("^.+:", "")
+        if value == "" or #value > 64 then return end
+        if not string.match(value, "^[%w_%-]+$") then return end
+        if seen[value] then return end
+        seen[value] = true
+        out[#out + 1] = value
+    end
+
+    local function CandidateFromButtonID(buttonID)
+        if not isstring(buttonID) then return nil end
+
+        local id = buttonID:gsub("^.+:", "")
+
+        local suffixes = {
+            "Toggle",
+            "Set",
+            "On",
+            "Off",
+        }
+
+        for _, suffix in ipairs(suffixes) do
+            if string.sub(id, -#suffix) == suffix
+                and #id > #suffix
+            then
+                return string.sub(id, 1, #id - #suffix)
+            end
+        end
+
+        return nil
+    end
+
+    local function ApplyDetachedElectricalFailure(
+        train,
+        name,
+        model,
+        buttonIDs,
+        electricalTargets,
+        clientMechanical
+    )
+        if not IsSubwayTrain(train) then return {} end
+
+        -- Server classification is authoritative. A client may request that a
+        -- system is treated as mechanical, but it cannot make a known
+        -- mechanical controller electrically fail-open.
+        local mechanical =
+            clientMechanical == true
+            or IsMechanicalElectricalException(
+                name,
+                model,
+                buttonIDs
+            )
+
+        if mechanical then
+            return {}
+        end
+
+        local candidates = {}
+        local seen = {}
+
+        for _, target in ipairs(electricalTargets or {}) do
+            AddElectricalCandidate(candidates, seen, target)
+        end
+
+        for _, buttonID in ipairs(buttonIDs or {}) do
+            AddElectricalCandidate(
+                candidates,
+                seen,
+                CandidateFromButtonID(buttonID)
+            )
+        end
+
+        local failed = {}
+
+        for _, systemName in ipairs(candidates) do
+            if FailElectricalSystemOpen(train, systemName) then
+                failed[#failed + 1] = systemName
+            end
+        end
+
+        return failed
+    end
+
     local function RemoveDetachedServerComponents(train, broadcastReset)
         if not IsSubwayTrain(train) then return end
 
@@ -883,6 +1161,7 @@ if SERVER then
         end
 
         train.MEXDamageDetachedServer = {}
+        RestoreElectricalFailures(train)
         ClearDetachedButtons(train)
         RebuildDetachedButtonGuard(train)
 
@@ -2320,6 +2599,20 @@ if SERVER then
             end
         end
 
+        local clientMechanical = net.ReadBool()
+        local electricalTargets = {}
+        local electricalTargetCount = math.min(net.ReadUInt(5), 24)
+
+        for _ = 1, electricalTargetCount do
+            local target = net.ReadString()
+            if #target <= 64
+                and target ~= ""
+                and string.match(target, "^[%w_%-]+$")
+            then
+                electricalTargets[#electricalTargets + 1] = target
+            end
+        end
+
         if not IsSubwayTrain(train) then return end
         InitializeTrainDamage(train)
         if CurTime() < (train.MEXDamageIgnoreUntil or 0) then return end
@@ -2599,10 +2892,24 @@ if SERVER then
             end
         end
 
+        local electricalFailures = {}
+
+        if isControl then
+            electricalFailures = ApplyDetachedElectricalFailure(
+                train,
+                name,
+                model,
+                validButtons,
+                electricalTargets,
+                clientMechanical
+            )
+        end
+
         train.MEXDamageDetachedServer[name] = {
             debris = debris,
             debrisList = debrisList,
             buttons = validButtons,
+            electricalFailures = electricalFailures,
         }
 
         RebuildDetachedButtonGuard(train)
@@ -3019,7 +3326,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h | detached %d | blocked controls %d",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -3036,6 +3343,9 @@ if SERVER then
                 or 0,
             istable(train.MEXDamageBlockedButtons)
                 and table.Count(train.MEXDamageBlockedButtons)
+                or 0,
+            istable(train.MEXDamageElectricalFailureSystems)
+                and table.Count(train.MEXDamageElectricalFailureSystems)
                 or 0
         ))
     end)
@@ -6145,6 +6455,71 @@ if CLIENT then
         return shattered > 0
     end
 
+    local function GetDetachedElectricalMetadata(
+        train,
+        panelName,
+        propName,
+        cached,
+        buttonIDs
+    )
+        if IsControlAccessory(propName, cached) then
+            return true, {}
+        end
+
+        local candidates = {}
+        local seen = {}
+
+        local function add(value)
+            if not isstring(value) then return end
+            value = value:gsub("^.+:", "")
+            if value == "" or #value > 64 then return end
+            if not string.match(value, "^[%w_%-]+$") then return end
+            if seen[value] then return end
+            seen[value] = true
+            candidates[#candidates + 1] = value
+        end
+
+        if panelName and istable(train.ButtonMap) then
+            local panel = train.ButtonMap[panelName]
+
+            if istable(panel) and istable(panel.buttons) then
+                for _, button in pairs(panel.buttons) do
+                    if not istable(button) then continue end
+
+                    if GetButtonPhysicalPropName(train, button)
+                        ~= propName
+                    then
+                        continue
+                    end
+
+                    local config = button.model
+
+                    if istable(config) then
+                        add(config.var)
+                    end
+
+                    if isstring(button.ID) then
+                        local id = button.ID:gsub("^.+:", "")
+                        local base = id:gsub(
+                            "(Toggle|Set|On|Off)$",
+                            ""
+                        )
+
+                        if base ~= id then add(base) end
+                    end
+                end
+            end
+        end
+
+        local mechanical = IsMechanicalElectricalException(
+            propName,
+            cached and cached.model or "",
+            buttonIDs
+        )
+
+        return mechanical, candidates
+    end
+
     local function RequestServerDetach(
         train,
         name,
@@ -6186,6 +6561,15 @@ if CLIENT then
             cached
         )
 
+        local mechanicalElectrical, electricalTargets =
+            GetDetachedElectricalMetadata(
+                train,
+                panelName,
+                name,
+                cached,
+                buttons
+            )
+
         net.Start("MEX.DetachRequest")
             net.WriteEntity(train)
             net.WriteString(name)
@@ -6224,6 +6608,15 @@ if CLIENT then
             net.WriteUInt(math.min(#buttons, 48), 6)
             for i = 1, math.min(#buttons, 48) do
                 net.WriteString(buttons[i])
+            end
+
+            net.WriteBool(mechanicalElectrical == true)
+            net.WriteUInt(
+                math.min(#electricalTargets, 24),
+                5
+            )
+            for i = 1, math.min(#electricalTargets, 24) do
+                net.WriteString(electricalTargets[i])
             end
         net.SendToServer()
 
