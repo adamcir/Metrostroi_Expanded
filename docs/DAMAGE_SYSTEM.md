@@ -498,3 +498,22 @@ When overall crush reaches the scrap phase, visual seats, benches, couches, hand
 Running gear (bogies, wheels, axles, couplers and major underframe mechanisms) remains on the original physics chassis.
 
 Interior fixtures are intentionally retained until much deeper crush energy so they are compressed with the cabin rather than immediately detaching as debris.
+
+
+## Utilities settings
+
+Damage System 0.10.3 adds server-wide controls under **Utilities → Metrostroi Expanded → Damage**.
+
+- **Enable damage** controls the complete Metrostroi Expanded damage pipeline.
+- **Enable deformation** controls only visual carbody/interior deformation and is available only while damage is enabled.
+
+When damage is disabled, deformation is automatically disabled and existing Metrostroi Expanded damage/debris state is reset. New collisions, weapon hits, physgun impacts and detach requests are ignored by the damage subsystem.
+
+When only deformation is disabled, logical damage and component failures remain active. Detached controls remain detached/disabled, while body, cabin and interior deformation is visually restored.
+
+The backing replicated archived server ConVars are:
+
+- `mex_damage_enabled`
+- `mex_damage_deformation_enabled`
+
+Only server administrators can change the Utilities controls.
