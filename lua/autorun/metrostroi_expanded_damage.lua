@@ -1809,6 +1809,44 @@ if SERVER then
         return (tonumber(voltage) or 0) >= 200
     end
 
+    local function IsTrainHighVoltageConnected(train)
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        local known = false
+
+        for _, name in ipairs({
+            "GV",
+            "BV",
+            "MainSwitch",
+            "HVSwitch",
+            "HighVoltageSwitch",
+        }) do
+            local system = train[name]
+
+            if istable(system) then
+                local value =
+                    tonumber(system.TargetValue)
+                    or tonumber(system.Value)
+
+                if value ~= nil then
+                    known = true
+                    if value > 0.05 then
+                        return true
+                    end
+                end
+            end
+        end
+
+        -- If this train family does not expose a known main HV operator, keep
+        -- compatibility and infer the state from its normal electrical fields.
+        return not known
+    end
+
+    MEXD.IsHighVoltageConnected =
+        IsTrainHighVoltageConnected
+
     local function GetTrainElectricalWaterState(train)
         local electric = istable(train.Electric)
             and train.Electric
@@ -1828,6 +1866,13 @@ if SERVER then
                 "Main750V",
             })
         )
+
+        -- TR.Main750V describes contact-rail availability, not necessarily a
+        -- closed main circuit. An open GV/BV means the train's internal HV
+        -- equipment is de-energized even while the shoes sit on a live rail.
+        if not IsTrainHighVoltageConnected(train) then
+            hv = 0
+        end
 
         local lv = MaxAbsField(electric, {
             "Aux80V",
@@ -1984,6 +2029,7 @@ if SERVER then
                 "MEX.Damage.ThirdRailVoltage",
                 0
             ) >= 200
+            and IsTrainHighVoltageConnected(train)
 
         -- Moisture or a stored damage state cannot create energy. Arcing needs
         -- a genuinely live third rail or a still-working connected battery.
