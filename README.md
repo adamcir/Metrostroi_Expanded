@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.16.0**
+Current damage-system module version: **0.17.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -517,3 +517,41 @@ The protection model follows the actual systems exposed by each Metrostroi train
 - water-fault progression is faster: the initial protection threshold is lower, fault exposure accumulates faster, breaker re-trip checks happen more quickly, and continuing faults escalate sooner
 - wet-light/door/battery glitches continue to scale down with moisture while the train dries
 - `mex_damage_status` now reports door-fault relay, battery voltage factor and whether instrument power is currently ON/OFF
+
+
+### Damage 0.17.0 – independent physical, deformation and electrical damage
+
+The damage system is now split into three independently configurable subsystems.
+
+**Utilities → Metrostroi Expanded** now contains three separate pages:
+
+- **Poškození**
+  - `Povolit fyzické poškození`
+  - `Intenzita poškození` (0.10–3.00)
+- **Deformace (ALPHA - nedoporučované)**
+  - `Povolit deformaci`
+  - `Intenzita deformace` (0.10–3.00)
+- **Elektrické poškození**
+  - `Povolit elektrické poškození`
+  - `Intenzita elektrických poruch` (0.10–3.00)
+
+The three pipelines no longer depend on each other:
+
+- physical damage controls component breakaway: doors, switches, controls, glass, lamps and other mounted parts
+- deformation controls only experimental carbody/interior crumpling and has its own `MEX.Deformation.*` impact/damage state
+- electrical damage controls water faults, relay/breaker/fuse behaviour, battery faults, electrical indication glitches and electrical consequences of destroyed controls
+
+**Physical breakaway now works with deformation completely disabled.** `PhysicsCollide` impacts and the velocity-change fallback both create local component-impact events, and a detached ClientProp can use its authored/base transform when no deformation state exists. A hard collision can therefore tear out doors, switches and other mounted components while the body itself remains undeformed.
+
+Deformation is marked **ALPHA - nedoporučované** in Utilities and defaults off for a fresh configuration.
+
+Replicated archived server ConVars:
+
+- `mex_damage_enabled` – physical/component damage
+- `mex_damage_physical_scale`
+- `mex_damage_deformation_enabled`
+- `mex_damage_deformation_scale`
+- `mex_damage_electrical_enabled`
+- `mex_damage_electrical_scale`
+
+`mex_damage_status` now prints the ON/OFF state and intensity of all three subsystems before the per-train damage details.
