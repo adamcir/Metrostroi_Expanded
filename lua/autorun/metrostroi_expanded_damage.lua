@@ -1,4 +1,4 @@
--- Metrostroi Expanded - Damage System
+-- Metrostroi Extended - Damage System
 -- Simple directional crash damage and visual deformation for Metrostroi trains.
 -- Copyright (C) 2026 Adam Cir / Adava Software
 -- Licensed under GNU GPL v3.0.
@@ -39,7 +39,7 @@ if SERVER then
         DAMAGE_ENABLED_CVAR_NAME,
         "1",
         settingFlags,
-        "Enable Metrostroi Expanded physical/component damage",
+        "Enable Metrostroi Extended physical/component damage",
         0,
         1
     )
@@ -48,7 +48,7 @@ if SERVER then
         DEFORMATION_ENABLED_CVAR_NAME,
         "0",
         settingFlags,
-        "Enable Metrostroi Expanded ALPHA visual deformation",
+        "Enable Metrostroi Extended ALPHA visual deformation",
         0,
         1
     )
@@ -57,7 +57,7 @@ if SERVER then
         ELECTRICAL_ENABLED_CVAR_NAME,
         "1",
         settingFlags,
-        "Enable Metrostroi Expanded electrical damage",
+        "Enable Metrostroi Extended electrical damage",
         0,
         1
     )
@@ -117,7 +117,8 @@ function MEXD.IsDamageEnabled()
 end
 
 function MEXD.IsDeformationEnabled()
-    return ReadBoolConVar(DEFORMATION_ENABLED_CVAR_NAME, false)
+    return MEXD.IsPhysicalDamageEnabled()
+        and ReadBoolConVar(DEFORMATION_ENABLED_CVAR_NAME, false)
 end
 
 function MEXD.IsElectricalDamageEnabled()
@@ -170,7 +171,7 @@ end
 MEXD.SourceFile = MEXD_SOURCE_FILE
 
 print(string.format(
-    "[Metrostroi Expanded/Damage] loaded v%s from %s (%s)",
+    "[Metrostroi Extended/Damage] loaded v%s from %s (%s)",
     tostring(MEXD.Version),
     tostring(MEXD.SourceFile),
     SERVER and "SERVER" or "CLIENT"
@@ -178,7 +179,7 @@ print(string.format(
 
 concommand.Add("mex_damage_version", function()
     print(string.format(
-        "[Metrostroi Expanded/Damage] v%s | source: %s | realm: %s",
+        "[Metrostroi Extended/Damage] v%s | source: %s | realm: %s",
         tostring(MEXD.Version),
         tostring(MEXD.SourceFile),
         SERVER and "SERVER" or "CLIENT"
@@ -2807,7 +2808,7 @@ if SERVER then
 
                 -- Metrostroi normally keeps publishing physical Speed even on
                 -- several cars whose cab speedometer should be electrically
-                -- dead. Expanded gates the displayed speed by the actual
+                -- dead. Extended gates the displayed speed by the actual
                 -- low-voltage/instrument power state.
                 if speedIndicator
                     and not IsTrainInstrumentationPowered(self)
@@ -5416,12 +5417,26 @@ if SERVER then
 
     concommand.Add("mex_damage_set_enabled", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetBoolSetting(damageEnabledConVar, tobool(args[1]))
+
+        local enabled = tobool(args[1])
+        SetBoolSetting(damageEnabledConVar, enabled)
+
+        if not enabled then
+            SetBoolSetting(deformationEnabledConVar, false)
+        end
     end)
 
     concommand.Add("mex_damage_set_deformation_enabled", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetBoolSetting(deformationEnabledConVar, tobool(args[1]))
+
+        local enabled = tobool(args[1])
+
+        if enabled and not MEXD.IsPhysicalDamageEnabled() then
+            SetBoolSetting(deformationEnabledConVar, false)
+            return
+        end
+
+        SetBoolSetting(deformationEnabledConVar, enabled)
     end)
 
     concommand.Add("mex_damage_set_electrical_enabled", function(ply, _, args)
@@ -5443,6 +5458,15 @@ if SERVER then
         if IsValid(ply) and not ply:IsAdmin() then return end
         SetScaleSetting(electricalScaleConVar, args[1])
     end)
+
+    cvars.AddChangeCallback(
+        DAMAGE_ENABLED_CVAR_NAME,
+        function(_, _, newValue)
+            if tobool(newValue) then return end
+            SetBoolSetting(deformationEnabledConVar, false)
+        end,
+        "MEX.Damage.Settings.PhysicalEnabled"
+    )
 
     cvars.AddChangeCallback(
         ELECTRICAL_ENABLED_CVAR_NAME,
@@ -6454,25 +6478,25 @@ if SERVER then
         if IsValid(ply) and not ply:IsAdmin() then return end
 
         if not MEXD.IsAnyDamageEnabled() then
-            print("[Metrostroi Expanded/Damage] All damage subsystems are disabled.")
+            print("[Metrostroi Extended/Damage] All damage subsystems are disabled.")
             return
         end
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
             return
         end
 
         InitializeTrainDamage(train)
         if CurTime() < (train.MEXDamageIgnoreUntil or 0) then
-            print("[Metrostroi Expanded/Damage] Damage system is still in the 1000 ms spawn grace period.")
+            print("[Metrostroi Extended/Damage] Damage system is still in the 1000 ms spawn grace period.")
             return
         end
 
         local zone = string.lower(args[1] or "front")
         if not ZONES[zone] then
-            print("[Metrostroi Expanded/Damage] Zone must be: front, rear, left, right, roof or floor.")
+            print("[Metrostroi Extended/Damage] Zone must be: front, rear, left, right, roof or floor.")
             return
         end
 
@@ -6493,19 +6517,19 @@ if SERVER then
         if IsValid(ply) and not ply:IsAdmin() then return end
 
         if not MEXD.IsDeformationEnabled() then
-            print("[Metrostroi Expanded/Damage] Deformation is disabled.")
+            print("[Metrostroi Extended/Damage] Deformation is disabled.")
             return
         end
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
             return
         end
 
         InitializeTrainDamage(train)
         if CurTime() < (train.MEXDamageIgnoreUntil or 0) then
-            print("[Metrostroi Expanded/Damage] Damage system is still in the spawn grace period.")
+            print("[Metrostroi Extended/Damage] Damage system is still in the spawn grace period.")
             return
         end
 
@@ -6532,7 +6556,7 @@ if SERVER then
         )
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] front scrap test set to %.2f for %s",
+            "[Metrostroi Extended/Damage] front scrap test set to %.2f for %s",
             energy,
             train:GetClass()
         ))
@@ -6543,12 +6567,12 @@ if SERVER then
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
             return
         end
 
         MEXD.Reset(train)
-        print("[Metrostroi Expanded/Damage] Damage reset for " .. train:GetClass())
+        print("[Metrostroi Extended/Damage] Damage reset for " .. train:GetClass())
     end)
 
     concommand.Add("mex_damage_status", function(ply)
@@ -6556,12 +6580,12 @@ if SERVER then
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
             return
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] subsystems | physical %s x%.2f | deformation %s x%.2f (ALPHA) | electrical %s x%.2f",
+            "[Metrostroi Extended/Damage] subsystems | physical %s x%.2f | deformation %s x%.2f (ALPHA) | electrical %s x%.2f",
             MEXD.IsPhysicalDamageEnabled() and "ON" or "OFF",
             MEXD.GetPhysicalDamageScale(),
             MEXD.IsDeformationEnabled() and "ON" or "OFF",
@@ -6571,7 +6595,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
+            "[Metrostroi Extended/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -6656,7 +6680,7 @@ end
 
 if CLIENT then
     ---------------------------------------------------------------------------
-    -- Utilities -> Metrostroi Expanded
+    -- Utilities -> Metrostroi Extended
     ---------------------------------------------------------------------------
 
     local function MEXUtilitiesCanEdit()
@@ -6668,7 +6692,8 @@ if CLIENT then
         panel,
         text,
         command,
-        readValue
+        readValue,
+        canEdit
     )
         local control =
             vgui.Create("DCheckBoxLabel", panel)
@@ -6686,13 +6711,18 @@ if CLIENT then
             updating = true
             control:SetChecked(readValue())
             updating = false
-            control:SetEnabled(MEXUtilitiesCanEdit())
+            control:SetEnabled(
+                MEXUtilitiesCanEdit()
+                    and (not canEdit or canEdit())
+            )
         end
 
         control.OnChange = function(_, enabled)
             if updating then return end
 
-            if not MEXUtilitiesCanEdit() then
+            if not MEXUtilitiesCanEdit()
+                or (canEdit and not canEdit())
+            then
                 control:MEXRefresh()
                 return
             end
@@ -6710,7 +6740,8 @@ if CLIENT then
         panel,
         text,
         command,
-        readValue
+        readValue,
+        canEdit
     )
         local control =
             vgui.Create("DNumSlider", panel)
@@ -6729,13 +6760,18 @@ if CLIENT then
             updating = true
             control:SetValue(readValue())
             updating = false
-            control:SetEnabled(MEXUtilitiesCanEdit())
+            control:SetEnabled(
+                MEXUtilitiesCanEdit()
+                    and (not canEdit or canEdit())
+            )
         end
 
         control.OnValueChanged = function(_, value)
             if updating then return end
 
-            if not MEXUtilitiesCanEdit() then
+            if not MEXUtilitiesCanEdit()
+                or (canEdit and not canEdit())
+            then
                 control:MEXRefresh()
                 return
             end
@@ -6787,135 +6823,120 @@ if CLIENT then
     hook.Add("PopulateToolMenu", "MEX.Damage.PopulateUtilities", function()
         spawnmenu.AddToolMenuOption(
             "Utilities",
-            "Metrostroi Expanded",
+            "Metrostroi Extended",
             "MEXPhysicalDamageSettings",
-            "Poškození",
+            "Physical Damage & Deformation",
             "",
             "",
             function(panel)
                 panel:ClearControls()
 
                 panel:Help(
-                    "Fyzické poškození vlaku. "
-                    .. "Je nezávislé na vizuální deformaci."
+                    "Physical damage controls breakaway components such as "
+                    .. "doors, cab buttons, switches, glass, lamps and other "
+                    .. "mounted parts during collisions, explosions and direct hits."
                 )
 
-                local enabled = AddMEXUtilityCheck(
+                local physicalEnabled = AddMEXUtilityCheck(
                     panel,
-                    "Povolit fyzické poškození",
+                    "Enable physical damage",
                     "mex_damage_set_enabled",
                     MEXD.IsPhysicalDamageEnabled
                 )
 
-                local scale = AddMEXUtilitySlider(
+                local physicalScale = AddMEXUtilitySlider(
                     panel,
-                    "Intenzita poškození",
+                    "Physical damage intensity",
                     "mex_damage_set_physical_scale",
                     MEXD.GetPhysicalDamageScale
                 )
 
                 panel:Help(
-                    "Ovlivňuje odtrhávání dveří, přepínačů, skel, "
-                    .. "světel a dalších částí při nárazu, výbuchu "
-                    .. "nebo přímém zásahu."
-                )
-                panel:Help(
-                    "I když je deformace vypnutá, části lze nárazem "
-                    .. "stále utrhnout."
-                )
-                panel:Help(
-                    "1.00 = standardní intenzita, rozsah 0.10 až 3.00."
+                    "1.00 = standard intensity, range 0.10 to 3.00."
                 )
 
-                InstallMEXUtilityRefresh(
+                panel:Help(
+                    "DEFORMATION - ALPHA, NOT RECOMMENDED"
+                )
+                panel:Help(
+                    "Experimental visual crushing and bending of the carbody. "
+                    .. "Physical damage must be enabled before deformation can "
+                    .. "be enabled."
+                )
+
+                local deformationEnabled = AddMEXUtilityCheck(
                     panel,
-                    { enabled, scale }
-                )
-            end
-        )
-
-        spawnmenu.AddToolMenuOption(
-            "Utilities",
-            "Metrostroi Expanded",
-            "MEXDeformationSettings",
-            "Deformace (ALPHA - nedoporučované)",
-            "",
-            "",
-            function(panel)
-                panel:ClearControls()
-
-                panel:Help(
-                    "DEFORMACE - ALPHA, NEDOPORUČOVANÉ"
-                )
-                panel:Help(
-                    "Experimentální vizuální mačkání a ohýbání "
-                    .. "karoserie. Může mít chyby s některými modely."
-                )
-
-                local enabled = AddMEXUtilityCheck(
-                    panel,
-                    "Povolit deformaci",
+                    "Enable deformation (ALPHA - not recommended)",
                     "mex_damage_set_deformation_enabled",
-                    MEXD.IsDeformationEnabled
+                    MEXD.IsDeformationEnabled,
+                    MEXD.IsPhysicalDamageEnabled
                 )
 
-                local scale = AddMEXUtilitySlider(
+                local deformationScale = AddMEXUtilitySlider(
                     panel,
-                    "Intenzita deformace",
+                    "Deformation intensity",
                     "mex_damage_set_deformation_scale",
-                    MEXD.GetDeformationScale
+                    MEXD.GetDeformationScale,
+                    MEXD.IsPhysicalDamageEnabled
                 )
 
                 panel:Help(
-                    "Deformace je oddělená od fyzického poškození. "
-                    .. "Její vypnutí nevypíná odtrhávání komponent."
+                    "Disabling physical damage automatically disables deformation."
                 )
                 panel:Help(
-                    "1.00 = standardní intenzita, rozsah 0.10 až 3.00."
+                    "Deformation may be disabled while physical breakaway remains enabled."
+                )
+                panel:Help(
+                    "1.00 = standard intensity, range 0.10 to 3.00."
                 )
 
                 InstallMEXUtilityRefresh(
                     panel,
-                    { enabled, scale }
+                    {
+                        physicalEnabled,
+                        physicalScale,
+                        deformationEnabled,
+                        deformationScale,
+                    }
                 )
             end
         )
 
         spawnmenu.AddToolMenuOption(
             "Utilities",
-            "Metrostroi Expanded",
+            "Metrostroi Extended",
             "MEXElectricalDamageSettings",
-            "Elektrické poškození",
+            "Electrical Damage",
             "",
             "",
             function(panel)
                 panel:ClearControls()
 
                 panel:Help(
-                    "Elektrické poruchy Metrostroi Expanded."
+                    "Electrical and environmental failures in Metrostroi Extended."
                 )
 
                 local enabled = AddMEXUtilityCheck(
                     panel,
-                    "Povolit elektrické poškození",
+                    "Enable electrical damage",
                     "mex_damage_set_electrical_enabled",
                     MEXD.IsElectricalDamageEnabled
                 )
 
                 local scale = AddMEXUtilitySlider(
                     panel,
-                    "Intenzita elektrických poruch",
+                    "Electrical damage intensity",
                     "mex_damage_set_electrical_scale",
                     MEXD.GetElectricalDamageScale
                 )
 
                 panel:Help(
-                    "Ovlivňuje zkraty, vodu, relé, jističe, pojistky, "
-                    .. "baterii, blikání kontrolek, dveřová relé "
-                    .. "a chybné elektrické ukazatele."
+                    "Affects shorts, water faults, relays, breakers, fuses, "
+                    .. "battery behaviour, indicator flicker, door relays "
+                    .. "and incorrect electrical gauge indications."
                 )
                 panel:Help(
-                    "1.00 = standardní intenzita, rozsah 0.10 až 3.00."
+                    "1.00 = standard intensity, range 0.10 to 3.00."
                 )
 
                 InstallMEXUtilityRefresh(
@@ -10257,7 +10278,7 @@ if CLIENT then
         elseif isDoor then
             return math.Clamp(largest * 0.22, 8, 30)
         elseif isControl then
-            return math.Clamp(largest * 0.38, 3, 12)
+            return math.Clamp(largest * 0.52, 4, 18)
         end
 
         return math.Clamp(largest * 0.28, 4, 18)
@@ -10269,7 +10290,7 @@ if CLIENT then
         if isDoor then
             return 0.20 + seed * 0.14
         elseif isControl then
-            return 0.055 + seed * 0.085
+            return 0.035 + seed * 0.065
         end
 
         return 0.13 + seed * 0.14
@@ -10340,9 +10361,15 @@ if CLIENT then
                 centerDistance - componentRadius
             )
 
-            if edgeDistance > radius then continue end
+            -- Small cab controls can fail from the local shock even when the
+            -- contact point is slightly outside their tiny physical bounds.
+            local effectiveRadius = isControl
+                and radius * 1.20
+                or radius
 
-            local falloff = 1 - edgeDistance / math.max(radius, 1)
+            if edgeDistance > effectiveRadius then continue end
+
+            local falloff = 1 - edgeDistance / math.max(effectiveRadius, 1)
             local score = falloff * power
             local threshold = isGlass
                 and (0.018 + StableFraction(name) * 0.035)
@@ -10404,9 +10431,9 @@ if CLIENT then
                 centerDistance = centerDistance,
                 edgeDistance = edgeDistance,
                 priority =
-                    isAccessory and 6
+                    isControl and 7
+                    or (isAccessory and 6)
                     or (isGlass and 5)
-                    or (isControl and 4)
                     or (isDoor and 2 or 3),
             }
         end
@@ -11274,7 +11301,7 @@ if CLIENT then
 
         if count <= 1 or frontBones == 0 then
             print(string.format(
-                "[Metrostroi Expanded/Damage] %s: stock body model %s has no usable non-root bones near the front; using main-body vertex mesh fallback for front deformation.",
+                "[Metrostroi Extended/Damage] %s: stock body model %s has no usable non-root bones near the front; using main-body vertex mesh fallback for front deformation.",
                 train:GetClass(),
                 tostring(train:GetModel())
             ))
@@ -11619,7 +11646,7 @@ if CLIENT then
         if not train.MEXDamageMeshFallbackAnnounced then
             train.MEXDamageMeshFallbackAnnounced = true
             print(string.format(
-                "[Metrostroi Expanded/Damage] main-body crumple mesh active for %s (%s), %d render parts",
+                "[Metrostroi Extended/Damage] main-body crumple mesh active for %s (%s), %d render parts",
                 tostring(train:GetClass()),
                 tostring(model),
                 #newParts
@@ -12546,21 +12573,21 @@ if CLIENT then
 
         chat.AddText(
             Color(120, 255, 120),
-            "[Metrostroi Expanded] Visual control layout restored. Detached server components stay disabled until mex_damage_reset."
+            "[Metrostroi Extended] Visual control layout restored. Detached server components stay disabled until mex_damage_reset."
         )
     end)
 
     concommand.Add("mex_damage_bones", function()
         local train = GetAimedClientTrain()
         if not IsValid(train) then
-            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
             return
         end
 
         train:SetupBones()
 
         print("------------------------------------------------------------")
-        print("[Metrostroi Expanded/Damage] Bone dump: " .. train:GetClass())
+        print("[Metrostroi Extended/Damage] Bone dump: " .. train:GetClass())
         print("model: " .. tostring(train:GetModel()))
         CheckFrontBoneCapability(train)
         print("body bones: " .. tostring(train:GetBoneCount()))
@@ -12621,13 +12648,13 @@ if CLIENT then
     concommand.Add("mex_damage_mesh_status", function()
         local train = GetAimedClientTrain()
         if not IsValid(train) then
-            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
             return
         end
 
         local state = BuildDamageState(train)
         print("------------------------------------------------------------")
-        print("[Metrostroi Expanded/Damage] mesh deformation status")
+        print("[Metrostroi Extended/Damage] mesh deformation status")
         print("class: " .. tostring(train:GetClass()))
         print("model: " .. tostring(train:GetModel()))
         print("version: " .. tostring(MEXD.Version))
@@ -12688,7 +12715,7 @@ if CLIENT then
         "0",
         true,
         false,
-        "Draw Metrostroi Expanded impact/deformation debug markers"
+        "Draw Metrostroi Extended impact/deformation debug markers"
     )
 
     hook.Add("PostDrawTranslucentRenderables", "MEX.Damage.V4Debug", function()
