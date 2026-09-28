@@ -642,3 +642,65 @@ Repair invokes the same authoritative server reset used by the damage system and
 - accumulated water/electrical exposure
 
 If the repaired wagon is still submerged with live power available, the original fault can immediately begin again.
+
+
+## Moisture, drying and movable controls
+
+Damage System 0.14.0 separates the **physical position of a control** from the **electrical function behind it**.
+
+Flooding no longer permanently fails ordinary panel switch relays such as normal Switch-type operators. The driver may move those switches normally after immersion. If the protected circuit, internal relay or electronic module is water-damaged, moving the switch may have no useful result.
+
+Resettable automatic breakers are also still physically operable. If a breaker is reclosed while the conductive fault remains active, the protection logic may trip it again. A blown fuse is different and remains open until repair.
+
+### Moisture model
+
+The train now stores two moisture states:
+
+- **surface moisture** – contacts, exposed electromechanical hardware and shallow water contamination
+- **deep moisture** – moisture retained inside more sensitive electronic equipment
+
+At full saturation, the current tuning corresponds approximately to:
+
+- surface moisture drying to zero in about 45 seconds
+- deep moisture drying to zero in about 180 seconds
+
+Actual temporary-failure recovery also has a minimum dry-time requirement.
+
+Ordinary wet electromechanical/internal-relay faults generally require:
+
+- at least about 25 seconds dry
+- sufficiently low surface moisture
+
+Sensitive electronic modules generally require:
+
+- at least about 95 seconds dry
+- very low deep moisture
+
+A partially wet component can therefore recover sooner than a fully submerged one.
+
+### Sensitive electronics
+
+Known sensitive-system name families include ARS/ALS/BARS, BPSN, BUP/BUV/BEP, IGLA, ASNP/UPO/PUAV, Vityaz, inverter/async electronics, radio/RRI and announcer/information systems.
+
+When one of these Metrostroi systems is disabled by moisture:
+
+- its physical panel controls remain movable
+- input commands are still accepted
+- its published outputs are forced inactive
+- its Think logic is suspended while the water fault is active
+- a temporary failure resumes normal processing after sufficient drying
+- an electrically severe water event can make the failure permanent until Train Fixer / `mex_damage_reset`
+
+The exact affected systems depend on which systems the individual train addon actually exposes.
+
+### Debugging
+
+`mex_damage_status` now includes:
+
+- current water immersion
+- surface moisture
+- deep moisture
+- elapsed dry time
+- voltage/current/hazard
+- temporary/permanent electrical failure count
+- sensitive electronic modules currently offline
