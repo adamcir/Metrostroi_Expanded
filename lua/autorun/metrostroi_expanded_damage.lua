@@ -1383,6 +1383,37 @@ if SERVER then
         "buttons/button15.wav",
     }
 
+    -- Use world-positioned sounds instead of emitting them from the whole
+    -- train entity. Source then applies its normal 3D distance attenuation:
+    -- close players hear the fault clearly, distant players progressively
+    -- lose it.
+    local function PlayLocalizedDamageSound(
+        train,
+        worldPos,
+        soundName,
+        soundLevel,
+        pitch,
+        volume
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(soundName)
+        then
+            return
+        end
+
+        worldPos = isvector(worldPos)
+            and worldPos
+            or train:WorldSpaceCenter()
+
+        sound.Play(
+            soundName,
+            worldPos,
+            math.Clamp(tonumber(soundLevel) or 65, 45, 90),
+            math.Clamp(tonumber(pitch) or 100, 50, 150),
+            math.Clamp(tonumber(volume) or 1, 0, 1)
+        )
+    end
+
     local function NumberOrZero(value)
         value = tonumber(value)
         if not value or value ~= value then return 0 end
@@ -1522,8 +1553,102 @@ if SERVER then
         )
     end
 
+    local function BogeyHasPhysicalThirdRailContact(
+        train,
+        bogey
+    )
+        if not IsValid(bogey)
+            or bogey.DisableContacts
+            or bogey.DisableContactsManual
+        then
+            return false, false
+        end
+
+        local probes = {
+            {
+                pos = bogey.PantLPos,
+                dir = Vector(0, -1, 0),
+                connector = 1,
+            },
+            {
+                pos = bogey.PantRPos,
+                dir = Vector(0, 1, 0),
+                connector = 2,
+            },
+        }
+
+        local couldProbe = false
+
+        for _, probe in ipairs(probes) do
+            if not isvector(probe.pos) then continue end
+            couldProbe = true
+
+            local connector =
+                istable(bogey.Connectors)
+                    and bogey.Connectors[probe.connector]
+                    or nil
+
+            if IsValid(connector)
+                and connector.Coupled == bogey
+                and connector.Power
+            then
+                return true, true
+            end
+
+            local result = util.TraceHull({
+                start = bogey:LocalToWorld(probe.pos),
+                endpos = bogey:LocalToWorld(
+                    probe.pos + probe.dir * 10
+                ),
+                mask = -1,
+                filter = { train, bogey },
+                mins = Vector(-2, -2, -2),
+                maxs = Vector(2, 2, 2),
+            })
+
+            -- This deliberately mirrors Metrostroi's own CheckContact geometry
+            -- without its side effects (player shocks, connector welding).
+            if result.HitWorld then
+                return true, true
+            end
+
+            if result.Hit
+                and IsValid(result.Entity)
+                and result.Entity:GetClass()
+                    == "gmod_track_udochka"
+                and result.Entity.Power
+            then
+                return true, true
+            end
+        end
+
+        return false, couldProbe
+    end
+
     local function HasThirdRailContact(train, voltage)
         if not IsSubwayTrain(train) then return false end
+
+        local physicallyConnected = false
+        local physicallyProbed = false
+
+        for _, bogey in ipairs({
+            train.FrontBogey,
+            train.RearBogey,
+        }) do
+            local connected, probed =
+                BogeyHasPhysicalThirdRailContact(train, bogey)
+
+            physicallyProbed = physicallyProbed or probed
+            if connected then
+                physicallyConnected = true
+                break
+            end
+        end
+
+        if physicallyProbed then
+            return physicallyConnected
+                and (tonumber(voltage) or 0) >= 100
+        end
 
         local tr = istable(train.TR) and train.TR or nil
         if tr then
@@ -1538,22 +1663,19 @@ if SERVER then
             for _, state in ipairs(states) do
                 if state ~= nil then
                     exposesContactState = true
-                    if tonumber(state) and tonumber(state) > 0.5 then
+                    if tonumber(state)
+                        and tonumber(state) > 0.5
+                    then
                         return (tonumber(voltage) or 0) >= 100
                     end
                 end
             end
 
-            -- If the TR system exposes collector-contact state, zero active
-            -- contacts means the car is physically off the third rail even if
-            -- a stale downstream 750 V value survives for another tick.
             if exposesContactState then
                 return false
             end
         end
 
-        -- Compatibility fallback for third-party trains without TR contact
-        -- metadata.
         return (tonumber(voltage) or 0) >= 200
     end
 
@@ -1737,9 +1859,11 @@ if SERVER then
             math.random(1, #WATER_ARC_SOUNDS)
         ]
 
-        train:EmitSound(
+        PlayLocalizedDamageSound(
+            train,
+            worldPos,
             soundName,
-            severe and 92 or 78,
+            severe and 80 or 70,
             math.random(severe and 82 or 94, severe and 102 or 116),
             math.Clamp(0.45 + voltage / 1200, 0.45, 1)
         )
@@ -3178,7 +3302,14 @@ if SERVER then
                 end
 
                 if isnumber(self.Voltage) then
-                    self.Voltage = self.Voltage * factor
+                    if train:GetNW2Bool(
+                        "MEX.Damage.LowVoltageBlackout",
+                        false
+                    ) then
+                        self.Voltage = 0
+                    else
+                        self.Voltage = self.Voltage * factor
+                    end
                 end
 
                 if isnumber(self.Current) and factor < 0.999 then
@@ -3197,7 +3328,8 @@ if SERVER then
 
     local function StartWaterBatteryGlitch(
         train,
-        intensity
+        intensity,
+        worldPos
     )
         if not IsSubwayTrain(train)
             or not istable(train.Battery)
@@ -3234,14 +3366,16 @@ if SERVER then
         )
 
         if factor < 0.55 then
-            train:EmitSound(
+            PlayLocalizedDamageSound(
+                train,
+                worldPos,
                 WATER_RELAY_CHATTER_SOUNDS[
                     math.random(
                         1,
                         #WATER_RELAY_CHATTER_SOUNDS
                     )
                 ],
-                66,
+                58,
                 math.random(88, 108),
                 0.52
             )
@@ -3378,8 +3512,20 @@ if SERVER then
         if blackout then
             EnsureWaterElectricBlackoutHook(train)
 
-            -- Also clamp the current Electric outputs immediately; the Think
-            -- wrapper keeps them at zero on following simulation ticks.
+            if istable(train.Battery) then
+                if isnumber(train.Battery.Voltage) then
+                    train.Battery.Voltage = 0
+                end
+                if isnumber(train.Battery.Current) then
+                    train.Battery.Current = 0
+                end
+                if isnumber(train.Battery.Charging) then
+                    train.Battery.Charging = 0
+                end
+            end
+
+            -- Clamp the actual low-voltage outputs immediately on every water
+            -- scan as well as through the Electric Think wrapper.
             if istable(train.Electric) then
                 for _, fieldName in ipairs(
                     WATER_BLACKOUT_ELECTRIC_FIELDS
@@ -3481,7 +3627,8 @@ if SERVER then
 
     local function StartWaterDoorRelayFault(
         train,
-        intensity
+        intensity,
+        worldPos
     )
         if not IsSubwayTrain(train) then return false end
 
@@ -3547,14 +3694,16 @@ if SERVER then
             item.name
         )
 
-        train:EmitSound(
+        PlayLocalizedDamageSound(
+            train,
+            worldPos,
             WATER_RELAY_CHATTER_SOUNDS[
                 math.random(
                     1,
                     #WATER_RELAY_CHATTER_SOUNDS
                 )
             ],
-            68,
+            57,
             math.random(88, 112),
             0.58
         )
@@ -3739,7 +3888,8 @@ if SERVER then
 
     local function StartWaterRelayChatter(
         train,
-        glitchIntensity
+        glitchIntensity,
+        worldPos
     )
         if not IsSubwayTrain(train) then return false end
 
@@ -3809,14 +3959,16 @@ if SERVER then
             item.name
         )
 
-        train:EmitSound(
+        PlayLocalizedDamageSound(
+            train,
+            worldPos,
             WATER_RELAY_CHATTER_SOUNDS[
                 math.random(
                     1,
                     #WATER_RELAY_CHATTER_SOUNDS
                 )
             ],
-            62 + math.floor(glitchIntensity * 12),
+            54 + math.floor(glitchIntensity * 8),
             math.random(92, 116),
             0.45 + glitchIntensity * 0.25
         )
@@ -3830,7 +3982,8 @@ if SERVER then
         surfaceMoisture,
         deepMoisture,
         voltage,
-        current
+        current,
+        worldPos
     )
         if not IsSubwayTrain(train) then return end
 
@@ -3929,7 +4082,8 @@ if SERVER then
             if math.Rand(0, 1) < relayChance then
                 StartWaterRelayChatter(
                     train,
-                    glitchIntensity
+                    glitchIntensity,
+                    worldPos
                 )
             end
 
@@ -3955,7 +4109,8 @@ if SERVER then
             if math.Rand(0, 1) < doorChance then
                 StartWaterDoorRelayFault(
                     train,
-                    glitchIntensity
+                    glitchIntensity,
+                    worldPos
                 )
             end
 
@@ -3981,7 +4136,8 @@ if SERVER then
             if math.Rand(0, 1) < batteryChance then
                 StartWaterBatteryGlitch(
                     train,
-                    glitchIntensity
+                    glitchIntensity,
+                    worldPos
                 )
             end
 
@@ -4289,7 +4445,8 @@ if SERVER then
             surfaceMoisture,
             deepMoisture,
             voltage,
-            current
+            current,
+            sparkPos
         )
 
         local exposure = NumberOrZero(
@@ -6240,9 +6397,11 @@ if SERVER then
                         80
                     )
                 )
-                train:EmitSound(
+                PlayLocalizedDamageSound(
+                    train,
+                    worldPos,
                     "physics/metal/metal_box_impact_hard3.wav",
-                    82,
+                    76,
                     pitch,
                     0.8
                 )
