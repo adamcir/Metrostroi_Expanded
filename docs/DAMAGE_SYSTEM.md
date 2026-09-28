@@ -604,3 +604,41 @@ This is deliberately a gameplay simulation, not a real-world electrical-safety o
 - water electrical hazard
 
 `mex_damage_reset` also clears accumulated water exposure.
+
+
+## Protection-first electrical faults
+
+Damage System 0.13.0 changes water/electrical faults from a simple random relay failure into a protection-first sequence.
+
+When a live flooded circuit develops a fault, the addon first looks for protective equipment actually present on the train:
+
+- `VA21-29` automatic breakers are tripped through their native Metrostroi `Check = -1` input
+- breaker-style systems such as A/AV/SF/QF families are opened through their normal relay input
+- classic YAP-57 main-circuit fuses `PNB_1250_1` / `PNB_1250_2` can blow on HV faults
+- `PP_28` and compatible fuse-style systems can protect auxiliary/control circuits
+
+A tripped breaker remains a resettable protective device. If it is reset while the conductive fault is still active and voltage returns, the damage system can trip it again.
+
+A fuse is different: once blown it uses the persistent failed-open layer and remains open until repair/reset. Already blown fuses are excluded from later selection.
+
+If protection cannot clear the live fault, prolonged water exposure can then escalate into permanent equipment failures using the electrical failed-open system.
+
+The simulation deliberately relies on the protection and electrical systems actually exposed by the current train addon. It cannot reproduce wiring or protective devices that the train itself does not model.
+
+## Train Fixer Toolgun
+
+Toolgun category: **Metrostroi Expanded → Train Fixer**
+
+- **Left click** repairs the selected wagon.
+- **Right click** repairs all wagons in the selected train's `WagonList`.
+
+Repair invokes the same authoritative server reset used by the damage system and restores:
+
+- structural/crush damage and deformation
+- detached controls/components and debris
+- failed-open electrical switches
+- blown fuses
+- tripped protection to its pre-damage state
+- accumulated water/electrical exposure
+
+If the repaired wagon is still submerged with live power available, the original fault can immediately begin again.
