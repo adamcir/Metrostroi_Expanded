@@ -517,3 +517,33 @@ The backing replicated archived server ConVars are:
 - `mex_damage_deformation_enabled`
 
 Only server administrators can change the Utilities controls.
+
+
+## Electrical switch failures
+
+Damage System 0.11.0 distinguishes ordinary electrical switches from mechanical control mechanisms.
+
+When a normal electrical switch is physically detached, the addon resolves the corresponding Metrostroi relay/system and drives it to `Set 0` / open. The system is then guarded as **failed-open**, so later energizing inputs cannot restore it while the physical switch is missing.
+
+Resolution uses several sources:
+
+- ButtonMap `button.var`
+- ButtonMap `button.model.var`
+- ButtonEvent names such as `VUToggle -> VU` and `A1Toggle -> A1`
+- the same `train.Systems` input-prefix routing used by `gmod_subway_base:TriggerInput`
+- compatibility aliases such as classic `BatteryToggle -> VB`
+
+The failed-open state is periodically reasserted server-side and is removed by `mex_damage_reset`.
+
+### Mechanical exceptions
+
+A detached external handle does **not** automatically force the internal mechanism to zero for mechanical controls. These remain in their last state while their interaction path is blocked:
+
+- reverser/reverser key mechanisms
+- KV / GRKV / main traction controller
+- KRU / KRO / KRR / RCU mechanisms
+- GV / classic high-voltage mechanical switch handle
+- pneumatic/brake valves and isolation cocks
+- parking/manual/hand brake mechanisms
+
+This models the difference between breaking an electrical operator/contact and merely losing the handle of a mechanically positioned apparatus.
