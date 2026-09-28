@@ -547,3 +547,60 @@ A detached external handle does **not** automatically force the internal mechani
 - parking/manual/hand brake mechanisms
 
 This models the difference between breaking an electrical operator/contact and merely losing the handle of a mechanically positioned apparatus.
+
+
+## Water and electrical damage
+
+Damage System 0.12.0 adds flooded-electrics simulation.
+
+The server samples multiple points through the lower equipment/floor region of every subway car. This allows partial flooding to be detected even when the scripted entity origin itself remains above the water surface.
+
+Water exposure has two separate effects:
+
+1. **Immersion damage** – electronics may progressively fail even when the car is not energized.
+2. **Live-water faults** – when electrical voltage is available, immersion can produce arcing, faster failures and an electric-shock hazard to players in the same nearby water.
+
+### Electrical source data
+
+The addon prefers the actual values already simulated by Metrostroi, including:
+
+- `Electric.Main750V`
+- `Electric.Power750V`
+- `Electric.Aux750V`
+- `Electric.Aux80V`
+- `Electric.Battery80V`
+- classic battery voltage where applicable
+- `Electric.I13`, `Electric.I24`, `Electric.Itotal` and other available current fields
+
+When a source is energized but its instantaneous traction current is zero, the damage system uses a bounded gameplay fault-current capacity so an unloaded 750 V source does not become harmless simply because the motors are not drawing current at that instant.
+
+### Electrical failures in water
+
+Accumulated water exposure can select relay-like electrical systems and fail them open using the same persistent electrical-failure layer introduced in 0.11.0. Failed systems cannot simply be re-energized by another ButtonEvent until damage is reset.
+
+Mechanical control mechanisms are excluded by the existing mechanical/electrical classification where appropriate.
+
+### Player shock
+
+A player must themselves be in water and close to the wet train. The damage model considers:
+
+- available voltage
+- available source current
+- train wetness
+- player immersion
+- distance from the train
+
+The resulting hit uses `DMG_SHOCK`, with sparks, Source electrical zap sounds and a small view kick. High-voltage flooding can be lethal much faster than low-voltage flooding.
+
+This is deliberately a gameplay simulation, not a real-world electrical-safety or physiological model.
+
+### Debug state
+
+`mex_damage_status` reports:
+
+- water wetness
+- detected voltage
+- available current
+- water electrical hazard
+
+`mex_damage_reset` also clears accumulated water exposure.
