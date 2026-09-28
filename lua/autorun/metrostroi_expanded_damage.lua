@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.12.0"
+MEXD.Version = "0.13.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -991,6 +991,24 @@ if SERVER then
                     and isfunction(data.originalTriggerInput)
                 then
                     system.TriggerInput = data.originalTriggerInput
+
+                    local originalTarget =
+                        tonumber(data.originalTargetValue)
+                    local originalValue =
+                        tonumber(data.originalValue)
+                    local restoreValue =
+                        originalTarget ~= nil
+                            and originalTarget
+                            or originalValue
+
+                    if restoreValue ~= nil then
+                        pcall(
+                            data.originalTriggerInput,
+                            system,
+                            "Set",
+                            restoreValue
+                        )
+                    end
                 end
             end
         end
@@ -1020,6 +1038,8 @@ if SERVER then
 
             train.MEXDamageElectricalFailureSystems[systemName] = {
                 originalTriggerInput = original,
+                originalValue = tonumber(system.Value),
+                originalTargetValue = tonumber(system.TargetValue),
             }
 
             system.TriggerInput = function(self, input, value, ...)
@@ -1372,6 +1392,287 @@ if SERVER then
             math.random(severe and 82 or 94, severe and 102 or 116),
             math.Clamp(0.45 + voltage / 1200, 0.45, 1)
         )
+    end
+
+    local function IsCircuitBreakerSystem(systemName, system)
+        if not isstring(systemName) or not istable(system) then
+            return false
+        end
+
+        local upper = string.upper(systemName)
+        local relayType = tostring(system.relay_type or "")
+
+        if relayType == "VA21-29" then
+            return true
+        end
+
+        return string.match(upper, "^A%d+$") ~= nil
+            or string.match(upper, "^AV%d*$") ~= nil
+            or string.match(upper, "^SF%d+$") ~= nil
+            or string.match(upper, "^QF%d+$") ~= nil
+            or string.match(upper, "^CB%d*$") ~= nil
+    end
+
+    local function IsFuseSystemName(systemName)
+        if not isstring(systemName) then return false end
+
+        local upper = string.upper(systemName)
+        return string.match(upper, "^PNB_1250_") ~= nil
+            or upper == "PP_28"
+            or string.match(upper, "^FU%d*$") ~= nil
+            or string.match(upper, "^FUSE") ~= nil
+    end
+
+    local function TripCircuitBreaker(train, systemName)
+        if not IsSubwayTrain(train) then return false end
+
+        local system = train[systemName]
+        if not IsRelayLikeElectricalSystem(system)
+            or not IsCircuitBreakerSystem(systemName, system)
+        then
+            return false
+        end
+
+        train.MEXDamageTrippedProtection =
+            train.MEXDamageTrippedProtection or {}
+
+        if not train.MEXDamageTrippedProtection[systemName] then
+            train.MEXDamageTrippedProtection[systemName] = {
+                kind = "breaker",
+                originalValue = tonumber(system.Value),
+                originalTargetValue = tonumber(system.TargetValue),
+            }
+        end
+
+        -- VA21-29 implements a real breaker trip path: Check < 0 opens the
+        -- breaker and plays Metrostroi's native av_off sound. Other breaker
+        -- families use their normal Set/Open input.
+        if tostring(system.relay_type or "") == "VA21-29" then
+            pcall(system.TriggerInput, system, "Check", -1)
+        else
+            pcall(system.TriggerInput, system, "Set", 0)
+            pcall(system.TriggerInput, system, "Open", 1)
+        end
+
+        return true
+    end
+
+    local function BlowFuse(train, systemName)
+        if not IsSubwayTrain(train)
+            or not IsFuseSystemName(systemName)
+        then
+            return false
+        end
+
+        local system = train[systemName]
+        if not IsRelayLikeElectricalSystem(system) then
+            return false
+        end
+
+        -- A fuse is not a resettable breaker. Reuse the persistent failed-open
+        -- layer so it stays open until Train Fixer / mex_damage_reset repairs it.
+        if not FailElectricalSystemOpen(train, systemName) then
+            return false
+        end
+
+        train.MEXDamageBlownFuses =
+            train.MEXDamageBlownFuses or {}
+        train.MEXDamageBlownFuses[systemName] = true
+        return true
+    end
+
+    local function RestoreTrippedProtection(train)
+        if not IsValid(train) then return end
+
+        for systemName, data in pairs(
+            train.MEXDamageTrippedProtection or {}
+        ) do
+            local system = train[systemName]
+            if not istable(system)
+                or not isfunction(system.TriggerInput)
+            then
+                continue
+            end
+
+            local target = tonumber(data.originalTargetValue)
+            local value = tonumber(data.originalValue)
+            local restore = target ~= nil and target or value
+
+            if restore ~= nil then
+                pcall(
+                    system.TriggerInput,
+                    system,
+                    "Set",
+                    restore
+                )
+            end
+        end
+
+        train.MEXDamageTrippedProtection = {}
+        train.MEXDamageBlownFuses = {}
+        train.MEXDamageNextProtectionRetrip = nil
+    end
+
+    local function IsProtectionClosed(system)
+        if not istable(system) then return false end
+
+        local value = tonumber(system.Value)
+        local target = tonumber(system.TargetValue)
+
+        return (value and value > 0.5)
+            or (target and target > 0.5)
+    end
+
+    local function CollectWaterProtectionCandidates(
+        train,
+        highVoltage
+    )
+        local breakers = {}
+        local fuses = {}
+
+        if not istable(train.Systems) then
+            return breakers, fuses
+        end
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system) then
+                continue
+            end
+
+            if IsFuseSystemName(systemName) then
+                local upper = string.upper(systemName)
+
+                if highVoltage then
+                    if string.match(upper, "^PNB_1250_") then
+                        fuses[#fuses + 1] = systemName
+                    end
+                elseif upper == "PP_28"
+                    or string.match(upper, "^FU%d*$")
+                then
+                    fuses[#fuses + 1] = systemName
+                end
+            elseif IsCircuitBreakerSystem(systemName, system)
+                and IsProtectionClosed(system)
+            then
+                breakers[#breakers + 1] = systemName
+            end
+        end
+
+        return breakers, fuses
+    end
+
+    local function OperateWaterProtection(
+        train,
+        highVoltage,
+        worldPos,
+        voltage,
+        current
+    )
+        local breakers, fuses =
+            CollectWaterProtectionCandidates(
+                train,
+                highVoltage
+            )
+
+        -- For classic high-voltage cars, PNB-1250 is the actual main-circuit
+        -- fuse and therefore takes precedence over unrelated cab breakers.
+        if highVoltage and #fuses > 0 then
+            local fuse = fuses[math.random(1, #fuses)]
+            if BlowFuse(train, fuse) then
+                train:SetNW2String(
+                    "MEX.Damage.LastProtection",
+                    fuse .. " (fuse)"
+                )
+                EmitWaterElectricalArc(
+                    train,
+                    worldPos,
+                    voltage,
+                    current,
+                    true
+                )
+                return true, fuse, "fuse"
+            end
+        end
+
+        -- Low-voltage/control faults normally trip a resettable automatic
+        -- breaker first. This does not mark the breaker itself as destroyed.
+        if #breakers > 0 then
+            local breaker =
+                breakers[math.random(1, #breakers)]
+
+            if TripCircuitBreaker(train, breaker) then
+                train:SetNW2String(
+                    "MEX.Damage.LastProtection",
+                    breaker .. " (breaker)"
+                )
+                EmitWaterElectricalArc(
+                    train,
+                    worldPos,
+                    voltage,
+                    current,
+                    highVoltage
+                )
+                return true, breaker, "breaker"
+            end
+        end
+
+        -- Some older cars have an auxiliary PP-28 fuse instead of a suitable
+        -- automatic breaker for the affected auxiliary circuit.
+        if #fuses > 0 then
+            local fuse = fuses[math.random(1, #fuses)]
+            if BlowFuse(train, fuse) then
+                train:SetNW2String(
+                    "MEX.Damage.LastProtection",
+                    fuse .. " (fuse)"
+                )
+                EmitWaterElectricalArc(
+                    train,
+                    worldPos,
+                    voltage,
+                    current,
+                    highVoltage
+                )
+                return true, fuse, "fuse"
+            end
+        end
+
+        return false
+    end
+
+    local function RetripWaterProtectionIfNeeded(
+        train,
+        wetness,
+        voltage,
+        current,
+        sparkPos
+    )
+        if wetness <= 0.04 or voltage < 24 then return end
+
+        local now = CurTime()
+        if (train.MEXDamageNextProtectionRetrip or 0) > now then
+            return
+        end
+        train.MEXDamageNextProtectionRetrip = now + 0.22
+
+        for systemName, data in pairs(
+            train.MEXDamageTrippedProtection or {}
+        ) do
+            if data.kind ~= "breaker" then continue end
+
+            local system = train[systemName]
+            if IsProtectionClosed(system) then
+                TripCircuitBreaker(train, systemName)
+                EmitWaterElectricalArc(
+                    train,
+                    sparkPos,
+                    voltage,
+                    current,
+                    voltage >= 200
+                )
+            end
+        end
     end
 
     local function CollectWaterFailureCandidates(train)
@@ -1774,7 +2075,25 @@ if SERVER then
             and exposure
                 >= train.MEXDamageWaterNextFailureExposure
         then
-            if FailRandomWaterElectricalSystem(
+            local protected = false
+
+            if powered then
+                protected = OperateWaterProtection(
+                    train,
+                    hv >= 200,
+                    sparkPos,
+                    voltage,
+                    current
+                )
+            end
+
+            if protected then
+                -- Give the protection time to de-energize the circuit. If the
+                -- fault is still live later, the next stage may damage actual
+                -- equipment or retrip a breaker that was manually reset.
+                train.MEXDamageWaterNextFailureExposure =
+                    exposure + math.Rand(0.75, 1.35)
+            elseif FailRandomWaterElectricalSystem(
                 train,
                 sparkPos,
                 voltage,
@@ -1783,10 +2102,20 @@ if SERVER then
                 train.MEXDamageWaterNextFailureExposure =
                     exposure + math.Rand(0.55, 1.10)
             else
-                -- No suitable relay remains. Do not search every scan forever.
+                -- No suitable protection or relay remains.
                 train.MEXDamageWaterNextFailureExposure =
                     exposure + 1.5
             end
+        end
+
+        if powered then
+            RetripWaterProtectionIfNeeded(
+                train,
+                wetness,
+                voltage,
+                current,
+                sparkPos
+            )
         end
 
         if powered and wetness > 0.02 then
@@ -3173,6 +3502,8 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.RearEquipment", false)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
 
+        RestoreTrippedProtection(train)
+
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterNextFailureExposure = nil
         train.MEXDamageNextWaterArc = nil
@@ -3181,6 +3512,7 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
         train:SetNW2Float("MEX.Damage.WaterHazard", 0)
         train:SetNW2Float("MEX.Damage.WaterExposure", 0)
+        train:SetNW2String("MEX.Damage.LastProtection", "")
 
         hook.Run("MetrostroiExpandedDamageReset", train)
     end
@@ -4202,7 +4534,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -4226,7 +4558,11 @@ if SERVER then
                 or 0,
             istable(train.MEXDamageElectricalFailureSystems)
                 and table.Count(train.MEXDamageElectricalFailureSystems)
-                or 0
+                or 0,
+            train:GetNW2String(
+                "MEX.Damage.LastProtection",
+                "none"
+            )
         ))
     end)
 
