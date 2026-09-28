@@ -1717,6 +1717,26 @@ if SERVER then
             math.Clamp(exposure, 0, 10)
         )
 
+        if wetness > 0.02 then
+            local electrical = train:GetNW2Float(
+                "MEX.Damage.electrical",
+                0
+            )
+
+            local waterElectricalDamage = math.Clamp(
+                exposure * 0.055,
+                0,
+                0.55
+            )
+
+            if waterElectricalDamage > electrical then
+                train:SetNW2Float(
+                    "MEX.Damage.electrical",
+                    waterElectricalDamage
+                )
+            end
+        end
+
         if wetness > 0.02 and powered then
             local now = CurTime()
             local nextArc =
@@ -3952,15 +3972,18 @@ if SERVER then
     end)
 
     local nextWaterElectricalScan = 0
+    local lastWaterElectricalScan = CurTime()
 
     hook.Add("Think", "MEX.Damage.WaterElectrical", function()
         local now = CurTime()
         if now < nextWaterElectricalScan then return end
 
-        local dT = math.max(
-            WATER_SCAN_INTERVAL,
-            now - (nextWaterElectricalScan - WATER_SCAN_INTERVAL)
+        local dT = math.Clamp(
+            now - lastWaterElectricalScan,
+            0.01,
+            0.35
         )
+        lastWaterElectricalScan = now
         nextWaterElectricalScan = now + WATER_SCAN_INTERVAL
 
         for _, train in ipairs(ents.GetAll()) do
