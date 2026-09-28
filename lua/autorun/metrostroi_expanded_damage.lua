@@ -1483,11 +1483,14 @@ if SERVER then
         -- TR.Main750V is Metrostroi's contact-rail output. Prefer it over the
         -- downstream Electric fields so an open GV/AV does not look like the
         -- train physically lost contact with the third rail.
-        if istable(train.TR) then
-            local trVoltage = math.abs(NumberOrZero(train.TR.Main750V))
-            if trVoltage > 0 then
-                return math.Clamp(trVoltage, 0, 1200)
-            end
+        if istable(train.TR)
+            and train.TR.Main750V ~= nil
+        then
+            return math.Clamp(
+                math.abs(NumberOrZero(train.TR.Main750V)),
+                0,
+                1200
+            )
         end
 
         local electric = istable(train.Electric)
@@ -1605,6 +1608,12 @@ if SERVER then
 
     local function IsTrainInstrumentationPowered(train)
         if not IsSubwayTrain(train) then return false end
+        if train:GetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            false
+        ) then
+            return false
+        end
 
         local _, _, _, lv =
             GetTrainElectricalWaterState(train)
@@ -2243,6 +2252,18 @@ if SERVER then
         end
 
         local relayType = tostring(system.relay_type or "")
+        local lowerName = string.lower(systemName)
+
+        -- Battery master switches are physical panel operators even on cars
+        -- where Metrostroi models them as VB-11 rather than Relay "Switch".
+        if lowerName == "vb"
+            or lowerName == "vba"
+            or lowerName == "battery"
+            or string.find(lowerName, "batteryswitch", 1, true)
+            or relayType == "VB-11"
+        then
+            return true
+        end
 
         -- These are physical panel switches, breaker handles or mechanical HV
         -- operators. Water may make the circuit behind them ineffective, but
@@ -2848,7 +2869,13 @@ if SERVER then
                     1
                 )
 
-                if glitching
+                if self:GetNW2Bool(
+                    "MEX.Damage.LowVoltageBlackout",
+                    false
+                ) and PackedBoolLooksLikeIndicator(idx)
+                then
+                    value = false
+                elseif glitching
                     and intensity > 0.01
                     and PackedBoolLooksLikeIndicator(idx)
                     and math.Rand(0, 1)
@@ -2891,7 +2918,20 @@ if SERVER then
                 -- several cars whose cab speedometer should be electrically
                 -- dead. Expanded gates the displayed speed by the actual
                 -- low-voltage/instrument power state.
-                if speedIndicator
+                local blackout =
+                    self:GetNW2Bool(
+                        "MEX.Damage.LowVoltageBlackout",
+                        false
+                    )
+
+                if blackout
+                    and (
+                        speedIndicator
+                        or PackedRatioLooksLikeElectricGauge(idx)
+                    )
+                then
+                    value = 0
+                elseif speedIndicator
                     and not IsTrainInstrumentationPowered(self)
                 then
                     value = 0
@@ -3096,6 +3136,41 @@ if SERVER then
         return true
     end
 
+    local function ForceFloodedLowVoltageRelaysOff(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.Systems)
+        then
+            return
+        end
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system)
+                or IsManualOperatorElectricalSystem(
+                    systemName,
+                    system
+                )
+                or IsCircuitBreakerSystem(systemName, system)
+                or IsFuseSystemName(systemName)
+            then
+                continue
+            end
+
+            FailElectricalSystemOpen(
+                train,
+                systemName,
+                {
+                    cause = "water",
+                    temporary = true,
+                    waterSensitivity = "normal",
+                    minDrySeconds = 18,
+                    recoverMoisture = 0.08,
+                }
+            )
+        end
+    end
+
     local function DisableSensitiveSystemsForFloodBlackout(train)
         for _, systemName in ipairs(
             CollectSensitiveWaterSystemCandidates(train)
@@ -3180,6 +3255,7 @@ if SERVER then
         )
 
         if blackout then
+            ForceFloodedLowVoltageRelaysOff(train)
             DisableSensitiveSystemsForFloodBlackout(train)
         end
     end
@@ -3267,20 +3343,8 @@ if SERVER then
         train.MEXDamageRelayChatter =
             train.MEXDamageRelayChatter or {}
 
-        local arsals = {}
-        for _, candidate in ipairs(candidates) do
-            if candidate.arsals then
-                arsals[#arsals + 1] = candidate
-            end
-        end
-
-        local source =
-            (#arsals > 0 and math.Rand(0, 1) < 0.42)
-                and arsals
-                or candidates
-
         local item =
-            source[math.random(1, #source)]
+            candidates[math.random(1, #candidates)]
 
         if train.MEXDamageRelayChatter[item.name] then
             return false
@@ -3534,8 +3598,20 @@ if SERVER then
         train.MEXDamageRelayChatter =
             train.MEXDamageRelayChatter or {}
 
+        local arsals = {}
+        for _, candidate in ipairs(candidates) do
+            if candidate.arsals then
+                arsals[#arsals + 1] = candidate
+            end
+        end
+
+        local source =
+            (#arsals > 0 and math.Rand(0, 1) < 0.42)
+                and arsals
+                or candidates
+
         local item =
-            candidates[math.random(1, #candidates)]
+            source[math.random(1, #source)]
 
         if train.MEXDamageRelayChatter[item.name] then
             return false
