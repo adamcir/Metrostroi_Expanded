@@ -1138,6 +1138,59 @@ if SERVER then
         return nil
     end
 
+    local function AddButtonRoutedElectricalSystems(
+        train,
+        buttonID,
+        candidates,
+        seen
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(buttonID)
+            or not istable(train.Systems)
+        then
+            return
+        end
+
+        buttonID = buttonID:gsub("^.+:", "")
+
+        for systemName, system in pairs(train.Systems) do
+            if not istable(system)
+                or not istable(system.IsInput)
+            then
+                continue
+            end
+
+            if system.IsInput[buttonID] then
+                AddElectricalCandidate(
+                    candidates,
+                    seen,
+                    tostring(systemName)
+                )
+            end
+
+            local routeName = isstring(system.Name)
+                and system.Name
+                or tostring(systemName)
+
+            if string.sub(buttonID, 1, #routeName) == routeName then
+                local subname = string.sub(
+                    buttonID,
+                    #routeName + 1
+                )
+
+                if subname ~= ""
+                    and system.IsInput[subname]
+                then
+                    AddElectricalCandidate(
+                        candidates,
+                        seen,
+                        tostring(systemName)
+                    )
+                end
+            end
+        end
+    end
+
     local function ApplyDetachedElectricalFailure(
         train,
         name,
@@ -1182,6 +1235,35 @@ if SERVER then
                 seen,
                 CandidateFromButtonID(buttonID)
             )
+
+            -- Mirror gmod_subway_base:TriggerInput routing. This discovers
+            -- the actual Metrostroi system which accepts the ButtonEvent even
+            -- when addon authors use non-obvious system names.
+            AddButtonRoutedElectricalSystems(
+                train,
+                buttonID,
+                candidates,
+                seen
+            )
+
+            local normalized = string.lower(
+                tostring(buttonID):gsub("[^%w]", "")
+            )
+
+            -- Classic cars expose the physical switch as BatteryToggle /
+            -- model.var=Battery, but the disconnect relay itself is VB while
+            -- train.Battery is the accumulator model. Modern cars may instead
+            -- use a relay actually named Battery, so retain both candidates.
+            if normalized == "batterytoggle"
+                or normalized == "batteryset"
+                or normalized == "battery"
+            then
+                AddElectricalCandidate(
+                    candidates,
+                    seen,
+                    "VB"
+                )
+            end
         end
 
         local failed = {}
