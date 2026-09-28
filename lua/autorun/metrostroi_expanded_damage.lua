@@ -6700,6 +6700,19 @@ if SERVER then
             return false
         end
 
+        local failure =
+            train.MEXDamageElectricalFailureSystems
+            and train.MEXDamageElectricalFailureSystems[
+                systemName
+            ]
+
+        if istable(failure)
+            and istable(failure.causes)
+            and failure.causes.detached
+        then
+            return false
+        end
+
         if not RestoreSingleElectricalFailure(
             train,
             systemName,
@@ -9305,6 +9318,83 @@ if SERVER then
         return keys[1]
     end
 
+    local function FirstRepairableElectricalFailure(
+        train
+    )
+        local names = {}
+
+        for systemName, data in pairs(
+            train.MEXDamageElectricalFailureSystems
+            or {}
+        ) do
+            if istable(data)
+                and not (
+                    istable(data.causes)
+                    and data.causes.detached
+                )
+            then
+                names[#names + 1] =
+                    tostring(systemName)
+            end
+        end
+
+        table.sort(names)
+        return names[1]
+    end
+
+    function MEXD.RepairElectricalFailure(
+        train,
+        systemName
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(systemName)
+        then
+            return false
+        end
+
+        local failure =
+            train.MEXDamageElectricalFailureSystems
+            and train.MEXDamageElectricalFailureSystems[
+                systemName
+            ]
+
+        if not istable(failure)
+            or (
+                istable(failure.causes)
+                and failure.causes.detached
+            )
+        then
+            return false
+        end
+
+        local repaired =
+            RestoreSingleElectricalFailure(
+                train,
+                systemName,
+                true
+            )
+
+        if repaired
+            and train.MEXDamageWearFailedSystems
+        then
+            train.MEXDamageWearFailedSystems[
+                systemName
+            ] = nil
+            train.MEXDamageRelayWear =
+                train.MEXDamageRelayWear or {}
+            train.MEXDamageRelayWear[systemName] = 0
+
+            train:SetNW2Int(
+                "MEX.Damage.FailedRelayCount",
+                table.Count(
+                    train.MEXDamageWearFailedSystems
+                )
+            )
+        end
+
+        return repaired
+    end
+
     local function ServiceAnchors(train)
         local mins = train:OBBMins()
         local maxs = train:OBBMaxs()
@@ -9390,8 +9480,8 @@ if SERVER then
 
         if electricalDistance <= serviceRadius then
             local relay =
-                FirstSortedKey(
-                    train.MEXDamageWearFailedSystems
+                FirstRepairableElectricalFailure(
+                    train
                 )
 
             if relay then
@@ -9442,18 +9532,18 @@ if SERVER then
                 tonumber(string.sub(target, 11))
             )
         elseif string.sub(target, 1, 6) == "relay:" then
-            return MEXD.RepairWearSystem(
+            return MEXD.RepairElectricalFailure(
                 train,
                 string.sub(target, 7)
             )
         elseif target == "electrical" then
             local relay =
-                FirstSortedKey(
-                    train.MEXDamageWearFailedSystems
+                FirstRepairableElectricalFailure(
+                    train
                 )
 
             if relay then
-                return MEXD.RepairWearSystem(
+                return MEXD.RepairElectricalFailure(
                     train,
                     relay
                 )
