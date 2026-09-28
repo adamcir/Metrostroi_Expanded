@@ -615,13 +615,21 @@ if SERVER then
         train.MEXDamageOriginalOnButtonPress = train.OnButtonPress
         train.MEXDamageOriginalOnButtonRelease = train.OnButtonRelease
         train.MEXDamageBlockedButtons = train.MEXDamageBlockedButtons or {}
+        train.MEXDamageWearBlockedButtons =
+            train.MEXDamageWearBlockedButtons or {}
 
         local function blocked(self, button)
-            if not self.MEXDamageBlockedButtons then return false end
             button = isstring(button)
                 and button:gsub("^.+:", "")
                 or button
-            return self.MEXDamageBlockedButtons[button] == true
+
+            return (
+                self.MEXDamageBlockedButtons
+                and self.MEXDamageBlockedButtons[button] == true
+            ) or (
+                self.MEXDamageWearBlockedButtons
+                and self.MEXDamageWearBlockedButtons[button] == true
+            )
         end
 
         train.ButtonEvent = function(self, button, state, ply)
@@ -630,6 +638,16 @@ if SERVER then
                 or button
 
             if blocked(self, normalized) then
+                return false
+            end
+
+            if state
+                and isfunction(MEXD.RecordControlUse)
+                and MEXD.RecordControlUse(
+                    self,
+                    normalized
+                )
+            then
                 return false
             end
 
@@ -648,6 +666,15 @@ if SERVER then
                     or button
 
                 if blocked(self, normalized) then
+                    return true
+                end
+
+                if isfunction(MEXD.RecordControlUse)
+                    and MEXD.RecordControlUse(
+                        self,
+                        normalized
+                    )
+                then
                     return true
                 end
 
