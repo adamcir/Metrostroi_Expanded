@@ -2063,14 +2063,6 @@ if SERVER then
         if not enabled and deformationEnabledConVar then
             deformationEnabledConVar:SetBool(false)
         end
-
-        if not enabled then
-            for _, train in ipairs(ents.GetAll()) do
-                if IsSubwayTrain(train) then
-                    MEXD.Reset(train)
-                end
-            end
-        end
     end
 
     local function SetServerDeformationEnabled(enabled)
@@ -2924,11 +2916,6 @@ if SERVER then
             return
         end
 
-        if not MEXD.IsDamageEnabled() then
-            print("[Metrostroi Expanded/Damage] Damage is disabled.")
-            return
-        end
-
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
@@ -2962,6 +2949,11 @@ if SERVER then
 
     concommand.Add("mex_damage_scrap_test", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
+
+        if not MEXD.IsDamageEnabled() then
+            print("[Metrostroi Expanded/Damage] Damage is disabled.")
+            return
+        end
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
@@ -8515,9 +8507,17 @@ if CLIENT then
         ClearLegacyTransforms(train)
 
         if not MEXD.IsDeformationEnabled() then
-            ClearAllVisualDamage(train)
+            if not train.MEXDamageDeformationSuppressed then
+                ClearAllVisualDamage(train)
+                train.MEXDamageDeformationSuppressed = true
+            else
+                EnforceDisabledButtonHitboxes(train)
+                EnforceDetachedVisuals(train)
+            end
             return
         end
+
+        train.MEXDamageDeformationSuppressed = nil
 
         local state = BuildDamageState(train)
         if not state then
@@ -8569,10 +8569,6 @@ if CLIENT then
                 continue
             end
 
-            if not MEXD.IsDeformationEnabled() then
-                continue
-            end
-
             local state = BuildDamageState(train)
             if state then
                 ApplyClientEnts(train, state)
@@ -8583,6 +8579,7 @@ if CLIENT then
     hook.Add("PreDrawTranslucentRenderables", "MEX.Damage.V4TranslucentAttachments", function()
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
+            if not MEXD.IsDeformationEnabled() then continue end
 
             local state = BuildDamageState(train)
             if state then
