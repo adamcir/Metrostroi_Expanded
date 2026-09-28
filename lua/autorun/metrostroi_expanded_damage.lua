@@ -3045,6 +3045,67 @@ if SERVER then
         train.MEXDamageWaterVisualHooksInstalled = true
     end
 
+    local WATER_BLACKOUT_ELECTRIC_FIELDS = {
+        "Aux80V",
+        "Lights80V",
+        "Battery80V",
+        "ControlVoltage",
+        "AuxVoltage",
+        "LowVoltage",
+    }
+
+    local function RestoreWaterElectricBlackoutHook(train)
+        if not IsValid(train) then return end
+
+        local electric = train.Electric
+        if istable(electric)
+            and train.MEXDamageOriginalElectricThink
+        then
+            electric.Think =
+                train.MEXDamageOriginalElectricThink
+        end
+
+        train.MEXDamageOriginalElectricThink = nil
+        train.MEXDamageElectricBlackoutHookInstalled = nil
+    end
+
+    local function EnsureWaterElectricBlackoutHook(train)
+        if not IsSubwayTrain(train)
+            or train.MEXDamageElectricBlackoutHookInstalled
+            or not istable(train.Electric)
+            or not isfunction(train.Electric.Think)
+        then
+            return
+        end
+
+        local electric = train.Electric
+        local originalThink = electric.Think
+        train.MEXDamageOriginalElectricThink = originalThink
+
+        electric.Think = function(self, ...)
+            local result = originalThink(self, ...)
+
+            if IsValid(train)
+                and train:GetNW2Bool(
+                    "MEX.Damage.LowVoltageBlackout",
+                    false
+                )
+            then
+                for _, fieldName in ipairs(
+                    WATER_BLACKOUT_ELECTRIC_FIELDS
+                ) do
+                    if isnumber(self[fieldName]) then
+                        self[fieldName] = 0
+                    end
+                end
+            end
+
+            return result
+        end
+
+        train.MEXDamageElectricBlackoutHookInstalled = true
+    end
+
     local function RestoreWaterBatteryGlitchHook(train)
         if not IsValid(train) then return end
 
@@ -3316,6 +3377,20 @@ if SERVER then
         )
 
         if blackout then
+            EnsureWaterElectricBlackoutHook(train)
+
+            -- Also clamp the current Electric outputs immediately; the Think
+            -- wrapper keeps them at zero on following simulation ticks.
+            if istable(train.Electric) then
+                for _, fieldName in ipairs(
+                    WATER_BLACKOUT_ELECTRIC_FIELDS
+                ) do
+                    if isnumber(train.Electric[fieldName]) then
+                        train.Electric[fieldName] = 0
+                    end
+                end
+            end
+
             ForceFloodedLowVoltageRelaysOff(train)
             DisableSensitiveSystemsForFloodBlackout(train)
         end
@@ -4121,6 +4196,7 @@ if SERVER then
             RestoreWaterRelayChatter(train)
             RestoreWaterVisualGlitchHooks(train)
             RestoreWaterBatteryGlitchHook(train)
+            RestoreWaterElectricBlackoutHook(train)
             return
         end
 
@@ -5792,6 +5868,7 @@ if SERVER then
         RestoreWaterRelayChatter(train)
         RestoreWaterVisualGlitchHooks(train)
         RestoreWaterBatteryGlitchHook(train)
+        RestoreWaterElectricBlackoutHook(train)
 
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterMoisture = 0
@@ -5833,6 +5910,7 @@ if SERVER then
         RestoreWaterRelayChatter(train)
         RestoreWaterVisualGlitchHooks(train)
         RestoreWaterBatteryGlitchHook(train)
+        RestoreWaterElectricBlackoutHook(train)
 
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterMoisture = 0
