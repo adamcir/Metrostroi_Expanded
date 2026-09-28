@@ -6480,6 +6480,61 @@ if SERVER then
             end
         end
 
+        if istable(train.Battery) then
+            local batteryVoltage =
+                tonumber(train.Battery.Voltage) or 0
+            local batteryCurrent =
+                math.abs(
+                    tonumber(train.Battery.Current)
+                    or 0
+                )
+
+            local batteryWear = 0
+
+            -- Normal service wear is deliberately tiny. Deep discharge,
+            -- sustained high current or overvoltage age the battery much
+            -- faster, while ordinary driving takes many hours to matter.
+            if batteryVoltage > 0
+                and batteryVoltage < 48
+            then
+                batteryWear = batteryWear
+                    + dT
+                    * ((48 - batteryVoltage) / 48)
+                    * 0.000035
+            end
+
+            if batteryCurrent > 55 then
+                batteryWear = batteryWear
+                    + dT
+                    * math.Clamp(
+                        (batteryCurrent - 55) / 180,
+                        0,
+                        2
+                    )
+                    * 0.000020
+            end
+
+            if batteryVoltage > 90 then
+                batteryWear = batteryWear
+                    + dT
+                    * math.Clamp(
+                        (batteryVoltage - 90) / 35,
+                        0,
+                        2
+                    )
+                    * 0.000025
+            end
+
+            if batteryWear > 0 then
+                ApplyBatteryDamage(
+                    train,
+                    batteryWear * realism,
+                    "electrical wear"
+                )
+                EnsureWaterBatteryGlitchHook(train)
+            end
+        end
+
         if not istable(train.Systems) then return end
 
         train.MEXDamageLegacyRelaySnapshot =
@@ -7963,6 +8018,26 @@ if SERVER then
             return false
         end
 
+        local damaged =
+            train:GetNW2Float(
+                "MEX.Damage.BatteryHealth",
+                1
+            ) < 0.999
+            or train:GetNW2Bool(
+                "MEX.Damage.BatteryFailed",
+                false
+            )
+            or train:GetNW2Bool(
+                "MEX.Damage.BatteryWaterFailed",
+                false
+            )
+            or train:GetNW2Float(
+                "MEX.Damage.BatteryFloodLevel",
+                0
+            ) > 0.01
+
+        if not damaged then return false end
+
         train:SetNW2Float(
             "MEX.Damage.BatteryHealth",
             1
@@ -8013,6 +8088,18 @@ if SERVER then
         then
             return false
         end
+
+        local damaged =
+            train:GetNW2Bool(
+                "MEX.Damage.GRKVFailed",
+                false
+            )
+            or train:GetNW2Float(
+                "MEX.Damage.GRKVWear",
+                0
+            ) > 0.001
+
+        if not damaged then return false end
 
         RestoreGRKVWearFailure(train)
 
@@ -9099,7 +9186,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery %.1f V | LV %.1f V | battery flood %.2f | brownout %s | blackout %s | surfaced %s/%.2f | battery failed %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery %.1f V/health %.0f%% | LV %.1f V | GRKV %.0f%%/%s | legacy wear %.0f%% | battery flood %.2f | brownout %s | blackout %s | surfaced %s/%.2f | battery failed %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s | bogeys F:%s R:%s | couplers F:%s R:%s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -9124,10 +9211,26 @@ if SERVER then
             istable(train.Battery)
                 and NumberOrZero(train.Battery.Voltage)
                 or 0,
+            train:GetNW2Float(
+                "MEX.Damage.BatteryHealth",
+                1
+            ) * 100,
             select(
                 4,
                 GetTrainElectricalWaterState(train)
             ),
+            train:GetNW2Float(
+                "MEX.Damage.GRKVWear",
+                0
+            ) * 100,
+            train:GetNW2Bool(
+                "MEX.Damage.GRKVFailed",
+                false
+            ) and "FAILED" or "OK",
+            train:GetNW2Float(
+                "MEX.Damage.LegacyWear",
+                0
+            ) * 100,
             train:GetNW2Float("MEX.Damage.BatteryFloodLevel", 0),
             train:GetNW2Bool(
                 "MEX.Damage.LowVoltageBrownout",
@@ -9185,7 +9288,23 @@ if SERVER then
             train:GetNW2String(
                 "MEX.Damage.LastProtection",
                 "none"
-            )
+            ),
+            train:GetNW2Bool(
+                "MEX.Damage.FrontBogeyDetached",
+                false
+            ) and "DETACHED" or "OK",
+            train:GetNW2Bool(
+                "MEX.Damage.RearBogeyDetached",
+                false
+            ) and "DETACHED" or "OK",
+            train:GetNW2Bool(
+                "MEX.Damage.FrontCouplerDetached",
+                false
+            ) and "DETACHED" or "OK",
+            train:GetNW2Bool(
+                "MEX.Damage.RearCouplerDetached",
+                false
+            ) and "DETACHED" or "OK"
         ))
     end)
 
