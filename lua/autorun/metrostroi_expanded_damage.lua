@@ -9547,6 +9547,15 @@ if SERVER then
                 return "indicator:" .. indicator
             end
 
+            local hiddenControl =
+                FirstSortedKey(
+                    train.MEXDamageFailedControls
+                )
+
+            if hiddenControl then
+                return "control:" .. hiddenControl
+            end
+
             return "electrical"
         end
 
@@ -9608,6 +9617,18 @@ if SERVER then
                 return MEXD.RepairWearIndicator(
                     train,
                     tonumber(indicator)
+                )
+            end
+
+            local hiddenControl =
+                FirstSortedKey(
+                    train.MEXDamageFailedControls
+                )
+
+            if hiddenControl then
+                return MEXD.RepairWearControl(
+                    train,
+                    hiddenControl
                 )
             end
 
