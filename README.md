@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.10.2**
+Current damage-system module version: **0.10.3**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -407,3 +407,16 @@ Controls now follow one strict rule:
 - long seat rows and large interior assemblies may be vertex-deformed in the scrap phase instead of remaining at their original coordinates
 - only true running gear such as bogies, wheels, axles, couplers and traction/mechanical equipment stays on the original physics chassis
 - interior fixtures are kept attached much deeper into the scrap phase so they crumple with the cabin instead of becoming floating debris too early
+
+
+### Damage 0.10.3 – Utilities damage settings
+
+- added **Utilities → Metrostroi Expanded → Damage**
+- added a server-wide **Enable damage** checkbox
+- added a server-wide **Enable deformation** checkbox
+- deformation can only be enabled while damage itself is enabled
+- disabling damage also disables deformation and resets current Metrostroi Expanded damage/debris state on spawned trains
+- damage disabled: collisions, weapons, physgun impacts and detach requests no longer feed the damage system
+- deformation disabled while damage remains enabled: subsystem failures, detached controls and damage state remain active, but carbody/interior visual deformation is cleared
+- settings are archived replicated server ConVars: `mex_damage_enabled` and `mex_damage_deformation_enabled`
+- Utilities controls are editable by server admins; clients still see the current replicated state
