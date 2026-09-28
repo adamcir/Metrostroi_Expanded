@@ -1542,6 +1542,18 @@ if SERVER then
             end
 
             if IsFuseSystemName(systemName) then
+                local alreadyBlown =
+                    train.MEXDamageBlownFuses
+                    and train.MEXDamageBlownFuses[systemName]
+
+                local failedOpen =
+                    train.MEXDamageElectricalFailureSystems
+                    and train.MEXDamageElectricalFailureSystems[systemName]
+
+                if alreadyBlown or failedOpen then
+                    continue
+                end
+
                 local upper = string.upper(systemName)
 
                 if highVoltage then
