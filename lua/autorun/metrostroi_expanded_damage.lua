@@ -6648,6 +6648,410 @@ if SERVER then
                 and train.MEXDamageFailedControls[key] == true
     end
 
+    local function RelayNominalCycles(
+        systemName,
+        system
+    )
+        local text = string.lower(
+            tostring(systemName or "")
+            .. " "
+            .. tostring(
+                istable(system)
+                    and system.relay_type
+                    or ""
+            )
+        )
+
+        if string.find(text, "contactor", 1, true)
+            or string.find(text, "linecontactor", 1, true)
+            or string.find(text, "lk", 1, true)
+        then
+            return 70000
+        end
+
+        if string.find(text, "door", 1, true)
+            or string.find(text, "vdol", 1, true)
+            or string.find(text, "vdop", 1, true)
+            or string.find(text, "vdz", 1, true)
+        then
+            return 140000
+        end
+
+        if string.find(text, "ars", 1, true)
+            or string.find(text, "als", 1, true)
+        then
+            return 160000
+        end
+
+        return 190000
+    end
+
+    function MEXD.RepairWearSystem(
+        train,
+        systemName
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(systemName)
+            or not train.MEXDamageWearFailedSystems
+            or not train.MEXDamageWearFailedSystems[
+                systemName
+            ]
+        then
+            return false
+        end
+
+        if not RestoreSingleElectricalFailure(
+            train,
+            systemName,
+            true
+        ) then
+            return false
+        end
+
+        train.MEXDamageWearFailedSystems[
+            systemName
+        ] = nil
+
+        train.MEXDamageRelayWear =
+            train.MEXDamageRelayWear or {}
+        train.MEXDamageRelayWear[systemName] = 0
+
+        train:SetNW2Int(
+            "MEX.Damage.FailedRelayCount",
+            table.Count(
+                train.MEXDamageWearFailedSystems
+            )
+        )
+
+        return true
+    end
+
+    local function EnsureWearLightGuard(train)
+        if not IsSubwayTrain(train)
+            or train.MEXDamageWearOriginalSetLightPower
+            or not isfunction(train.SetLightPower)
+        then
+            return
+        end
+
+        local original = train.SetLightPower
+        train.MEXDamageWearOriginalSetLightPower =
+            original
+        train.MEXDamageWearLightState =
+            train.MEXDamageWearLightState or {}
+        train.MEXDamageWearLight =
+            train.MEXDamageWearLight or {}
+        train.MEXDamageWearLightThreshold =
+            train.MEXDamageWearLightThreshold or {}
+        train.MEXDamageWearFailedLights =
+            train.MEXDamageWearFailedLights or {}
+
+        train.SetLightPower = function(
+            self,
+            index,
+            power,
+            brightness
+        )
+            local failed =
+                self.MEXDamageWearFailedLights
+                and self.MEXDamageWearFailedLights[index]
+
+            if failed then
+                return original(
+                    self,
+                    index,
+                    false,
+                    0
+                )
+            end
+
+            local state =
+                self.MEXDamageWearLightState[index]
+                or {
+                    on = false,
+                    brightness = 1,
+                }
+
+            if power and not state.on then
+                local lightData =
+                    istable(self.Lights)
+                        and self.Lights[index]
+                        or nil
+                local kind =
+                    istable(lightData)
+                        and tostring(lightData[1] or "")
+                        or ""
+
+                local startCycles =
+                    kind == "headlight"
+                        and 6000
+                        or 18000
+
+                self.MEXDamageWearLight[index] =
+                    NumberOrZero(
+                        self.MEXDamageWearLight[index]
+                    )
+                    + 1 / startCycles
+                        * MEXD.GetElectricalDamageScale()
+            end
+
+            state.on = power == true
+            state.brightness =
+                tonumber(brightness) or 1
+
+            self.MEXDamageWearLightState[index] =
+                state
+
+            local threshold =
+                self.MEXDamageWearLightThreshold[index]
+
+            if not threshold then
+                threshold = Lerp(
+                    StableWearUnit(
+                        self,
+                        "light:" .. tostring(index),
+                        "lamp-life"
+                    ),
+                    0.78,
+                    1.30
+                )
+                self.MEXDamageWearLightThreshold[index] =
+                    threshold
+            end
+
+            if NumberOrZero(
+                self.MEXDamageWearLight[index]
+            ) >= threshold
+            then
+                self.MEXDamageWearFailedLights[index] =
+                    true
+                self:SetNW2Bool(
+                    "MEX.Damage.WearLight."
+                        .. tostring(index),
+                    true
+                )
+                self:SetNW2String(
+                    "MEX.Damage.WearFailure",
+                    "Light #" .. tostring(index)
+                )
+                self:SetNW2Int(
+                    "MEX.Damage.FailedLightCount",
+                    table.Count(
+                        self.MEXDamageWearFailedLights
+                    )
+                )
+
+                state.on = false
+                return original(
+                    self,
+                    index,
+                    false,
+                    0
+                )
+            end
+
+            return original(
+                self,
+                index,
+                power,
+                brightness
+            )
+        end
+    end
+
+    function MEXD.RepairWearLight(
+        train,
+        index
+    )
+        index = tonumber(index)
+
+        if not IsSubwayTrain(train)
+            or not index
+            or not train.MEXDamageWearFailedLights
+            or not train.MEXDamageWearFailedLights[index]
+        then
+            return false
+        end
+
+        train.MEXDamageWearFailedLights[index] = nil
+        train.MEXDamageWearLight =
+            train.MEXDamageWearLight or {}
+        train.MEXDamageWearLight[index] = 0
+
+        train:SetNW2Bool(
+            "MEX.Damage.WearLight."
+                .. tostring(index),
+            false
+        )
+        train:SetNW2Int(
+            "MEX.Damage.FailedLightCount",
+            table.Count(
+                train.MEXDamageWearFailedLights
+            )
+        )
+
+        local state =
+            train.MEXDamageWearLightState
+            and train.MEXDamageWearLightState[index]
+
+        if state
+            and train.MEXDamageWearOriginalSetLightPower
+        then
+            train:MEXDamageWearOriginalSetLightPower(
+                index,
+                state.on == true,
+                state.brightness or 1
+            )
+        end
+
+        return true
+    end
+
+    local function EnsureIndicatorWearGuard(train)
+        if not IsSubwayTrain(train)
+            or train.MEXDamageWearOriginalSetPackedBool
+            or not isfunction(train.SetPackedBool)
+        then
+            return
+        end
+
+        local original = train.SetPackedBool
+        train.MEXDamageWearOriginalSetPackedBool =
+            original
+        train.MEXDamageIndicatorState =
+            train.MEXDamageIndicatorState or {}
+        train.MEXDamageIndicatorWear =
+            train.MEXDamageIndicatorWear or {}
+        train.MEXDamageIndicatorThreshold =
+            train.MEXDamageIndicatorThreshold or {}
+        train.MEXDamageFailedIndicators =
+            train.MEXDamageFailedIndicators or {}
+
+        train.SetPackedBool = function(
+            self,
+            index,
+            value
+        )
+            if not PackedBoolLooksLikeIndicator(index) then
+                return original(
+                    self,
+                    index,
+                    value
+                )
+            end
+
+            if self.MEXDamageFailedIndicators
+                and self.MEXDamageFailedIndicators[index]
+            then
+                return original(
+                    self,
+                    index,
+                    false
+                )
+            end
+
+            local old =
+                self.MEXDamageIndicatorState[index]
+
+            if value and old ~= true then
+                self.MEXDamageIndicatorWear[index] =
+                    NumberOrZero(
+                        self.MEXDamageIndicatorWear[index]
+                    )
+                    + 1 / 22000
+                        * MEXD.GetElectricalDamageScale()
+            end
+
+            self.MEXDamageIndicatorState[index] =
+                value == true
+
+            local threshold =
+                self.MEXDamageIndicatorThreshold[index]
+
+            if not threshold then
+                threshold = Lerp(
+                    StableWearUnit(
+                        self,
+                        "indicator:" .. tostring(index),
+                        "indicator-life"
+                    ),
+                    0.80,
+                    1.35
+                )
+                self.MEXDamageIndicatorThreshold[index] =
+                    threshold
+            end
+
+            if NumberOrZero(
+                self.MEXDamageIndicatorWear[index]
+            ) >= threshold
+            then
+                self.MEXDamageFailedIndicators[index] =
+                    true
+                self:SetNW2Bool(
+                    "MEX.Damage.WearIndicator."
+                        .. tostring(index),
+                    true
+                )
+                self:SetNW2String(
+                    "MEX.Damage.WearFailure",
+                    "Indicator #" .. tostring(index)
+                )
+                self:SetNW2Int(
+                    "MEX.Damage.FailedIndicatorCount",
+                    table.Count(
+                        self.MEXDamageFailedIndicators
+                    )
+                )
+                return original(
+                    self,
+                    index,
+                    false
+                )
+            end
+
+            return original(
+                self,
+                index,
+                value
+            )
+        end
+    end
+
+    function MEXD.RepairWearIndicator(
+        train,
+        index
+    )
+        index = tonumber(index)
+
+        if not IsSubwayTrain(train)
+            or not index
+            or not train.MEXDamageFailedIndicators
+            or not train.MEXDamageFailedIndicators[index]
+        then
+            return false
+        end
+
+        train.MEXDamageFailedIndicators[index] = nil
+        train.MEXDamageIndicatorWear =
+            train.MEXDamageIndicatorWear or {}
+        train.MEXDamageIndicatorWear[index] = 0
+
+        train:SetNW2Bool(
+            "MEX.Damage.WearIndicator."
+                .. tostring(index),
+            false
+        )
+        train:SetNW2Int(
+            "MEX.Damage.FailedIndicatorCount",
+            table.Count(
+                train.MEXDamageFailedIndicators
+            )
+        )
+
+        return true
+    end
+
     local function RestoreGRKVWearFailure(train)
         if not IsSubwayTrain(train) then return end
 
