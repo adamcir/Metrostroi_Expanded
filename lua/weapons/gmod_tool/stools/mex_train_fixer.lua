@@ -98,6 +98,126 @@ local function RunningGearTarget(train, ent)
     return nil
 end
 
+local function ButtonCenterLocal(panel, button)
+    if not istable(panel)
+        or not istable(button)
+        or not isvector(panel.pos)
+        or not isangle(panel.ang)
+    then
+        return nil
+    end
+
+    local x = tonumber(button.x) or 0
+    local y = tonumber(button.y) or 0
+
+    if not button.radius then
+        x = x + (tonumber(button.w) or 0) * 0.5
+        y = y + (tonumber(button.h) or 0) * 0.5
+    end
+
+    local pos = Vector(x, -y, 0)
+    pos:Rotate(panel.ang)
+
+    return panel.pos
+        + pos * (tonumber(panel.scale) or 1)
+end
+
+local function NearestButtonTarget(train, localPos)
+    if not istable(train.ButtonMap) then
+        return nil, nil
+    end
+
+    local bestID
+    local bestDistance = math.huge
+
+    for panelName, panel in pairs(train.ButtonMap) do
+        if panelName == "BaseClass"
+            or not istable(panel)
+            or not istable(panel.buttons)
+        then
+            continue
+        end
+
+        for _, button in pairs(panel.buttons) do
+            if not istable(button)
+                or not isstring(button.ID)
+            then
+                continue
+            end
+
+            local pos = ButtonCenterLocal(panel, button)
+            if not isvector(pos) then continue end
+
+            local distance = localPos:Distance(pos)
+            local radius =
+                tonumber(button.radius)
+                or math.max(
+                    tonumber(button.w) or 0,
+                    tonumber(button.h) or 0
+                ) * 0.75
+
+            radius = math.Clamp(
+                radius
+                    * (tonumber(panel.scale) or 1)
+                    + 7,
+                12,
+                42
+            )
+
+            if distance <= radius
+                and distance < bestDistance
+            then
+                bestDistance = distance
+                bestID =
+                    button.ID:gsub("^.+:", "")
+            end
+        end
+    end
+
+    if bestID then
+        return "control:" .. bestID,
+            "Control: " .. bestID
+    end
+
+    return nil, nil
+end
+
+local function NearestLightTarget(train, localPos)
+    if not istable(train.Lights) then
+        return nil, nil
+    end
+
+    local bestIndex
+    local bestDistance = math.huge
+
+    for index, light in pairs(train.Lights) do
+        if not istable(light)
+            or not isvector(light[2])
+        then
+            continue
+        end
+
+        local distance = localPos:Distance(light[2])
+        local kind = tostring(light[1] or "")
+        local radius =
+            kind == "headlight" and 90 or 48
+
+        if distance <= radius
+            and distance < bestDistance
+        then
+            bestDistance = distance
+            bestIndex = index
+        end
+    end
+
+    if bestIndex ~= nil then
+        return "light:" .. tostring(bestIndex),
+            "Light #" .. tostring(bestIndex)
+    end
+
+    return nil, nil
+end
+
 local function LocalServiceTarget(
     train,
     worldPos
@@ -109,6 +229,21 @@ local function LocalServiceTarget(
     end
 
     local localPos = train:WorldToLocal(worldPos)
+
+    local controlTarget, controlLabel =
+        NearestButtonTarget(train, localPos)
+
+    if controlTarget then
+        return controlTarget, controlLabel
+    end
+
+    local lightTarget, lightLabel =
+        NearestLightTarget(train, localPos)
+
+    if lightTarget then
+        return lightTarget, lightLabel
+    end
+
     local mins = train:OBBMins()
     local maxs = train:OBBMaxs()
     local center = (mins + maxs) * 0.5
@@ -129,20 +264,35 @@ local function LocalServiceTarget(
         mins.y + width * 0.10,
         mins.z + height * 0.16
     )
+    local electrical = Vector(
+        center.x,
+        mins.y + width * 0.12,
+        mins.z + height * 0.32
+    )
 
     local batteryDistance =
         localPos:Distance(battery)
     local grkvDistance =
         localPos:Distance(grkv)
+    local electricalDistance =
+        localPos:Distance(electrical)
 
     if batteryDistance <= 115
         and batteryDistance <= grkvDistance
+        and batteryDistance <= electricalDistance
     then
         return "battery", "Battery service point"
     end
 
-    if grkvDistance <= 115 then
+    if grkvDistance <= 115
+        and grkvDistance <= electricalDistance
+    then
         return "grkv", "GRKV / rheostat controller service point"
+    end
+
+    if electricalDistance <= 115 then
+        return "electrical",
+            "Electrical cabinet / relay & indicator service"
     end
 
     local centerX = center.x
@@ -428,6 +578,34 @@ if CLIENT then
                         false
                     )
                 ),
+            string.format(
+                "Failed controls: %d",
+                train:GetNW2Int(
+                    "MEX.Damage.FailedControlCount",
+                    0
+                )
+            ),
+            string.format(
+                "Failed relays: %d",
+                train:GetNW2Int(
+                    "MEX.Damage.FailedRelayCount",
+                    0
+                )
+            ),
+            string.format(
+                "Failed lights: %d",
+                train:GetNW2Int(
+                    "MEX.Damage.FailedLightCount",
+                    0
+                )
+            ),
+            string.format(
+                "Failed indicators: %d",
+                train:GetNW2Int(
+                    "MEX.Damage.FailedIndicatorCount",
+                    0
+                )
+            ),
         }
 
         for i, line in ipairs(lines) do
@@ -462,7 +640,16 @@ function TOOL.BuildCPanel(panel)
         "Aim directly at a bogey or coupler to repair only that running-gear item."
     )
     panel:Help(
-        "Hidden Battery and GRKV systems have service hotspots on the lower underframe; the HUD tells you when one is targeted."
+        "Buttons, switches, levers and brake controls are targeted individually through their ButtonMap position."
+    )
+    panel:Help(
+        "Lights/headlights are targeted individually at their light position."
+    )
+    panel:Help(
+        "Hidden Battery and GRKV systems have service hotspots on the lower underframe."
+    )
+    panel:Help(
+        "The electrical cabinet service hotspot repairs one failed hidden relay or indicator circuit at a time."
     )
     panel:Help(
         "A normal body hit repairs only the structural damage zone you are pointing at."
