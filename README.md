@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.14.0**
+Current damage-system module version: **0.15.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -485,3 +485,20 @@ The protection model follows the actual systems exposed by each Metrostroi train
 - sensitive Metrostroi systems such as ARS/ALS/BPSN/radio/information electronics can go offline while their physical controls remain movable
 - while a sensitive module is offline, its inputs may still change but its published outputs are forced inactive until recovery
 - `mex_damage_status` now reports surface/deep moisture, elapsed dry time and the number of sensitive electronic systems currently offline
+
+
+### Damage 0.15.0 – wet relay chatter and false indications
+
+- wet energized trains can now develop **intermittent contact faults** before or between permanent failures
+- internal relay-like systems may briefly chatter between states and then return to their previous target state
+- manual panel operators, breakers, fuses, reversers, KV/GRKV and other mechanical controls are excluded from random chatter
+- relay chatter uses short real state pulses, so dependent circuits may momentarily react to the bad contact
+- wet contact chatter produces relay/switch clicking sounds
+- panel warning lamps and electrical indicators can visually flicker, extinguish or briefly show the opposite state
+- electrical packed-ratio instruments such as voltmeters, ammeters, battery/current/voltage meters can temporarily jump to false values
+- pneumatic/brake pressure gauges are explicitly excluded from electrical-water gauge corruption
+- false indicator/gauge values are visual/network indications only; they do not directly rewrite the real underlying electrical measurement
+- glitch frequency and duration scale with water immersion, retained surface/deep moisture, voltage and current
+- glitches can continue for a while after leaving the water and naturally become less frequent while the train dries
+- all transient chatter/false-indication wrappers are restored by Train Fixer / `mex_damage_reset`
+- `mex_damage_status` now shows the current water glitch intensity and the relay currently chattering
