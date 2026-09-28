@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.0"
+MEXD.Version = "0.18.1"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -3812,7 +3812,7 @@ if SERVER then
             thirdRailConnected == true
 
         if wetness > 0.05 then
-            ApplyBatteryDamage(
+            MEXD.ApplyBatteryDamage(
                 train,
                 dT
                     * wetness
@@ -3887,7 +3887,7 @@ if SERVER then
                 "MEX.Damage.BatteryWaterFailed",
                 false
             ) then
-                ApplyBatteryDamage(
+                MEXD.ApplyBatteryDamage(
                     train,
                     0.52,
                     "water short"
@@ -6282,6 +6282,26 @@ if SERVER then
             )
     end
 
+    local function IsTrainPhysgunManipulated(train)
+        if not IsSubwayTrain(train) then return false end
+        if IsRecentPhysgunEntity(train) then return true end
+
+        local runningGear = {
+            train.FrontBogey,
+            train.RearBogey,
+            train.FrontCouple,
+            train.RearCouple,
+        }
+
+        for _, part in ipairs(runningGear) do
+            if IsRecentPhysgunEntity(part) then
+                return true
+            end
+        end
+
+        return false
+    end
+
     -- Physgun motion is partly kinematic in Source, so OurOldVelocity can be
     -- much smaller than the visible movement. Remember held/thrown entities so
     -- PhysicsCollide can trust collisionData.Speed and use a lower threshold
@@ -7276,7 +7296,13 @@ if SERVER then
             end
         end
 
-        if istable(train.Battery) then
+        -- Physgun movement is not battery use. Metrostroi can briefly report
+        -- unrealistic battery current/voltage while a constrained wagon is
+        -- being dragged, so never turn that kinematic manipulation into wear.
+        -- Real collision damage is still handled by PhysicsCollide below.
+        if istable(train.Battery)
+            and not IsTrainPhysgunManipulated(train)
+        then
             local batteryVoltage =
                 tonumber(train.Battery.Voltage) or 0
             local batteryCurrent =
@@ -7322,7 +7348,7 @@ if SERVER then
             end
 
             if batteryWear > 0 then
-                ApplyBatteryDamage(
+                MEXD.ApplyBatteryDamage(
                     train,
                     batteryWear * realism,
                     "electrical wear"
@@ -7859,6 +7885,12 @@ if SERVER then
             return false
         end
 
+        -- Bogeys and couplers are physical damage. Electrical damage or
+        -- deformation alone must never remove running gear.
+        if not MEXD.IsPhysicalDamageEnabled() then
+            return false
+        end
+
         local isBogey =
             kind == "front_bogey"
             or kind == "rear_bogey"
@@ -8099,13 +8131,19 @@ if SERVER then
                 batteryDamage = batteryDamage * 1.25
             end
 
-            if ApplyBatteryDamage(
+            if MEXD.ApplyBatteryDamage(
                 train,
                 batteryDamage,
                 "crash"
             ) then
                 EnsureWaterBatteryGlitchHook(train)
             end
+        end
+
+        -- Battery crash damage above is intentionally independent, but actual
+        -- running-gear breakaway belongs exclusively to physical damage.
+        if not MEXD.IsPhysicalDamageEnabled() then
+            return
         end
 
         if deltaKmh < 58 then return end
@@ -10382,6 +10420,12 @@ if SERVER then
 
             -- Ignore teleports, respawns and physics reinitialisation.
             if dt <= 0 or dt > 0.25 or moved > 600 then continue end
+
+            -- Kinematic Physgun movement is not an impact. The real collision
+            -- callback above still processes actual hits while the train is
+            -- held/thrown, but this velocity fallback must not interpret
+            -- ordinary dragging as a crash (and damage the battery).
+            if IsTrainPhysgunManipulated(train) then continue end
 
             local deltaKmh = deltaVelocity:Length() * SU_TO_KMH
             if deltaKmh < 12 then continue end
