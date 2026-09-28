@@ -3492,6 +3492,23 @@ if SERVER then
         end
 
         train.MEXDamageOriginalBatteryThink = nil
+
+        if istable(battery)
+            and isnumber(
+                train.MEXDamageOriginalBatteryCapacity
+            )
+        then
+            battery.Capacity =
+                train.MEXDamageOriginalBatteryCapacity
+            if isnumber(battery.Charge) then
+                battery.Charge = math.min(
+                    battery.Charge,
+                    battery.Capacity
+                )
+            end
+        end
+
+        train.MEXDamageOriginalBatteryCapacity = nil
         train.MEXDamageBatteryGlitchHookInstalled = nil
         train.MEXDamageBatteryGlitchUntil = nil
         train.MEXDamageBatteryVoltageFactor = nil
@@ -3537,6 +3554,9 @@ if SERVER then
         local originalThink = battery.Think
 
         train.MEXDamageOriginalBatteryThink = originalThink
+        train.MEXDamageOriginalBatteryCapacity =
+            tonumber(battery.Capacity)
+                or train.MEXDamageOriginalBatteryCapacity
 
         battery.Think = function(self, ...)
             local result = originalThink(self, ...)
@@ -3562,6 +3582,33 @@ if SERVER then
                         0.62,
                         1.0
                     )
+
+                local originalCapacity =
+                    tonumber(
+                        train.MEXDamageOriginalBatteryCapacity
+                    )
+
+                if originalCapacity
+                    and isnumber(self.Capacity)
+                then
+                    local capacityFactor =
+                        Lerp(
+                            batteryHealth,
+                            0.35,
+                            1.0
+                        )
+
+                    self.Capacity =
+                        originalCapacity
+                        * capacityFactor
+
+                    if isnumber(self.Charge) then
+                        self.Charge = math.min(
+                            self.Charge,
+                            self.Capacity
+                        )
+                    end
+                end
 
                 if (train.MEXDamageBatteryGlitchUntil or 0)
                     > CurTime()
@@ -6661,6 +6708,66 @@ if SERVER then
         end
     end
 
+    local function ApplyTrainStrikeToPlayer(
+        train,
+        ply,
+        impactKmh,
+        impactVelocity,
+        hitPos
+    )
+        if not IsSubwayTrain(train)
+            or not IsValid(ply)
+            or not ply:IsPlayer()
+            or not ply:Alive()
+            or impactKmh < 18
+        then
+            return
+        end
+
+        local realism = MEXD.GetPhysicalDamageScale()
+        local t = math.Clamp(
+            (impactKmh - 15) / 60,
+            0,
+            2
+        )
+
+        local damage =
+            math.pow(t, 1.35)
+            * 150
+            * realism
+
+        if impactKmh >= 75 then
+            damage = math.max(damage, 125)
+        end
+
+        if impactKmh >= 95 then
+            damage = math.max(damage, 250)
+        end
+
+        local info = DamageInfo()
+        info:SetDamage(
+            math.Clamp(damage, 1, 350)
+        )
+        info:SetDamageType(
+            bit.bor(DMG_CRUSH, DMG_VEHICLE)
+        )
+        info:SetAttacker(train)
+        info:SetInflictor(train)
+        info:SetDamagePosition(
+            isvector(hitPos)
+                and hitPos
+                or ply:WorldSpaceCenter()
+        )
+        info:SetDamageForce(
+            (isvector(impactVelocity)
+                and impactVelocity
+                or train:GetVelocity())
+            * math.Clamp(damage * 3.2, 150, 1400)
+        )
+
+        ply:TakeDamageInfo(info)
+    end
+
     local function RemoveConstraintBetween(
         part,
         train,
@@ -6946,11 +7053,13 @@ if SERVER then
                 batteryDamage = batteryDamage * 1.25
             end
 
-            ApplyBatteryDamage(
+            if ApplyBatteryDamage(
                 train,
                 batteryDamage,
                 "crash"
-            )
+            ) then
+                EnsureWaterBatteryGlitchHook(train)
+            end
         end
 
         if deltaKmh < 58 then return end
@@ -7135,11 +7244,19 @@ if SERVER then
                 local maxSpeed = physgunImpact
                     and 48
                     or MAX_CRASH_SPEED_KMH
-                local severity = math.Clamp(
+                local normalizedCrash = math.Clamp(
                     (impactKmh - threshold)
                         / math.max(maxSpeed - threshold, 1),
-                    physgunImpact and 0.030 or 0.015,
-                    0.95
+                    0,
+                    1.35
+                )
+                local severity = math.Clamp(
+                    math.pow(
+                        normalizedCrash,
+                        1.28
+                    ),
+                    physgunImpact and 0.030 or 0.012,
+                    1.0
                 )
 
                 if physgunImpact then
@@ -7204,6 +7321,18 @@ if SERVER then
                     impactVelocity,
                     hitPos
                 )
+
+                if IsValid(other)
+                    and other:IsPlayer()
+                then
+                    ApplyTrainStrikeToPlayer(
+                        ent,
+                        other,
+                        impactKmh,
+                        impactVelocity,
+                        hitPos
+                    )
+                end
             end)
         end
 
@@ -8007,24 +8136,48 @@ if SERVER then
         elseif target == "grkv" then
             return RepairGRKVOnly(train)
         elseif target == "front_bogey" then
+            if not train:GetNW2Bool(
+                "MEX.Damage.FrontBogeyDetached",
+                false
+            ) then
+                return false
+            end
             return ReattachTrainRunningGear(
                 train,
                 train.FrontBogey,
                 target
             )
         elseif target == "rear_bogey" then
+            if not train:GetNW2Bool(
+                "MEX.Damage.RearBogeyDetached",
+                false
+            ) then
+                return false
+            end
             return ReattachTrainRunningGear(
                 train,
                 train.RearBogey,
                 target
             )
         elseif target == "front_coupler" then
+            if not train:GetNW2Bool(
+                "MEX.Damage.FrontCouplerDetached",
+                false
+            ) then
+                return false
+            end
             return ReattachTrainRunningGear(
                 train,
                 train.FrontCouple,
                 target
             )
         elseif target == "rear_coupler" then
+            if not train:GetNW2Bool(
+                "MEX.Damage.RearCouplerDetached",
+                false
+            ) then
+                return false
+            end
             return ReattachTrainRunningGear(
                 train,
                 train.RearCouple,
