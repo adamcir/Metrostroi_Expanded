@@ -135,7 +135,7 @@ $repoFull = [System.IO.Path]::GetFullPath($RepoDir).TrimEnd('\')
 $destFull = [System.IO.Path]::GetFullPath($Dest).TrimEnd('\')
 
 if ([string]::Equals($repoFull, $destFull, [System.StringComparison]::OrdinalIgnoreCase)) {
-    Write-Host "Metrostroi Extended is already located in Garry's Mod addons:"
+    Write-Host "Metrostroi Expanded is already located in Garry's Mod addons:"
     Write-Host "  $Dest"
     exit 0
 }
@@ -146,7 +146,7 @@ if (Test-Path -LiteralPath $Legacy -PathType Container) {
     Remove-Item -LiteralPath $Legacy -Recurse -Force
 }
 
-Write-Host "Installing Metrostroi Extended..."
+Write-Host "Installing Metrostroi Expanded..."
 Write-Host "Source:      $RepoDir"
 Write-Host "Destination: $Dest"
 
