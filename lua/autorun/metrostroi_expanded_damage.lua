@@ -605,726 +605,6 @@ if SERVER then
     local ClassifyFromWorldDeltaVelocity
     local ClassifyFromWorldPosition
 
-    ---------------------------------------------------------------------------
-    -- Persistent mechanical/electrical wear and crash consequences
-    ---------------------------------------------------------------------------
-
-    local BATTERY_MIN_WORKING_HEALTH = 0.12
-    local GRKV_WEAR_PER_POSITION = 0.000080
-    local LEGACY_RELAY_WEAR_PER_OPERATION = 0.000012
-
-    local function GetBatteryHealth(train)
-        if not IsSubwayTrain(train) then return 1 end
-
-        local health = train:GetNW2Float(
-            "MEX.Damage.BatteryHealth",
-            1
-        )
-
-        return math.Clamp(health, 0, 1)
-    end
-
-    local function ApplyBatteryDamage(
-        train,
-        amount,
-        cause
-    )
-        if not IsSubwayTrain(train)
-            or not istable(train.Battery)
-        then
-            return false
-        end
-
-        amount = math.max(tonumber(amount) or 0, 0)
-        if amount <= 0 then return false end
-
-        local old = GetBatteryHealth(train)
-        local new = math.Clamp(old - amount, 0, 1)
-
-        train:SetNW2Float(
-            "MEX.Damage.BatteryHealth",
-            new
-        )
-        train:SetNW2String(
-            "MEX.Damage.BatteryLastCause",
-            tostring(cause or "unknown")
-        )
-
-        if new <= BATTERY_MIN_WORKING_HEALTH then
-            train:SetNW2Bool(
-                "MEX.Damage.BatteryFailed",
-                true
-            )
-        end
-
-        return new < old
-    end
-
-    MEXD.GetBatteryHealth = GetBatteryHealth
-    MEXD.ApplyBatteryDamage = ApplyBatteryDamage
-
-    local function RestoreGRKVWearFailure(train)
-        if not IsSubwayTrain(train) then return end
-
-        local grkv = train.RheostatController
-
-        if istable(grkv) then
-            if train.MEXDamageGRKVOriginalThink then
-                grkv.Think =
-                    train.MEXDamageGRKVOriginalThink
-            end
-
-            if train.MEXDamageGRKVOriginalTriggerInput then
-                grkv.TriggerInput =
-                    train.MEXDamageGRKVOriginalTriggerInput
-            end
-        end
-
-        train.MEXDamageGRKVOriginalThink = nil
-        train.MEXDamageGRKVOriginalTriggerInput = nil
-        train.MEXDamageGRKVLockedPosition = nil
-        train:SetNW2Bool("MEX.Damage.GRKVFailed", false)
-    end
-
-    local function FailGRKVFromWear(train)
-        if not IsSubwayTrain(train)
-            or train:GetNW2Bool(
-                "MEX.Damage.GRKVFailed",
-                false
-            )
-            or not istable(train.RheostatController)
-        then
-            return false
-        end
-
-        local grkv = train.RheostatController
-        local lockedPosition =
-            tonumber(grkv.Position)
-            or tonumber(grkv.SelectedPosition)
-            or 1
-
-        train.MEXDamageGRKVLockedPosition = lockedPosition
-        train.MEXDamageGRKVOriginalThink = grkv.Think
-        train.MEXDamageGRKVOriginalTriggerInput =
-            grkv.TriggerInput
-
-        if isfunction(grkv.TriggerInput) then
-            local originalTrigger = grkv.TriggerInput
-
-            grkv.TriggerInput = function(self, name, value)
-                if name == "MotorState" then
-                    self.MotorState = 0
-                    return
-                end
-
-                return originalTrigger(self, name, value)
-            end
-        end
-
-        if isfunction(grkv.Think) then
-            local originalThink = grkv.Think
-
-            grkv.Think = function(self, ...)
-                local locked =
-                    tonumber(
-                        train.MEXDamageGRKVLockedPosition
-                    ) or lockedPosition
-
-                self.MotorState = 0
-                self.Velocity = 0
-                self.Position = locked
-
-                local result = originalThink(self, ...)
-
-                self.MotorState = 0
-                self.Velocity = 0
-                self.Position = locked
-
-                if isnumber(self.MaxPosition) then
-                    self.SelectedPosition = math.Clamp(
-                        math.floor(locked + 0.5),
-                        1,
-                        math.max(self.MaxPosition, 1)
-                    )
-                end
-
-                return result
-            end
-        end
-
-        train:SetNW2Bool("MEX.Damage.GRKVFailed", true)
-        train:SetNW2String(
-            "MEX.Damage.WearFailure",
-            "GRKV/RheostatController"
-        )
-
-        PlayLocalizedDamageSound(
-            train,
-            train:WorldSpaceCenter(),
-            "ambient/machines/thumper_shutdown1.wav",
-            61,
-            math.random(92, 104),
-            0.55
-        )
-
-        return true
-    end
-
-    local function UpdateMechanicalElectricalWear(
-        train,
-        dT
-    )
-        if not IsSubwayTrain(train) then return end
-        if not MEXD.IsElectricalDamageEnabled() then return end
-
-        local realism = MEXD.GetElectricalDamageScale()
-        local grkv = train.RheostatController
-
-        if istable(grkv)
-            and not train:GetNW2Bool(
-                "MEX.Damage.GRKVFailed",
-                false
-            )
-        then
-            local selected =
-                tonumber(grkv.SelectedPosition)
-                or tonumber(grkv.Position)
-
-            if selected then
-                local last =
-                    tonumber(
-                        train.MEXDamageGRKVLastPosition
-                    )
-
-                if last then
-                    local steps = math.abs(selected - last)
-
-                    if steps >= 0.35 then
-                        local current = 0
-
-                        if istable(train.Electric) then
-                            current = math.max(
-                                math.abs(
-                                    tonumber(train.Electric.I13)
-                                    or 0
-                                ),
-                                math.abs(
-                                    tonumber(train.Electric.I24)
-                                    or 0
-                                ),
-                                math.abs(
-                                    tonumber(train.Electric.Itotal)
-                                    or 0
-                                )
-                            )
-                        end
-
-                        local loadMultiplier =
-                            1
-                            + math.Clamp(
-                                (current - 350) / 650,
-                                0,
-                                1.5
-                            )
-
-                        train.MEXDamageGRKVWear =
-                            math.Clamp(
-                                NumberOrZero(
-                                    train.MEXDamageGRKVWear
-                                )
-                                + steps
-                                * GRKV_WEAR_PER_POSITION
-                                * loadMultiplier
-                                * realism,
-                                0,
-                                1.25
-                            )
-
-                        train:SetNW2Float(
-                            "MEX.Damage.GRKVWear",
-                            math.Clamp(
-                                train.MEXDamageGRKVWear,
-                                0,
-                                1
-                            )
-                        )
-                    end
-                end
-
-                train.MEXDamageGRKVLastPosition = selected
-            end
-
-            train.MEXDamageGRKVFailureThreshold =
-                train.MEXDamageGRKVFailureThreshold
-                or math.Rand(0.86, 1.00)
-
-            if NumberOrZero(train.MEXDamageGRKVWear)
-                >= train.MEXDamageGRKVFailureThreshold
-            then
-                FailGRKVFromWear(train)
-            end
-        end
-
-        if not istable(train.Systems) then return end
-
-        train.MEXDamageLegacyRelaySnapshot =
-            train.MEXDamageLegacyRelaySnapshot or {}
-
-        local operations = 0
-
-        for systemName, system in pairs(train.Systems) do
-            systemName = tostring(systemName)
-
-            if not IsRelayLikeElectricalSystem(system)
-                or IsManualOperatorElectricalSystem(
-                    systemName,
-                    system
-                )
-            then
-                continue
-            end
-
-            local value =
-                tonumber(system.Value)
-                or tonumber(system.TargetValue)
-
-            if not value then continue end
-
-            local previous =
-                train.MEXDamageLegacyRelaySnapshot[
-                    systemName
-                ]
-
-            train.MEXDamageLegacyRelaySnapshot[
-                systemName
-            ] = value
-
-            if previous ~= nil
-                and math.abs(value - previous) > 0.40
-            then
-                operations = operations + 1
-            end
-        end
-
-        if operations > 0 then
-            train.MEXDamageLegacyWear =
-                math.Clamp(
-                    NumberOrZero(
-                        train.MEXDamageLegacyWear
-                    )
-                    + operations
-                    * LEGACY_RELAY_WEAR_PER_OPERATION
-                    * realism,
-                    0,
-                    1.25
-                )
-
-            train:SetNW2Float(
-                "MEX.Damage.LegacyWear",
-                math.Clamp(
-                    train.MEXDamageLegacyWear,
-                    0,
-                    1
-                )
-            )
-        end
-
-        train.MEXDamageLegacyFailureThreshold =
-            train.MEXDamageLegacyFailureThreshold
-            or math.Rand(0.90, 1.05)
-
-        if NumberOrZero(train.MEXDamageLegacyWear)
-            >= train.MEXDamageLegacyFailureThreshold
-        then
-            local active, inactive =
-                CollectWaterFailureCandidates(train)
-            local source =
-                #active > 0 and active or inactive
-
-            if #source > 0 then
-                local item =
-                    source[math.random(1, #source)]
-
-                if FailElectricalSystemOpen(
-                    train,
-                    item.name,
-                    {
-                        cause = "wear",
-                        temporary = false,
-                    }
-                ) then
-                    train:SetNW2String(
-                        "MEX.Damage.WearFailure",
-                        item.name
-                    )
-
-                    train.MEXDamageLegacyWear = 0.45
-                    train:SetNW2Float(
-                        "MEX.Damage.LegacyWear",
-                        0.45
-                    )
-                    train.MEXDamageLegacyFailureThreshold =
-                        math.Rand(0.88, 1.05)
-                end
-            end
-        end
-    end
-
-    local function FindTrainPlayers(train)
-        local result = {}
-        local seen = {}
-
-        for _, ply in ipairs(player.GetHumans()) do
-            if not IsValid(ply) or not ply:Alive() then
-                continue
-            end
-
-            local inside = false
-            local vehicle = ply:GetVehicle()
-
-            if IsValid(vehicle) then
-                local current = vehicle
-
-                for _ = 1, 8 do
-                    if not IsValid(current) then break end
-
-                    if current == train
-                        or current:GetNW2Entity("TrainEntity")
-                            == train
-                    then
-                        inside = true
-                        break
-                    end
-
-                    current = current:GetParent()
-                end
-            end
-
-            if not inside then
-                local localPos =
-                    train:WorldToLocal(
-                        ply:WorldSpaceCenter()
-                    )
-                local mins =
-                    train:OBBMins() - Vector(18, 18, 18)
-                local maxs =
-                    train:OBBMaxs() + Vector(18, 18, 18)
-
-                inside =
-                    localPos.x >= mins.x
-                    and localPos.x <= maxs.x
-                    and localPos.y >= mins.y
-                    and localPos.y <= maxs.y
-                    and localPos.z >= mins.z
-                    and localPos.z <= maxs.z
-            end
-
-            if inside and not seen[ply] then
-                seen[ply] = true
-                result[#result + 1] = ply
-            end
-        end
-
-        return result
-    end
-
-    local function ApplyCrashInjuries(
-        train,
-        deltaKmh,
-        impactVelocity,
-        hitPos
-    )
-        if not IsSubwayTrain(train) then return end
-        if deltaKmh < 22 then return end
-
-        local realism = MEXD.GetPhysicalDamageScale()
-        local t = math.Clamp(
-            (deltaKmh - 20) / 70,
-            0,
-            1.7
-        )
-
-        for _, ply in ipairs(FindTrainPlayers(train)) do
-            local seated =
-                IsValid(ply:GetVehicle())
-
-            local damage =
-                math.pow(t, 1.45)
-                * 125
-                * realism
-                * (seated and 0.88 or 1.18)
-
-            if deltaKmh >= 105 then
-                damage = math.max(damage, 220)
-            elseif deltaKmh >= 80 and not seated then
-                damage = math.max(damage, 130)
-            end
-
-            if damage < 1 then continue end
-
-            local info = DamageInfo()
-            info:SetDamage(
-                math.Clamp(damage, 1, 300)
-            )
-            info:SetDamageType(DMG_CRUSH)
-            info:SetAttacker(train)
-            info:SetInflictor(train)
-            info:SetDamagePosition(
-                isvector(hitPos)
-                    and hitPos
-                    or train:WorldSpaceCenter()
-            )
-
-            local force =
-                isvector(impactVelocity)
-                    and impactVelocity
-                    or train:GetVelocity()
-
-            info:SetDamageForce(
-                force
-                    * math.Clamp(
-                        damage * 2.2,
-                        80,
-                        900
-                    )
-            )
-
-            ply:TakeDamageInfo(info)
-        end
-    end
-
-    local function RemoveConstraintBetween(
-        part,
-        train,
-        constraintType
-    )
-        if not IsValid(part)
-            or not IsSubwayTrain(train)
-        then
-            return false
-        end
-
-        local removed = false
-        local list =
-            constraint.FindConstraints(
-                part,
-                constraintType
-            ) or {}
-
-        for _, data in pairs(list) do
-            if not istable(data) then continue end
-
-            local matches =
-                (data.Ent1 == part and data.Ent2 == train)
-                or (data.Ent2 == part and data.Ent1 == train)
-
-            if matches and IsValid(data.Constraint) then
-                data.Constraint:Remove()
-                removed = true
-            end
-        end
-
-        return removed
-    end
-
-    local function DetachTrainRunningGear(
-        train,
-        part,
-        kind
-    )
-        if not IsSubwayTrain(train)
-            or not IsValid(part)
-        then
-            return false
-        end
-
-        local isBogey =
-            kind == "front_bogey"
-            or kind == "rear_bogey"
-        local constraintType =
-            isBogey and "Axis" or "AdvBallsocket"
-
-        if not RemoveConstraintBetween(
-            part,
-            train,
-            constraintType
-        ) then
-            return false
-        end
-
-        if isBogey then
-            part.MotorPower = 0
-            part:SetNW2Bool("MEX.Damage.Detached", true)
-        elseif isfunction(part.Decouple)
-            and IsValid(part.CoupledEnt)
-        then
-            pcall(part.Decouple, part)
-        end
-
-        train:SetNW2Bool(
-            "MEX.Damage."
-                .. (
-                    kind == "front_bogey"
-                        and "FrontBogeyDetached"
-                    or kind == "rear_bogey"
-                        and "RearBogeyDetached"
-                    or kind == "front_coupler"
-                        and "FrontCouplerDetached"
-                    or "RearCouplerDetached"
-                ),
-            true
-        )
-
-        PlayLocalizedDamageSound(
-            train,
-            part:WorldSpaceCenter(),
-            "physics/metal/metal_box_break2.wav",
-            78,
-            math.random(88, 104),
-            0.95
-        )
-
-        return true
-    end
-
-    local function ApplySevereCrashConsequences(
-        train,
-        zone,
-        deltaKmh,
-        severity,
-        impactVelocity,
-        hitPos
-    )
-        if not IsSubwayTrain(train) then return end
-
-        ApplyCrashInjuries(
-            train,
-            deltaKmh,
-            impactVelocity,
-            hitPos
-        )
-
-        local realism = MEXD.GetPhysicalDamageScale()
-
-        if deltaKmh >= 28 then
-            local batteryDamage =
-                math.Clamp(
-                    (
-                        (deltaKmh - 25) / 150
-                        + severity * 0.08
-                    )
-                    * realism,
-                    0,
-                    0.52
-                )
-
-            if zone == "floor"
-                or zone == "left"
-                or zone == "right"
-            then
-                batteryDamage = batteryDamage * 1.25
-            end
-
-            ApplyBatteryDamage(
-                train,
-                batteryDamage,
-                "crash"
-            )
-        end
-
-        if deltaKmh < 58 then return end
-
-        local normalized = math.Clamp(
-            (deltaKmh - 58) / 52,
-            0,
-            1
-        )
-
-        local detachChance = math.Clamp(
-            normalized
-                * normalized
-                * (0.36 + severity * 0.55)
-                * realism,
-            0,
-            0.92
-        )
-
-        if zone == "front" then
-            if IsValid(train.FrontCouple)
-                and math.Rand(0, 1)
-                    < detachChance * 1.10
-            then
-                DetachTrainRunningGear(
-                    train,
-                    train.FrontCouple,
-                    "front_coupler"
-                )
-            end
-
-            if deltaKmh >= 72
-                and IsValid(train.FrontBogey)
-                and math.Rand(0, 1)
-                    < detachChance * 0.62
-            then
-                DetachTrainRunningGear(
-                    train,
-                    train.FrontBogey,
-                    "front_bogey"
-                )
-            end
-        elseif zone == "rear" then
-            if IsValid(train.RearCouple)
-                and math.Rand(0, 1)
-                    < detachChance * 1.10
-            then
-                DetachTrainRunningGear(
-                    train,
-                    train.RearCouple,
-                    "rear_coupler"
-                )
-            end
-
-            if deltaKmh >= 72
-                and IsValid(train.RearBogey)
-                and math.Rand(0, 1)
-                    < detachChance * 0.62
-            then
-                DetachTrainRunningGear(
-                    train,
-                    train.RearBogey,
-                    "rear_bogey"
-                )
-            end
-        elseif zone == "floor"
-            or zone == "left"
-            or zone == "right"
-        then
-            if deltaKmh >= 78
-                and IsValid(train.FrontBogey)
-                and math.Rand(0, 1)
-                    < detachChance * 0.45
-            then
-                DetachTrainRunningGear(
-                    train,
-                    train.FrontBogey,
-                    "front_bogey"
-                )
-            end
-
-            if deltaKmh >= 78
-                and IsValid(train.RearBogey)
-                and math.Rand(0, 1)
-                    < detachChance * 0.45
-            then
-                DetachTrainRunningGear(
-                    train,
-                    train.RearBogey,
-                    "rear_bogey"
-                )
-            end
-        end
-    end
-
     local function EnsureButtonEventGuard(train)
         if not IsSubwayTrain(train) then return end
         if train.MEXDamageOriginalButtonEvent then return end
@@ -6848,6 +6128,726 @@ if SERVER then
         ent.MEXDamagePhysgunHeld = false
         ent.MEXDamagePhysgunUntil = CurTime() + 0.55
     end)
+
+    ---------------------------------------------------------------------------
+    -- Persistent mechanical/electrical wear and crash consequences
+    ---------------------------------------------------------------------------
+
+    local BATTERY_MIN_WORKING_HEALTH = 0.12
+    local GRKV_WEAR_PER_POSITION = 0.000080
+    local LEGACY_RELAY_WEAR_PER_OPERATION = 0.000012
+
+    local function GetBatteryHealth(train)
+        if not IsSubwayTrain(train) then return 1 end
+
+        local health = train:GetNW2Float(
+            "MEX.Damage.BatteryHealth",
+            1
+        )
+
+        return math.Clamp(health, 0, 1)
+    end
+
+    local function ApplyBatteryDamage(
+        train,
+        amount,
+        cause
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.Battery)
+        then
+            return false
+        end
+
+        amount = math.max(tonumber(amount) or 0, 0)
+        if amount <= 0 then return false end
+
+        local old = GetBatteryHealth(train)
+        local new = math.Clamp(old - amount, 0, 1)
+
+        train:SetNW2Float(
+            "MEX.Damage.BatteryHealth",
+            new
+        )
+        train:SetNW2String(
+            "MEX.Damage.BatteryLastCause",
+            tostring(cause or "unknown")
+        )
+
+        if new <= BATTERY_MIN_WORKING_HEALTH then
+            train:SetNW2Bool(
+                "MEX.Damage.BatteryFailed",
+                true
+            )
+        end
+
+        return new < old
+    end
+
+    MEXD.GetBatteryHealth = GetBatteryHealth
+    MEXD.ApplyBatteryDamage = ApplyBatteryDamage
+
+    local function RestoreGRKVWearFailure(train)
+        if not IsSubwayTrain(train) then return end
+
+        local grkv = train.RheostatController
+
+        if istable(grkv) then
+            if train.MEXDamageGRKVOriginalThink then
+                grkv.Think =
+                    train.MEXDamageGRKVOriginalThink
+            end
+
+            if train.MEXDamageGRKVOriginalTriggerInput then
+                grkv.TriggerInput =
+                    train.MEXDamageGRKVOriginalTriggerInput
+            end
+        end
+
+        train.MEXDamageGRKVOriginalThink = nil
+        train.MEXDamageGRKVOriginalTriggerInput = nil
+        train.MEXDamageGRKVLockedPosition = nil
+        train:SetNW2Bool("MEX.Damage.GRKVFailed", false)
+    end
+
+    local function FailGRKVFromWear(train)
+        if not IsSubwayTrain(train)
+            or train:GetNW2Bool(
+                "MEX.Damage.GRKVFailed",
+                false
+            )
+            or not istable(train.RheostatController)
+        then
+            return false
+        end
+
+        local grkv = train.RheostatController
+        local lockedPosition =
+            tonumber(grkv.Position)
+            or tonumber(grkv.SelectedPosition)
+            or 1
+
+        train.MEXDamageGRKVLockedPosition = lockedPosition
+        train.MEXDamageGRKVOriginalThink = grkv.Think
+        train.MEXDamageGRKVOriginalTriggerInput =
+            grkv.TriggerInput
+
+        if isfunction(grkv.TriggerInput) then
+            local originalTrigger = grkv.TriggerInput
+
+            grkv.TriggerInput = function(self, name, value)
+                if name == "MotorState" then
+                    self.MotorState = 0
+                    return
+                end
+
+                return originalTrigger(self, name, value)
+            end
+        end
+
+        if isfunction(grkv.Think) then
+            local originalThink = grkv.Think
+
+            grkv.Think = function(self, ...)
+                local locked =
+                    tonumber(
+                        train.MEXDamageGRKVLockedPosition
+                    ) or lockedPosition
+
+                self.MotorState = 0
+                self.Velocity = 0
+                self.Position = locked
+
+                local result = originalThink(self, ...)
+
+                self.MotorState = 0
+                self.Velocity = 0
+                self.Position = locked
+
+                if isnumber(self.MaxPosition) then
+                    self.SelectedPosition = math.Clamp(
+                        math.floor(locked + 0.5),
+                        1,
+                        math.max(self.MaxPosition, 1)
+                    )
+                end
+
+                return result
+            end
+        end
+
+        train:SetNW2Bool("MEX.Damage.GRKVFailed", true)
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            "GRKV/RheostatController"
+        )
+
+        PlayLocalizedDamageSound(
+            train,
+            train:WorldSpaceCenter(),
+            "ambient/machines/thumper_shutdown1.wav",
+            61,
+            math.random(92, 104),
+            0.55
+        )
+
+        return true
+    end
+
+    local function UpdateMechanicalElectricalWear(
+        train,
+        dT
+    )
+        if not IsSubwayTrain(train) then return end
+        if not MEXD.IsElectricalDamageEnabled() then return end
+
+        local realism = MEXD.GetElectricalDamageScale()
+        local grkv = train.RheostatController
+
+        if istable(grkv)
+            and not train:GetNW2Bool(
+                "MEX.Damage.GRKVFailed",
+                false
+            )
+        then
+            local selected =
+                tonumber(grkv.SelectedPosition)
+                or tonumber(grkv.Position)
+
+            if selected then
+                local last =
+                    tonumber(
+                        train.MEXDamageGRKVLastPosition
+                    )
+
+                if last then
+                    local steps = math.abs(selected - last)
+
+                    if steps >= 0.35 then
+                        local current = 0
+
+                        if istable(train.Electric) then
+                            current = math.max(
+                                math.abs(
+                                    tonumber(train.Electric.I13)
+                                    or 0
+                                ),
+                                math.abs(
+                                    tonumber(train.Electric.I24)
+                                    or 0
+                                ),
+                                math.abs(
+                                    tonumber(train.Electric.Itotal)
+                                    or 0
+                                )
+                            )
+                        end
+
+                        local loadMultiplier =
+                            1
+                            + math.Clamp(
+                                (current - 350) / 650,
+                                0,
+                                1.5
+                            )
+
+                        train.MEXDamageGRKVWear =
+                            math.Clamp(
+                                NumberOrZero(
+                                    train.MEXDamageGRKVWear
+                                )
+                                + steps
+                                * GRKV_WEAR_PER_POSITION
+                                * loadMultiplier
+                                * realism,
+                                0,
+                                1.25
+                            )
+
+                        train:SetNW2Float(
+                            "MEX.Damage.GRKVWear",
+                            math.Clamp(
+                                train.MEXDamageGRKVWear,
+                                0,
+                                1
+                            )
+                        )
+                    end
+                end
+
+                train.MEXDamageGRKVLastPosition = selected
+            end
+
+            train.MEXDamageGRKVFailureThreshold =
+                train.MEXDamageGRKVFailureThreshold
+                or math.Rand(0.86, 1.00)
+
+            if NumberOrZero(train.MEXDamageGRKVWear)
+                >= train.MEXDamageGRKVFailureThreshold
+            then
+                FailGRKVFromWear(train)
+            end
+        end
+
+        if not istable(train.Systems) then return end
+
+        train.MEXDamageLegacyRelaySnapshot =
+            train.MEXDamageLegacyRelaySnapshot or {}
+
+        local operations = 0
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system)
+                or IsManualOperatorElectricalSystem(
+                    systemName,
+                    system
+                )
+            then
+                continue
+            end
+
+            local value =
+                tonumber(system.Value)
+                or tonumber(system.TargetValue)
+
+            if not value then continue end
+
+            local previous =
+                train.MEXDamageLegacyRelaySnapshot[
+                    systemName
+                ]
+
+            train.MEXDamageLegacyRelaySnapshot[
+                systemName
+            ] = value
+
+            if previous ~= nil
+                and math.abs(value - previous) > 0.40
+            then
+                operations = operations + 1
+            end
+        end
+
+        if operations > 0 then
+            train.MEXDamageLegacyWear =
+                math.Clamp(
+                    NumberOrZero(
+                        train.MEXDamageLegacyWear
+                    )
+                    + operations
+                    * LEGACY_RELAY_WEAR_PER_OPERATION
+                    * realism,
+                    0,
+                    1.25
+                )
+
+            train:SetNW2Float(
+                "MEX.Damage.LegacyWear",
+                math.Clamp(
+                    train.MEXDamageLegacyWear,
+                    0,
+                    1
+                )
+            )
+        end
+
+        train.MEXDamageLegacyFailureThreshold =
+            train.MEXDamageLegacyFailureThreshold
+            or math.Rand(0.90, 1.05)
+
+        if NumberOrZero(train.MEXDamageLegacyWear)
+            >= train.MEXDamageLegacyFailureThreshold
+        then
+            local active, inactive =
+                CollectWaterFailureCandidates(train)
+            local source =
+                #active > 0 and active or inactive
+
+            if #source > 0 then
+                local item =
+                    source[math.random(1, #source)]
+
+                if FailElectricalSystemOpen(
+                    train,
+                    item.name,
+                    {
+                        cause = "wear",
+                        temporary = false,
+                    }
+                ) then
+                    train:SetNW2String(
+                        "MEX.Damage.WearFailure",
+                        item.name
+                    )
+
+                    train.MEXDamageLegacyWear = 0.45
+                    train:SetNW2Float(
+                        "MEX.Damage.LegacyWear",
+                        0.45
+                    )
+                    train.MEXDamageLegacyFailureThreshold =
+                        math.Rand(0.88, 1.05)
+                end
+            end
+        end
+    end
+
+    local function FindTrainPlayers(train)
+        local result = {}
+        local seen = {}
+
+        for _, ply in ipairs(player.GetHumans()) do
+            if not IsValid(ply) or not ply:Alive() then
+                continue
+            end
+
+            local inside = false
+            local vehicle = ply:GetVehicle()
+
+            if IsValid(vehicle) then
+                local current = vehicle
+
+                for _ = 1, 8 do
+                    if not IsValid(current) then break end
+
+                    if current == train
+                        or current:GetNW2Entity("TrainEntity")
+                            == train
+                    then
+                        inside = true
+                        break
+                    end
+
+                    current = current:GetParent()
+                end
+            end
+
+            if not inside then
+                local localPos =
+                    train:WorldToLocal(
+                        ply:WorldSpaceCenter()
+                    )
+                local mins =
+                    train:OBBMins() - Vector(18, 18, 18)
+                local maxs =
+                    train:OBBMaxs() + Vector(18, 18, 18)
+
+                inside =
+                    localPos.x >= mins.x
+                    and localPos.x <= maxs.x
+                    and localPos.y >= mins.y
+                    and localPos.y <= maxs.y
+                    and localPos.z >= mins.z
+                    and localPos.z <= maxs.z
+            end
+
+            if inside and not seen[ply] then
+                seen[ply] = true
+                result[#result + 1] = ply
+            end
+        end
+
+        return result
+    end
+
+    local function ApplyCrashInjuries(
+        train,
+        deltaKmh,
+        impactVelocity,
+        hitPos
+    )
+        if not IsSubwayTrain(train) then return end
+        if deltaKmh < 22 then return end
+
+        local realism = MEXD.GetPhysicalDamageScale()
+        local t = math.Clamp(
+            (deltaKmh - 20) / 70,
+            0,
+            1.7
+        )
+
+        for _, ply in ipairs(FindTrainPlayers(train)) do
+            local seated =
+                IsValid(ply:GetVehicle())
+
+            local damage =
+                math.pow(t, 1.45)
+                * 125
+                * realism
+                * (seated and 0.88 or 1.18)
+
+            if deltaKmh >= 105 then
+                damage = math.max(damage, 220)
+            elseif deltaKmh >= 80 and not seated then
+                damage = math.max(damage, 130)
+            end
+
+            if damage < 1 then continue end
+
+            local info = DamageInfo()
+            info:SetDamage(
+                math.Clamp(damage, 1, 300)
+            )
+            info:SetDamageType(DMG_CRUSH)
+            info:SetAttacker(train)
+            info:SetInflictor(train)
+            info:SetDamagePosition(
+                isvector(hitPos)
+                    and hitPos
+                    or train:WorldSpaceCenter()
+            )
+
+            local force =
+                isvector(impactVelocity)
+                    and impactVelocity
+                    or train:GetVelocity()
+
+            info:SetDamageForce(
+                force
+                    * math.Clamp(
+                        damage * 2.2,
+                        80,
+                        900
+                    )
+            )
+
+            ply:TakeDamageInfo(info)
+        end
+    end
+
+    local function RemoveConstraintBetween(
+        part,
+        train,
+        constraintType
+    )
+        if not IsValid(part)
+            or not IsSubwayTrain(train)
+        then
+            return false
+        end
+
+        local removed = false
+        local list =
+            constraint.FindConstraints(
+                part,
+                constraintType
+            ) or {}
+
+        for _, data in pairs(list) do
+            if not istable(data) then continue end
+
+            local matches =
+                (data.Ent1 == part and data.Ent2 == train)
+                or (data.Ent2 == part and data.Ent1 == train)
+
+            if matches and IsValid(data.Constraint) then
+                data.Constraint:Remove()
+                removed = true
+            end
+        end
+
+        return removed
+    end
+
+    local function DetachTrainRunningGear(
+        train,
+        part,
+        kind
+    )
+        if not IsSubwayTrain(train)
+            or not IsValid(part)
+        then
+            return false
+        end
+
+        local isBogey =
+            kind == "front_bogey"
+            or kind == "rear_bogey"
+        local constraintType =
+            isBogey and "Axis" or "AdvBallsocket"
+
+        if not RemoveConstraintBetween(
+            part,
+            train,
+            constraintType
+        ) then
+            return false
+        end
+
+        if isBogey then
+            part.MotorPower = 0
+            part:SetNW2Bool("MEX.Damage.Detached", true)
+        elseif isfunction(part.Decouple)
+            and IsValid(part.CoupledEnt)
+        then
+            pcall(part.Decouple, part)
+        end
+
+        train:SetNW2Bool(
+            "MEX.Damage."
+                .. (
+                    kind == "front_bogey"
+                        and "FrontBogeyDetached"
+                    or kind == "rear_bogey"
+                        and "RearBogeyDetached"
+                    or kind == "front_coupler"
+                        and "FrontCouplerDetached"
+                    or "RearCouplerDetached"
+                ),
+            true
+        )
+
+        PlayLocalizedDamageSound(
+            train,
+            part:WorldSpaceCenter(),
+            "physics/metal/metal_box_break2.wav",
+            78,
+            math.random(88, 104),
+            0.95
+        )
+
+        return true
+    end
+
+    local function ApplySevereCrashConsequences(
+        train,
+        zone,
+        deltaKmh,
+        severity,
+        impactVelocity,
+        hitPos
+    )
+        if not IsSubwayTrain(train) then return end
+
+        ApplyCrashInjuries(
+            train,
+            deltaKmh,
+            impactVelocity,
+            hitPos
+        )
+
+        local realism = MEXD.GetPhysicalDamageScale()
+
+        if deltaKmh >= 28 then
+            local batteryDamage =
+                math.Clamp(
+                    (
+                        (deltaKmh - 25) / 150
+                        + severity * 0.08
+                    )
+                    * realism,
+                    0,
+                    0.52
+                )
+
+            if zone == "floor"
+                or zone == "left"
+                or zone == "right"
+            then
+                batteryDamage = batteryDamage * 1.25
+            end
+
+            ApplyBatteryDamage(
+                train,
+                batteryDamage,
+                "crash"
+            )
+        end
+
+        if deltaKmh < 58 then return end
+
+        local normalized = math.Clamp(
+            (deltaKmh - 58) / 52,
+            0,
+            1
+        )
+
+        local detachChance = math.Clamp(
+            normalized
+                * normalized
+                * (0.36 + severity * 0.55)
+                * realism,
+            0,
+            0.92
+        )
+
+        if zone == "front" then
+            if IsValid(train.FrontCouple)
+                and math.Rand(0, 1)
+                    < detachChance * 1.10
+            then
+                DetachTrainRunningGear(
+                    train,
+                    train.FrontCouple,
+                    "front_coupler"
+                )
+            end
+
+            if deltaKmh >= 72
+                and IsValid(train.FrontBogey)
+                and math.Rand(0, 1)
+                    < detachChance * 0.62
+            then
+                DetachTrainRunningGear(
+                    train,
+                    train.FrontBogey,
+                    "front_bogey"
+                )
+            end
+        elseif zone == "rear" then
+            if IsValid(train.RearCouple)
+                and math.Rand(0, 1)
+                    < detachChance * 1.10
+            then
+                DetachTrainRunningGear(
+                    train,
+                    train.RearCouple,
+                    "rear_coupler"
+                )
+            end
+
+            if deltaKmh >= 72
+                and IsValid(train.RearBogey)
+                and math.Rand(0, 1)
+                    < detachChance * 0.62
+            then
+                DetachTrainRunningGear(
+                    train,
+                    train.RearBogey,
+                    "rear_bogey"
+                )
+            end
+        elseif zone == "floor"
+            or zone == "left"
+            or zone == "right"
+        then
+            if deltaKmh >= 78
+                and IsValid(train.FrontBogey)
+                and math.Rand(0, 1)
+                    < detachChance * 0.45
+            then
+                DetachTrainRunningGear(
+                    train,
+                    train.FrontBogey,
+                    "front_bogey"
+                )
+            end
+
+            if deltaKmh >= 78
+                and IsValid(train.RearBogey)
+                and math.Rand(0, 1)
+                    < detachChance * 0.45
+            then
+                DetachTrainRunningGear(
+                    train,
+                    train.RearBogey,
+                    "rear_bogey"
+                )
+            end
+        end
+    end
 
     local function InitializeTrainDamage(train)
         if not IsSubwayTrain(train) then return end
