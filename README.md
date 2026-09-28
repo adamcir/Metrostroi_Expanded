@@ -506,18 +506,22 @@ The protection model follows the actual systems exposed by each Metrostroi train
 
 ### Damage 0.16.0 – door faults, light wiring shorts, powered speedometer and battery glitches
 
-- wet energized door-control relays can now receive transient false pulses independently of the driver's ButtonEvent
-- classic door circuits such as `KDL`, `KDP`, `VDL`, `VUD/VUD1/VUD2` and modern `DoorLeft`, `DoorRight`, `DoorClose` families can therefore momentarily energize or drop out because of moisture
-- the physical switch does not have to be pressed for the downstream wet relay/contact fault to occur
-- light/lighting packed outputs can now be corrupted by wet wiring, allowing lamps to flicker, extinguish, or flash on even when their normal switch state says otherwise
-- electrical speed indications now require instrument/control power; when the low-voltage cab/instrument supply is dead the displayed `Speed` ratio is forced to zero
-- while wet and powered, the speedometer can jump, fall to zero, briefly indicate too high a value, or flicker before returning to the real speed
-- the Battery system can now suffer short real voltage-sag events; severe wet glitches may temporarily pull battery voltage low enough to make control logic drop out
-- battery-current/voltage indications can still show false values independently of the real battery sag
-- water-fault progression is faster: the initial protection threshold is lower, fault exposure accumulates faster, breaker re-trip checks happen more quickly, and continuing faults escalate sooner
-- wet-light/door/battery glitches continue to scale down with moisture while the train dries
-- `mex_damage_status` now reports door-fault relay, battery voltage factor and whether instrument power is currently ON/OFF
-
+- water-generated door faults no longer change the driver's visible door buttons/switches
+- classic visible controls such as `KDL`, `KDP`, `VDL` and `VUD/VUD1/VUD2` stay in the position selected by the driver
+- moisture instead bridges downstream door distributor solenoids/contactors such as `VDOL`, `VDOP`, `VDZ` and, on 81-718-style pneumatic systems, `U1/U2/U3`; compatible hidden `Door*Relay` / `Door*Contactor` systems are also supported
+- hidden door relays may therefore energize or drop out without any visible panel button moving
+- hidden ARS/ALS-related relays, including native `Relay "ARS"` hardware, can chatter from moisture while physical ARS/ALS selectors remain untouched
+- ARS/ALS/BARS and other sensitive electronics can also go offline as actual wet electronic modules
+- significant live flooding trips all exposed automatic circuit breakers through their normal Metrostroi trip/open path; the water scan/re-trip cadence is 0.05 s, matching the generic Metrostroi relay opening time
+- true third-rail supply is taken from `TR.Main750V` when available
+- when the flooded car is no longer connected to the third rail, leakage/short-circuit load progressively collapses the battery/low-voltage supply over several seconds
+- after the low-voltage blackout threshold is reached, non-manual electrical relays and sensitive electronics are forced offline and electrical gauges/indicators go dark; mechanical/manual switch positions are left unchanged
+- light/lighting packed outputs can be corrupted by wet wiring, allowing lamps to flicker, extinguish, or flash on even when their normal switch state says otherwise
+- electrical speed indications require instrument/control power; when the low-voltage cab/instrument supply is dead the displayed speed ratio is forced to zero
+- while wet and still powered, the speedometer can jump, fall to zero, briefly indicate a wrong value, or flicker
+- the Battery system can still suffer short transient voltage-sag events in addition to the progressive no-third-rail flood collapse
+- wet-light/relay/battery glitches continue to scale down with moisture while the train dries
+- `mex_damage_status` reports third-rail voltage, battery flood level, blackout state, door-fault relay and other water/electrical diagnostics
 
 ### Damage 0.17.0 – physical damage, deformation and electrical damage
 
