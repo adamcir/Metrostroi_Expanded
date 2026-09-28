@@ -1,4 +1,4 @@
--- Metrostroi Extended - Passenger Seats
+-- Metrostroi Expanded - Passenger Seats
 -- Universal passenger-seat module for Metrostroi subway rolling stock.
 -- Adds invisible jeep seats without modifying Metrostroi itself.
 -- Copyright (C) 2026 Adam Cir / Adava Software
@@ -262,7 +262,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Extended/Passenger Seats] %s (%s): created %d passenger seats%s",
+            "[Metrostroi Expanded/Passenger Seats] %s (%s): created %d passenger seats%s",
             cfg.name,
             train:GetClass(),
             #train.MPSPassengerSeats,
@@ -370,7 +370,7 @@ if SERVER then
     concommand.Add("mps_rescan", function(ply)
         if IsValid(ply) and not ply:IsAdmin() then return end
         ScanExistingTrains()
-        print("[Metrostroi Extended/Passenger Seats] rescan requested")
+        print("[Metrostroi Expanded/Passenger Seats] rescan requested")
     end)
 
     concommand.Add("mps_status", function(ply)
@@ -390,7 +390,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Extended/Passenger Seats] trains: %d, live seats: %d, automatic profiles: %d",
+            "[Metrostroi Expanded/Passenger Seats] trains: %d, live seats: %d, automatic profiles: %d",
             trains, seats, auto
         ))
     end)
