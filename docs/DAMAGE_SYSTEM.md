@@ -767,3 +767,86 @@ After leaving the water, glitches may continue while moisture remains, but their
 
 - `glitch` – current transient wet-electrical glitch intensity
 - `chatter` – the internal relay currently receiving a chatter pulse
+
+
+## Door, lighting, speedometer and battery water faults
+
+Damage System 0.16.0 extends transient moisture faults into several train subsystems.
+
+### Door relays
+
+Door-control relay families can receive short false electrical pulses while the train is wet and energized.
+
+Known classic/modern targets include:
+
+- `KDL`
+- `KDLR`
+- `KDP`
+- `KDPK`
+- `KDLK`
+- `KDPH`
+- `VDL`
+- `VUD`, `VUD1`, `VUD2`
+- `DoorLeft`
+- `DoorRight`
+- `DoorLeft2`
+- `DoorRight2`
+- `DoorClose`
+- emergency door-close/open relay families
+
+The fault is injected at the relay/contact level rather than through `ButtonEvent`, so the driver's physical switch does not need to be pressed for the circuit to energize. The relay is restored to its previous target after a short moisture-dependent pulse.
+
+### Wet light wiring
+
+Packed lamp/light/lighting outputs participate in transient water corruption. This models wet wiring or insulation briefly bridging lighting conductors.
+
+A lamp may therefore:
+
+- flicker
+- extinguish despite its normal command
+- flash on despite its normal command
+- show unstable brightness when represented by a packed ratio
+
+This visual wiring fault does not require the physical light switch to move.
+
+### Speedometer power and failure
+
+Many Metrostroi entities continuously publish the physical train speed even with cab power off. Metrostroi Expanded now gates the displayed `Speed`/speedometer packed ratio by the detected low-voltage/instrument power state.
+
+With no instrument/control supply the displayed speed is forced to zero.
+
+When wet electrical glitches are active and the instrument supply still exists, the displayed speed may temporarily:
+
+- drop to zero
+- jump to a random value
+- overshoot/undershoot the real value
+- flicker before returning to normal
+
+The actual physical train speed is not changed by this indication fault.
+
+### Battery faults
+
+The Battery system receives a temporary Think wrapper while water-fault simulation is active. A wet battery/control-bus event can cause a short voltage factor below its normal value.
+
+Because the real simulated `Battery.Voltage` is modified during the short event, sufficiently deep sags can affect actual train control logic that depends on battery voltage.
+
+Battery meter indications may additionally be corrupted independently by the general false-gauge system.
+
+### Faster protection/failure progression
+
+0.16.0 intentionally makes serious immersion faults progress faster:
+
+- initial water-fault exposure threshold reduced
+- exposure growth increased under live voltage/current
+- automatic-breaker re-trip interval reduced
+- time between protection operation and the next fault stage reduced
+
+The exact result still depends on which electrical systems and protections the current train addon exposes.
+
+### Debugging
+
+`mex_damage_status` additionally reports:
+
+- `doorfault` – door relay currently receiving a wet false pulse
+- `batt` – active battery voltage multiplier (1.00 = normal)
+- `instruments` – whether the cab/instrument supply is currently considered ON/OFF
