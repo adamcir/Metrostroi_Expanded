@@ -6765,6 +6765,20 @@ if SERVER then
             power,
             brightness
         )
+            local state =
+                self.MEXDamageWearLightState[index]
+                or {
+                    on = false,
+                    brightness = 1,
+                }
+
+            local previousOn = state.on == true
+            state.on = power == true
+            state.brightness =
+                tonumber(brightness) or 1
+            self.MEXDamageWearLightState[index] =
+                state
+
             local failed =
                 self.MEXDamageWearFailedLights
                 and self.MEXDamageWearFailedLights[index]
@@ -6778,14 +6792,7 @@ if SERVER then
                 )
             end
 
-            local state =
-                self.MEXDamageWearLightState[index]
-                or {
-                    on = false,
-                    brightness = 1,
-                }
-
-            if power and not state.on then
+            if power and not previousOn then
                 local lightData =
                     istable(self.Lights)
                         and self.Lights[index]
@@ -6807,13 +6814,6 @@ if SERVER then
                     + 1 / startCycles
                         * MEXD.GetElectricalDamageScale()
             end
-
-            state.on = power == true
-            state.brightness =
-                tonumber(brightness) or 1
-
-            self.MEXDamageWearLightState[index] =
-                state
 
             local threshold =
                 self.MEXDamageWearLightThreshold[index]
@@ -6854,7 +6854,6 @@ if SERVER then
                     )
                 )
 
-                state.on = false
                 return original(
                     self,
                     index,
@@ -6953,6 +6952,12 @@ if SERVER then
                 )
             end
 
+            local old =
+                self.MEXDamageIndicatorState[index]
+
+            self.MEXDamageIndicatorState[index] =
+                value == true
+
             if self.MEXDamageFailedIndicators
                 and self.MEXDamageFailedIndicators[index]
             then
@@ -6963,9 +6968,6 @@ if SERVER then
                 )
             end
 
-            local old =
-                self.MEXDamageIndicatorState[index]
-
             if value and old ~= true then
                 self.MEXDamageIndicatorWear[index] =
                     NumberOrZero(
@@ -6974,9 +6976,6 @@ if SERVER then
                     + 1 / 22000
                         * MEXD.GetElectricalDamageScale()
             end
-
-            self.MEXDamageIndicatorState[index] =
-                value == true
 
             local threshold =
                 self.MEXDamageIndicatorThreshold[index]
@@ -7061,6 +7060,16 @@ if SERVER then
                 train.MEXDamageFailedIndicators
             )
         )
+
+        if train.MEXDamageWearOriginalSetPackedBool then
+            train:MEXDamageWearOriginalSetPackedBool(
+                index,
+                train.MEXDamageIndicatorState
+                    and train.MEXDamageIndicatorState[index]
+                    == true
+                    or false
+            )
+        end
 
         return true
     end
@@ -8571,6 +8580,40 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
         train:SetNW2Float("MEX.Damage.DrySeconds", 0)
         train:SetNW2String("MEX.Damage.LastProtection", "")
+
+        for index in pairs(
+            train.MEXDamageWearFailedLights or {}
+        ) do
+            train:SetNW2Bool(
+                "MEX.Damage.WearLight."
+                    .. tostring(index),
+                false
+            )
+        end
+
+        for index in pairs(
+            train.MEXDamageFailedIndicators or {}
+        ) do
+            train:SetNW2Bool(
+                "MEX.Damage.WearIndicator."
+                    .. tostring(index),
+                false
+            )
+        end
+
+        train.MEXDamageRelayWear = {}
+        train.MEXDamageRelayWearThreshold = {}
+        train.MEXDamageWearFailedSystems = {}
+        train.MEXDamageWearLight = {}
+        train.MEXDamageWearLightThreshold = {}
+        train.MEXDamageWearFailedLights = {}
+        train.MEXDamageIndicatorWear = {}
+        train.MEXDamageIndicatorThreshold = {}
+        train.MEXDamageFailedIndicators = {}
+        train:SetNW2Float("MEX.Damage.LegacyWear", 0)
+        train:SetNW2Int("MEX.Damage.FailedRelayCount", 0)
+        train:SetNW2Int("MEX.Damage.FailedLightCount", 0)
+        train:SetNW2Int("MEX.Damage.FailedIndicatorCount", 0)
     end
 
     local function SetBoolSetting(convar, enabled)
