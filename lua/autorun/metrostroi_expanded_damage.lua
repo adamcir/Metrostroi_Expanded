@@ -1369,6 +1369,9 @@ if SERVER then
     local WATER_BREAKER_TRIP_WETNESS = 0.10
     local WATER_BATTERY_COLLAPSE_START_WETNESS = 0.055
     local WATER_BATTERY_BLACKOUT_LEVEL = 0.90
+    local WATER_SURFACE_ARC_MIN_SECONDS = 4.0
+    local WATER_SURFACE_ARC_MAX_SECONDS = 12.0
+    local WATER_SURFACE_REBOUND_LEVEL = 0.55
 
     local WATER_ARC_SOUNDS = {
         "ambient/energy/zap1.wav",
@@ -1844,6 +1847,20 @@ if SERVER then
         severe
     )
         if not IsSubwayTrain(train) then return end
+        if (tonumber(voltage) or 0) < 18
+            or (tonumber(current) or 0) <= 0.01
+        then
+            return
+        end
+        if train:GetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            false
+        ) and not train:GetNW2Bool(
+            "MEX.Damage.ThirdRailConnected",
+            false
+        ) then
+            return
+        end
 
         worldPos = isvector(worldPos)
             and worldPos
@@ -2824,6 +2841,142 @@ if SERVER then
         return surface, deep, drySeconds
     end
 
+    local function UpdatePostSurfaceWaterState(
+        train,
+        wetness,
+        surfaceMoisture,
+        thirdRailConnected,
+        sparkPos
+    )
+        local now = CurTime()
+        local previousWetness = math.Clamp(
+            NumberOrZero(train.MEXDamagePreviousWetness),
+            0,
+            1
+        )
+
+        if wetness > 0.04 then
+            train.MEXDamagePeakRecentWetness = math.max(
+                NumberOrZero(train.MEXDamagePeakRecentWetness),
+                wetness
+            )
+            train.MEXDamageSurfaceReboundUsed = nil
+            train.MEXDamageSurfaceArcUntil = nil
+            train.MEXDamageSurfaceArcStarted = nil
+
+            if isvector(sparkPos) then
+                train.MEXDamageLastWetArcLocal =
+                    train:WorldToLocal(sparkPos)
+            end
+        elseif previousWetness > 0.04
+            and wetness <= 0.015
+        then
+            local peak = math.Clamp(
+                math.max(
+                    NumberOrZero(train.MEXDamagePeakRecentWetness),
+                    previousWetness,
+                    NumberOrZero(surfaceMoisture)
+                ),
+                0,
+                1
+            )
+
+            local duration = Lerp(
+                peak,
+                WATER_SURFACE_ARC_MIN_SECONDS,
+                WATER_SURFACE_ARC_MAX_SECONDS
+            )
+
+            train.MEXDamageSurfaceArcStarted = now
+            train.MEXDamageSurfaceArcUntil = now + duration
+            train.MEXDamageSurfaceArcStrength =
+                math.max(0.22, peak)
+            train.MEXDamagePeakRecentWetness = 0
+
+            -- A battery that collapsed under a submerged short can rebound
+            -- after the heavy water load is suddenly removed. It does not
+            -- become healthy: residual moisture can immediately short it
+            -- again, producing a few seconds of surface arcing before the
+            -- battery collapses for a second time.
+            if not thirdRailConnected
+                and train:GetNW2Bool(
+                    "MEX.Damage.LowVoltageBlackout",
+                    false
+                )
+                and not train.MEXDamageSurfaceReboundUsed
+            then
+                train.MEXDamageBatteryFloodLevel = math.min(
+                    NumberOrZero(
+                        train.MEXDamageBatteryFloodLevel
+                    ),
+                    WATER_SURFACE_REBOUND_LEVEL
+                )
+                train.MEXDamageSurfaceReboundUsed = true
+                train:SetNW2Bool(
+                    "MEX.Damage.LowVoltageBlackout",
+                    false
+                )
+            end
+        end
+
+        train.MEXDamagePreviousWetness = wetness
+
+        local untilTime =
+            NumberOrZero(train.MEXDamageSurfaceArcUntil)
+        local active =
+            wetness <= 0.015
+            and untilTime > now
+
+        local residual = 0
+        local worldPos = sparkPos
+
+        if active then
+            local started = NumberOrZero(
+                train.MEXDamageSurfaceArcStarted
+            )
+            local span = math.max(untilTime - started, 0.01)
+            local remaining = math.Clamp(
+                (untilTime - now) / span,
+                0,
+                1
+            )
+
+            residual = math.Clamp(
+                math.max(
+                    NumberOrZero(
+                        train.MEXDamageSurfaceArcStrength
+                    ) * remaining,
+                    NumberOrZero(surfaceMoisture) * 0.72
+                ),
+                0,
+                1
+            )
+
+            if isvector(train.MEXDamageLastWetArcLocal) then
+                worldPos = train:LocalToWorld(
+                    train.MEXDamageLastWetArcLocal
+                )
+            elseif not isvector(worldPos) then
+                worldPos = train:WorldSpaceCenter()
+            end
+        elseif untilTime > 0 and untilTime <= now then
+            train.MEXDamageSurfaceArcUntil = nil
+            train.MEXDamageSurfaceArcStarted = nil
+            train.MEXDamageSurfaceArcStrength = nil
+        end
+
+        train:SetNW2Bool(
+            "MEX.Damage.RecentlySurfaced",
+            active
+        )
+        train:SetNW2Float(
+            "MEX.Damage.PostSurfaceWetness",
+            residual
+        )
+
+        return residual, active, worldPos
+    end
+
     local function RecoverDriedWaterFailures(
         train,
         surfaceMoisture,
@@ -3256,6 +3409,16 @@ if SERVER then
         train.MEXDamageBatteryVoltageFactor = nil
         train.MEXDamageBatteryFloodFactor = nil
         train.MEXDamageBatteryFloodLevel = nil
+        train.MEXDamagePreviousWetness = nil
+        train.MEXDamagePeakRecentWetness = nil
+        train.MEXDamageSurfaceArcStarted = nil
+        train.MEXDamageSurfaceArcUntil = nil
+        train.MEXDamageSurfaceArcStrength = nil
+        train.MEXDamageSurfaceReboundUsed = nil
+        train.MEXDamageLastWetArcLocal = nil
+        train:SetNW2Bool("MEX.Damage.BatteryWaterFailed", false)
+        train:SetNW2Bool("MEX.Damage.RecentlySurfaced", false)
+        train:SetNW2Float("MEX.Damage.PostSurfaceWetness", 0)
         train:SetNW2Float(
             "MEX.Damage.BatteryGlitchFactor",
             1
@@ -3312,6 +3475,9 @@ if SERVER then
                 if isnumber(self.Voltage) then
                     if train:GetNW2Bool(
                         "MEX.Damage.LowVoltageBlackout",
+                        false
+                    ) or train:GetNW2Bool(
+                        "MEX.Damage.BatteryWaterFailed",
                         false
                     ) then
                         self.Voltage = 0
@@ -3448,7 +3614,8 @@ if SERVER then
         train,
         dT,
         wetness,
-        thirdRailConnected
+        thirdRailConnected,
+        postSurfaceActive
     )
         if not IsSubwayTrain(train) then return end
 
@@ -3460,8 +3627,18 @@ if SERVER then
 
         local hasThirdRail =
             thirdRailConnected == true
+        local batteryWaterFailed =
+            train:GetNW2Bool(
+                "MEX.Damage.BatteryWaterFailed",
+                false
+            )
 
-        if wetness >= WATER_BATTERY_COLLAPSE_START_WETNESS
+        if batteryWaterFailed then
+            level = math.max(
+                level,
+                WATER_BATTERY_BLACKOUT_LEVEL
+            )
+        elseif wetness >= WATER_BATTERY_COLLAPSE_START_WETNESS
             and not hasThirdRail
         then
             -- With no 750 V supply the flooded low-voltage network is fed only
@@ -3484,6 +3661,18 @@ if SERVER then
             level = math.max(0, level - dT * 0.006)
         end
 
+        if postSurfaceActive
+            and train.MEXDamageSurfaceReboundUsed
+            and not hasThirdRail
+            and level >= WATER_BATTERY_BLACKOUT_LEVEL
+        then
+            batteryWaterFailed = true
+            train:SetNW2Bool(
+                "MEX.Damage.BatteryWaterFailed",
+                true
+            )
+        end
+
         train.MEXDamageBatteryFloodLevel = level
 
         local factor = math.Clamp(
@@ -3492,8 +3681,10 @@ if SERVER then
             1
         )
 
-        if level >= WATER_BATTERY_BLACKOUT_LEVEL
+        if (
+            level >= WATER_BATTERY_BLACKOUT_LEVEL
             and not hasThirdRail
+        ) or batteryWaterFailed
         then
             factor = 0.015
         end
@@ -3509,7 +3700,10 @@ if SERVER then
         end
 
         local blackout =
-            level >= WATER_BATTERY_BLACKOUT_LEVEL
+            (
+                level >= WATER_BATTERY_BLACKOUT_LEVEL
+                or batteryWaterFailed
+            )
             and not hasThirdRail
 
         train:SetNW2Bool(
@@ -3517,8 +3711,10 @@ if SERVER then
             blackout
         )
 
-        if blackout then
-            EnsureWaterElectricBlackoutHook(train)
+        if blackout or batteryWaterFailed then
+            if blackout then
+                EnsureWaterElectricBlackoutHook(train)
+            end
 
             if istable(train.Battery) then
                 if isnumber(train.Battery.Voltage) then
@@ -3532,20 +3728,22 @@ if SERVER then
                 end
             end
 
-            -- Clamp the actual low-voltage outputs immediately on every water
-            -- scan as well as through the Electric Think wrapper.
-            if istable(train.Electric) then
-                for _, fieldName in ipairs(
-                    WATER_BLACKOUT_ELECTRIC_FIELDS
-                ) do
-                    if isnumber(train.Electric[fieldName]) then
-                        train.Electric[fieldName] = 0
+            if blackout then
+                -- Clamp the actual low-voltage outputs immediately on every
+                -- water scan as well as through the Electric Think wrapper.
+                if istable(train.Electric) then
+                    for _, fieldName in ipairs(
+                        WATER_BLACKOUT_ELECTRIC_FIELDS
+                    ) do
+                        if isnumber(train.Electric[fieldName]) then
+                            train.Electric[fieldName] = 0
+                        end
                     end
                 end
-            end
 
-            ForceFloodedLowVoltageRelaysOff(train)
-            DisableSensitiveSystemsForFloodBlackout(train)
+                ForceFloodedLowVoltageRelaysOff(train)
+                DisableSensitiveSystemsForFloodBlackout(train)
+            end
         end
     end
 
