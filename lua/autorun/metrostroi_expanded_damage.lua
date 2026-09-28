@@ -3470,8 +3470,8 @@ if SERVER then
             local realism = MEXD.GetElectricalDamageScale()
             local rate =
                 (
-                    0.024
-                    + math.Clamp(wetness, 0, 1) * 0.072
+                    0.040
+                    + math.Clamp(wetness, 0, 1) * 0.060
                 )
                 * realism
 
