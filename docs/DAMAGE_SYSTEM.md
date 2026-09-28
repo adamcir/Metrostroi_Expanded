@@ -704,3 +704,66 @@ The exact affected systems depend on which systems the individual train addon ac
 - voltage/current/hazard
 - temporary/permanent electrical failure count
 - sensitive electronic modules currently offline
+
+
+## Intermittent wet-contact faults
+
+Damage System 0.15.0 adds transient water faults in addition to breaker trips, blown fuses, drying and permanent failures.
+
+When the train is wet and electrical power is available, retained moisture can produce temporary bad-contact behaviour.
+
+### Relay chatter
+
+Eligible internal relay-like systems may receive a short opposite `Set` pulse and are then restored to their previous target state.
+
+Excluded from random chatter:
+
+- manual panel switch operators
+- automatic breakers
+- fuses
+- GV and other mechanical HV handles
+- reversers
+- KV / GRKV / controller mechanisms
+- pneumatic/brake valves and other mechanical controls
+- already failed-open systems
+- sensitive modules that are already offline because of water damage
+
+Because the transient pulse is applied to the actual Metrostroi relay, dependent circuits can briefly react to it. Relay chatter also produces short switch/relay clicking sounds.
+
+### False lamp indications
+
+While a transient wet glitch is active, selected packed Boolean indications whose names look like lamps/lights/LEDs/warnings/signals may briefly be inverted before being sent to clients.
+
+This is intentionally an indication fault. The underlying circuit state is not rewritten merely because a lamp lies.
+
+### Incorrect electrical gauges
+
+Packed ratios associated with electrical measurements can temporarily receive a false displayed value. Current matching includes voltage, current, amp/volt, battery, meter/gauge and power-style names.
+
+Pneumatic and brake pressure indications are excluded from this electrical-water corruption path.
+
+Possible visual failures include:
+
+- needle jumping to a random position
+- sudden full-scale indication
+- sudden near-zero indication
+- noisy offset around the real value
+
+### Drying behaviour
+
+Transient glitch intensity depends on:
+
+- current immersion
+- retained surface moisture
+- retained deep moisture
+- available electrical voltage
+- available source current
+
+After leaving the water, glitches may continue while moisture remains, but their probability and duration decrease as the train dries.
+
+### Debugging
+
+`mex_damage_status` additionally reports:
+
+- `glitch` – current transient wet-electrical glitch intensity
+- `chatter` – the internal relay currently receiving a chatter pulse
