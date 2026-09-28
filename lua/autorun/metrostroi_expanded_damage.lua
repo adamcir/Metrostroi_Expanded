@@ -66,7 +66,7 @@ if SERVER then
         DAMAGE_SCALE_CVAR_NAME,
         "1.0",
         settingFlags,
-        "Physical/component damage intensity",
+        "Physical damage realism level: 1.0 realistic, below 1 reduced, above 1 exaggerated",
         0.1,
         3.0
     )
@@ -75,7 +75,7 @@ if SERVER then
         DEFORMATION_SCALE_CVAR_NAME,
         "1.0",
         settingFlags,
-        "Visual deformation intensity",
+        "Deformation realism level: 1.0 realistic, below 1 reduced, above 1 exaggerated",
         0.1,
         3.0
     )
@@ -84,7 +84,7 @@ if SERVER then
         ELECTRICAL_SCALE_CVAR_NAME,
         "1.0",
         settingFlags,
-        "Electrical damage realism level",
+        "Electrical damage realism level: 1.0 realistic, below 1 reduced, above 1 exaggerated",
         0.1,
         3.0
     )
@@ -3306,7 +3306,6 @@ if SERVER then
         train,
         dT,
         wetness,
-        thirdRailVoltage,
         thirdRailConnected
     )
         if not IsSubwayTrain(train) then return end
@@ -4211,7 +4210,6 @@ if SERVER then
             train,
             dT,
             wetness,
-            thirdRailVoltage,
             thirdRailConnected
         )
 
@@ -7126,13 +7124,16 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] subsystems | physical %s x%.2f | deformation %s x%.2f (ALPHA) | electrical %s x%.2f",
+            "[Metrostroi Expanded/Damage] subsystems | physical %s x%.2f (%s) | deformation %s x%.2f (%s, ALPHA) | electrical %s x%.2f (%s)",
             MEXD.IsPhysicalDamageEnabled() and "ON" or "OFF",
             MEXD.GetPhysicalDamageScale(),
+            MEXD.GetRealismDescription(MEXD.GetPhysicalDamageScale()),
             MEXD.IsDeformationEnabled() and "ON" or "OFF",
             MEXD.GetDeformationScale(),
+            MEXD.GetRealismDescription(MEXD.GetDeformationScale()),
             MEXD.IsElectricalDamageEnabled() and "ON" or "OFF",
-            MEXD.GetElectricalDamageScale()
+            MEXD.GetElectricalDamageScale(),
+            MEXD.GetRealismDescription(MEXD.GetElectricalDamageScale())
         ))
 
         print(string.format(
