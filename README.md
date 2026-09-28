@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.11.0**
+Current damage-system module version: **0.12.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -432,3 +432,21 @@ Controls now follow one strict rule:
 - mechanical controls are explicitly excluded from automatic zeroing: reversers, KV/GRKV/controller mechanisms, KRU/KRO/KRR/RCU, GV/high-voltage mechanical handles, pneumatic/brake valves, isolation cocks and parking/manual brake mechanisms
 - those mechanical controls keep their last internal position when the handle/lever is torn off; their physical interaction paths remain blocked by the existing damage system
 - `mex_damage_status` now reports the number of failed electrical switch systems
+
+
+### Damage 0.12.0 – flooded electrics and water shock hazards
+
+- train flooding is sampled at multiple floor/equipment points along the complete car instead of relying only on the entity origin
+- wet electronics accumulate electrical damage even while the train is unpowered
+- live wet equipment uses the train's actual Metrostroi electrical values where available: `Main750V`, `Power750V`, `Aux750V`, 80 V/control/battery voltage and traction/current values such as `I13`, `I24` and `Itotal`
+- energized flooded equipment produces visible `Sparks` effects and Source electrical zap sounds
+- prolonged immersion can fail individual relay-like electrical systems into the existing persistent failed-open state
+- mechanical controls remain excluded from water-generated relay failures where they represent a physical mechanism rather than an electrical operator
+- a living player standing/swimming in conductive water near an energized flooded train can receive `DMG_SHOCK`
+- shock gameplay damage scales with the simulated available voltage, source-current capacity, train wetness, player immersion and distance from the car
+- high-voltage flooded equipment can therefore become rapidly lethal, while low-voltage systems generally produce weaker shocks
+- player shock effects include electrical sounds, sparks and a small view kick
+- `mex_damage_status` now reports water wetness, detected voltage, available current and water electrical hazard
+- `mex_damage_reset` clears accumulated water exposure together with the other damage/electrical failure state
+
+The player-shock calculation is a gameplay model and is not intended as real-world electrical-safety guidance.
