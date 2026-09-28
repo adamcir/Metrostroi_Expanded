@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.10.3**
+Current damage-system module version: **0.11.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -420,3 +420,15 @@ Controls now follow one strict rule:
 - deformation disabled while damage remains enabled: subsystem failures, detached controls and damage state remain active, but carbody/interior visual deformation is cleared
 - settings are archived replicated server ConVars: `mex_damage_enabled` and `mex_damage_deformation_enabled`
 - Utilities controls are editable by server admins; clients still see the current replicated state
+
+
+### Damage 0.11.0 – electrical switch failure simulation
+
+- detaching a normal electrical switch now changes the actual Metrostroi relay/system state to `0`, not only the visual/button state
+- failed electrical switches enter a persistent **failed-open** state: later `Set 1`, `Close`, `Toggle` or other energizing inputs are rejected until `mex_damage_reset`
+- the server periodically reasserts the open state in case a train implementation writes to the relay outside the normal ButtonEvent path
+- electrical targets are resolved from ButtonMap `button.var`, `button.model.var`, ButtonEvent prefixes and Metrostroi's actual `train.Systems` input routing
+- classic `BatteryToggle` has a `VB` fallback because older trains use `Battery` for the accumulator and `VB` for the physical battery disconnect relay
+- mechanical controls are explicitly excluded from automatic zeroing: reversers, KV/GRKV/controller mechanisms, KRU/KRO/KRR/RCU, GV/high-voltage mechanical handles, pneumatic/brake valves, isolation cocks and parking/manual brake mechanisms
+- those mechanical controls keep their last internal position when the handle/lever is torn off; their physical interaction paths remain blocked by the existing damage system
+- `mex_damage_status` now reports the number of failed electrical switch systems
