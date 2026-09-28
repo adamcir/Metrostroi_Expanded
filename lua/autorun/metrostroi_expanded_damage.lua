@@ -9160,6 +9160,151 @@ if SERVER then
         return true
     end
 
+    local function RepairButtonCenterLocal(
+        panel,
+        button
+    )
+        if not istable(panel)
+            or not istable(button)
+            or not isvector(panel.pos)
+            or not isangle(panel.ang)
+        then
+            return nil
+        end
+
+        local x = tonumber(button.x) or 0
+        local y = tonumber(button.y) or 0
+
+        if not button.radius then
+            x = x + (tonumber(button.w) or 0) * 0.5
+            y = y + (tonumber(button.h) or 0) * 0.5
+        end
+
+        local pos = Vector(x, -y, 0)
+        pos:Rotate(panel.ang)
+
+        return panel.pos
+            + pos * (tonumber(panel.scale) or 1)
+    end
+
+    local function NearestButtonRepairTarget(
+        train,
+        localPos
+    )
+        if not istable(train.ButtonMap) then
+            return nil
+        end
+
+        local bestID
+        local bestDistance = math.huge
+
+        for panelName, panel in pairs(train.ButtonMap) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                if not istable(button)
+                    or not isstring(button.ID)
+                then
+                    continue
+                end
+
+                local pos =
+                    RepairButtonCenterLocal(
+                        panel,
+                        button
+                    )
+
+                if not isvector(pos) then continue end
+
+                local distance =
+                    localPos:Distance(pos)
+
+                local radius =
+                    tonumber(button.radius)
+                    or math.max(
+                        tonumber(button.w) or 0,
+                        tonumber(button.h) or 0
+                    )
+                    * 0.75
+
+                radius = math.Clamp(
+                    radius
+                        * (tonumber(panel.scale) or 1)
+                        + 7,
+                    12,
+                    42
+                )
+
+                if distance <= radius
+                    and distance < bestDistance
+                then
+                    bestDistance = distance
+                    bestID =
+                        button.ID:gsub("^.+:", "")
+                end
+            end
+        end
+
+        return bestID
+    end
+
+    local function NearestLightRepairTarget(
+        train,
+        localPos
+    )
+        if not istable(train.Lights) then
+            return nil
+        end
+
+        local bestIndex
+        local bestDistance = math.huge
+
+        for index, light in pairs(train.Lights) do
+            if not istable(light)
+                or not isvector(light[2])
+            then
+                continue
+            end
+
+            local distance =
+                localPos:Distance(light[2])
+
+            local kind =
+                tostring(light[1] or "")
+            local radius =
+                kind == "headlight"
+                    and 90
+                    or 48
+
+            if distance <= radius
+                and distance < bestDistance
+            then
+                bestDistance = distance
+                bestIndex = index
+            end
+        end
+
+        return bestIndex
+    end
+
+    local function FirstSortedKey(tbl)
+        local keys = {}
+
+        for key, enabled in pairs(tbl or {}) do
+            if enabled then
+                keys[#keys + 1] = tostring(key)
+            end
+        end
+
+        table.sort(keys)
+        return keys[1]
+    end
+
     local function ServiceAnchors(train)
         local mins = train:OBBMins()
         local maxs = train:OBBMaxs()
@@ -9179,6 +9324,11 @@ if SERVER then
                 mins.y + width * 0.10,
                 mins.z + height * 0.16
             ),
+            electrical = Vector(
+                center.x,
+                mins.y + width * 0.12,
+                mins.z + height * 0.32
+            ),
         }
     end
 
@@ -9193,23 +9343,71 @@ if SERVER then
         end
 
         local localPos = train:WorldToLocal(worldPos)
+
+        local buttonID =
+            NearestButtonRepairTarget(
+                train,
+                localPos
+            )
+
+        if buttonID then
+            return "control:" .. buttonID
+        end
+
+        local lightIndex =
+            NearestLightRepairTarget(
+                train,
+                localPos
+            )
+
+        if lightIndex ~= nil then
+            return "light:" .. tostring(lightIndex)
+        end
+
         local anchors = ServiceAnchors(train)
 
         local batteryDistance =
             localPos:Distance(anchors.battery)
         local grkvDistance =
             localPos:Distance(anchors.grkv)
+        local electricalDistance =
+            localPos:Distance(anchors.electrical)
 
         local serviceRadius = 115
 
         if batteryDistance <= serviceRadius
             and batteryDistance <= grkvDistance
+            and batteryDistance <= electricalDistance
         then
             return "battery"
         end
 
-        if grkvDistance <= serviceRadius then
+        if grkvDistance <= serviceRadius
+            and grkvDistance <= electricalDistance
+        then
             return "grkv"
+        end
+
+        if electricalDistance <= serviceRadius then
+            local relay =
+                FirstSortedKey(
+                    train.MEXDamageWearFailedSystems
+                )
+
+            if relay then
+                return "relay:" .. relay
+            end
+
+            local indicator =
+                FirstSortedKey(
+                    train.MEXDamageFailedIndicators
+                )
+
+            if indicator then
+                return "indicator:" .. indicator
+            end
+
+            return "electrical"
         end
 
         return ClassifyFromWorldPosition(
@@ -9228,7 +9426,53 @@ if SERVER then
             return false
         end
 
-        if target == "battery" then
+        if string.sub(target, 1, 8) == "control:" then
+            return MEXD.RepairWearControl(
+                train,
+                string.sub(target, 9)
+            )
+        elseif string.sub(target, 1, 6) == "light:" then
+            return MEXD.RepairWearLight(
+                train,
+                tonumber(string.sub(target, 7))
+            )
+        elseif string.sub(target, 1, 10) == "indicator:" then
+            return MEXD.RepairWearIndicator(
+                train,
+                tonumber(string.sub(target, 11))
+            )
+        elseif string.sub(target, 1, 6) == "relay:" then
+            return MEXD.RepairWearSystem(
+                train,
+                string.sub(target, 7)
+            )
+        elseif target == "electrical" then
+            local relay =
+                FirstSortedKey(
+                    train.MEXDamageWearFailedSystems
+                )
+
+            if relay then
+                return MEXD.RepairWearSystem(
+                    train,
+                    relay
+                )
+            end
+
+            local indicator =
+                FirstSortedKey(
+                    train.MEXDamageFailedIndicators
+                )
+
+            if indicator then
+                return MEXD.RepairWearIndicator(
+                    train,
+                    tonumber(indicator)
+                )
+            end
+
+            return false
+        elseif target == "battery" then
             return RepairBatteryOnly(train)
         elseif target == "grkv" then
             return RepairGRKVOnly(train)
