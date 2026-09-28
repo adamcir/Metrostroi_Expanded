@@ -3696,7 +3696,7 @@ if SERVER then
     local function UpdateWaterElectricalDamage(train, dT)
         if not IsSubwayTrain(train) then return end
 
-        if not MEXD.IsDamageEnabled() then
+        if not MEXD.IsElectricalDamageEnabled() then
             train:SetNW2Float("MEX.Damage.WaterWetness", 0)
             train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
             train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
@@ -3746,8 +3746,11 @@ if SERVER then
             0,
             1.5
         )
+        local electricalScale = MEXD.GetElectricalDamageScale()
+
         local hazard = math.Clamp(
             wetness
+                * electricalScale
                 * (powered and 0.35 or 0.08)
                 * (0.25 + voltageFactor * 0.75)
                 * (0.30 + currentFactor * 0.70),
@@ -3798,7 +3801,7 @@ if SERVER then
                     + math.Clamp(current / 500, 0, 1) * 0.46
                 )
 
-            exposure = exposure + dT * rate
+            exposure = exposure + dT * rate * electricalScale
         else
             exposure = math.max(
                 0,
@@ -4021,6 +4024,10 @@ if SERVER then
         electricalTargets,
         clientMechanical
     )
+        if not MEXD.IsElectricalDamageEnabled() then
+            return {}
+        end
+
         if not IsSubwayTrain(train) then return {} end
 
         -- Server classification is authoritative. A client may request that a
@@ -4956,7 +4963,11 @@ if SERVER then
         if not MEXD.IsDamageEnabled() then return end
         if not IsSubwayTrain(train) or not isvector(worldPos) then return end
 
-        power = math.Clamp(tonumber(power) or 0, 0.05, 2.0)
+        power = math.Clamp(
+            (tonumber(power) or 0) * MEXD.GetPhysicalDamageScale(),
+            0.05,
+            3.0
+        )
         radius = math.Clamp(tonumber(radius) or 20, 8, 320)
         maxDetach = math.Clamp(math.floor(tonumber(maxDetach) or 1), 1, 96)
 
@@ -5121,7 +5132,7 @@ if SERVER then
         -- that Source does not report to the scripted train entity.
         if not train.MEXDamagePhysicsCallback then
             train.MEXDamagePhysicsCallback = train:AddCallback("PhysicsCollide", function(ent, data)
-                if not MEXD.IsDamageEnabled() then return end
+                if not MEXD.IsAnyDamageEnabled() then return end
                 if not IsSubwayTrain(ent) then return end
                 if CurTime() < (ent.MEXDamageIgnoreUntil or 0) then return end
                 if (ent.MEXDamageCrashCooldown or 0) > CurTime() then return end
@@ -5334,69 +5345,96 @@ if SERVER then
         hook.Run("MetrostroiExpandedDamageReset", train)
     end
 
-    local function SetServerDamageEnabled(enabled)
-        if not damageEnabledConVar then return end
+    local function ResetElectricalSubsystem(train)
+        if not IsSubwayTrain(train) then return end
 
-        enabled = enabled == true
-        damageEnabledConVar:SetBool(enabled)
+        RestoreElectricalFailures(train)
+        RestoreTrippedProtection(train)
+        RestoreSensitiveWaterSystems(train)
+        RestoreWaterRelayChatter(train)
+        RestoreWaterVisualGlitchHooks(train)
+        RestoreWaterBatteryGlitchHook(train)
 
-        if not enabled and deformationEnabledConVar then
-            deformationEnabledConVar:SetBool(false)
-        end
+        train.MEXDamageWaterExposure = 0
+        train.MEXDamageWaterMoisture = 0
+        train.MEXDamageDeepMoisture = 0
+        train.MEXDamageDrySince = nil
+        train.MEXDamageWaterNextFailureExposure = nil
+        train.MEXDamageNextWaterArc = nil
+        train.MEXDamageNextWaterVisualGlitch = nil
+        train.MEXDamageNextRelayChatter = nil
+        train.MEXDamageNextDoorWaterFault = nil
+        train.MEXDamageNextBatteryGlitch = nil
+
+        train:SetNW2Float("MEX.Damage.electrical", 0)
+        train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
+        train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
+        train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
+        train:SetNW2String("MEX.Damage.ChatteringRelay", "")
+        train:SetNW2String("MEX.Damage.DoorWaterFault", "")
+        train:SetNW2Float("MEX.Damage.WaterWetness", 0)
+        train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
+        train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
+        train:SetNW2Float("MEX.Damage.WaterHazard", 0)
+        train:SetNW2Float("MEX.Damage.WaterExposure", 0)
+        train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
+        train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
+        train:SetNW2Float("MEX.Damage.DrySeconds", 0)
+        train:SetNW2String("MEX.Damage.LastProtection", "")
     end
 
-    local function SetServerDeformationEnabled(enabled)
-        if not deformationEnabledConVar then return end
+    local function SetBoolSetting(convar, enabled)
+        if not convar then return end
+        convar:SetBool(enabled == true)
+    end
 
-        if not MEXD.IsDamageEnabled() then
-            deformationEnabledConVar:SetBool(false)
-            return
-        end
-
-        deformationEnabledConVar:SetBool(enabled == true)
+    local function SetScaleSetting(convar, value)
+        if not convar then return end
+        convar:SetFloat(math.Clamp(tonumber(value) or 1, 0.1, 3.0))
     end
 
     concommand.Add("mex_damage_set_enabled", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetServerDamageEnabled(tobool(args[1]))
+        SetBoolSetting(damageEnabledConVar, tobool(args[1]))
     end)
 
     concommand.Add("mex_damage_set_deformation_enabled", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetServerDeformationEnabled(tobool(args[1]))
+        SetBoolSetting(deformationEnabledConVar, tobool(args[1]))
+    end)
+
+    concommand.Add("mex_damage_set_electrical_enabled", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetBoolSetting(electricalEnabledConVar, tobool(args[1]))
+    end)
+
+    concommand.Add("mex_damage_set_physical_scale", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetScaleSetting(damageScaleConVar, args[1])
+    end)
+
+    concommand.Add("mex_damage_set_deformation_scale", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetScaleSetting(deformationScaleConVar, args[1])
+    end)
+
+    concommand.Add("mex_damage_set_electrical_scale", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetScaleSetting(electricalScaleConVar, args[1])
     end)
 
     cvars.AddChangeCallback(
-        DAMAGE_ENABLED_CVAR_NAME,
+        ELECTRICAL_ENABLED_CVAR_NAME,
         function(_, _, newValue)
             if tobool(newValue) then return end
 
-            if deformationEnabledConVar
-                and deformationEnabledConVar:GetBool()
-            then
-                deformationEnabledConVar:SetBool(false)
-            end
-
             for _, train in ipairs(ents.GetAll()) do
                 if IsSubwayTrain(train) then
-                    MEXD.Reset(train)
+                    ResetElectricalSubsystem(train)
                 end
             end
         end,
-        "MEX.Damage.Settings.DamageEnabled"
-    )
-
-    cvars.AddChangeCallback(
-        DEFORMATION_ENABLED_CVAR_NAME,
-        function(_, _, newValue)
-            if MEXD.IsDamageEnabled() then return end
-            if not tobool(newValue) then return end
-
-            if deformationEnabledConVar then
-                deformationEnabledConVar:SetBool(false)
-            end
-        end,
-        "MEX.Damage.Settings.DeformationEnabled"
+        "MEX.Damage.Settings.ElectricalEnabled"
     )
 
     local function SendImpactEffect(train, zone, amount, worldPos, normal)
@@ -5434,77 +5472,151 @@ if SERVER then
     end
 
     function MEXD.ApplyDamage(train, zone, amount, worldPos, normal, source)
-        if not MEXD.IsDamageEnabled() then
+        if not IsSubwayTrain(train) or not ZONES[zone] then return 0 end
+        if not MEXD.IsAnyDamageEnabled() then
             return MEXD.GetZoneDamage(train, zone)
         end
-
-        if not IsSubwayTrain(train) or not ZONES[zone] then return 0 end
 
         amount = math.Clamp(tonumber(amount) or 0, 0, 1)
         if amount <= 0 then return MEXD.GetZoneDamage(train, zone) end
 
-        local old = MEXD.GetZoneDamage(train, zone)
+        local physicalEnabled = MEXD.IsPhysicalDamageEnabled()
+        local deformationEnabled = MEXD.IsDeformationEnabled()
+        local electricalEnabled = MEXD.IsElectricalDamageEnabled()
 
-        -- Logical/system damage remains normalized to 0..1.
-        local effective = amount * (1 - old * 0.45)
-        local new = math.Clamp(old + effective, 0, 1)
-        train:SetNW2Float(DamageKey(zone), new)
-
-        -- Plastic crush is deliberately NOT capped at 1.0. Once a wagon is
-        -- already "destroyed" logically, later impacts must still be able to
-        -- fold more metal. This lets repeated crashes/weapon hits continue
-        -- compressing the body until it can become scrap instead of freezing
-        -- at one final dent shape.
-        local oldCrush = MEXD.GetCrushEnergy(train, zone)
-        local sourceScale =
-            source == "physgun" and 1.28
-            or source == "physics" and 1.18
-            or source == "blast" and 1.22
-            or source == "bullet" and 0.82
-            or source == "buckshot" and 0.95
-            or source == "melee" and 0.62
-            or 1
-
-        local crushAdded = math.max(amount, 0.004) * sourceScale
-        local newCrush = math.Clamp(
-            oldCrush + crushAdded,
-            0,
-            6.0
+        local physicalScale = physicalEnabled
+            and MEXD.GetPhysicalDamageScale()
+            or 0
+        local deformationScale = deformationEnabled
+            and MEXD.GetDeformationScale()
+            or 0
+        local structuralScale = math.max(
+            physicalScale,
+            deformationScale
         )
-        train:SetNW2Float(CrushKey(zone), newCrush)
 
-        if isvector(worldPos) then
-            local hitLocal = train:WorldToLocal(worldPos)
-            local hitKey = "MEX.Damage.HitLocal." .. zone
-            local strengthKey = "MEX.Damage.HitStrength." .. zone
-            local oldStrength = train:GetNW2Float(strengthKey, 0)
-            local oldHit = train:GetNW2Vector(hitKey, hitLocal)
-            local combinedStrength = math.Clamp(oldStrength + amount, 0, 6)
+        local old = MEXD.GetZoneDamage(train, zone)
+        local new = old
 
-            if oldStrength <= 0.001 then
-                oldHit = hitLocal
+        if structuralScale > 0 then
+            local structuralAmount = math.Clamp(
+                amount * structuralScale,
+                0,
+                1.5
+            )
+            local effective =
+                structuralAmount * (1 - old * 0.45)
+            new = math.Clamp(old + effective, 0, 1)
+            train:SetNW2Float(DamageKey(zone), new)
+
+            if isvector(worldPos) then
+                local hitLocal = train:WorldToLocal(worldPos)
+                local hitKey = "MEX.Damage.HitLocal." .. zone
+                local strengthKey =
+                    "MEX.Damage.HitStrength." .. zone
+                local oldStrength =
+                    train:GetNW2Float(strengthKey, 0)
+                local oldHit =
+                    train:GetNW2Vector(hitKey, hitLocal)
+                local combinedStrength = math.Clamp(
+                    oldStrength + structuralAmount,
+                    0,
+                    6
+                )
+
+                if oldStrength <= 0.001 then
+                    oldHit = hitLocal
+                end
+
+                local blend = math.Clamp(
+                    structuralAmount
+                        / math.max(
+                            oldStrength + structuralAmount,
+                            0.001
+                        ),
+                    0,
+                    1
+                )
+
+                train:SetNW2Vector(
+                    hitKey,
+                    LerpVector(blend, oldHit, hitLocal)
+                )
+                train:SetNW2Float(
+                    strengthKey,
+                    combinedStrength
+                )
             end
-
-            local blend = math.Clamp(amount / math.max(oldStrength + amount, 0.001), 0, 1)
-            train:SetNW2Vector(hitKey, LerpVector(blend, oldHit, hitLocal))
-            train:SetNW2Float(strengthKey, combinedStrength)
         end
 
-        -- Hard impacts can disturb electrical equipment even when the physical
-        -- deformation is elsewhere. This is a generic state for the future
-        -- electrical subsystem module.
-        if amount >= 0.22 then
-            local electrical = train:GetNW2Float("MEX.Damage.electrical", 0)
-            electrical = math.Clamp(electrical + amount * 0.30, 0, 1)
-            train:SetNW2Float("MEX.Damage.electrical", electrical)
+        if deformationEnabled then
+            local oldCrush =
+                MEXD.GetCrushEnergy(train, zone)
+            local sourceScale =
+                source == "physgun" and 1.28
+                or source == "physics" and 1.18
+                or source == "blast" and 1.22
+                or source == "bullet" and 0.82
+                or source == "buckshot" and 0.95
+                or source == "melee" and 0.62
+                or 1
+
+            local crushAdded =
+                math.max(amount, 0.004)
+                * sourceScale
+                * MEXD.GetDeformationScale()
+
+            train:SetNW2Float(
+                CrushKey(zone),
+                math.Clamp(oldCrush + crushAdded, 0, 6.0)
+            )
         end
 
-        UpdateDamageState(train)
-        SendImpactEffect(train, zone, amount, worldPos, normal)
+        if electricalEnabled and amount >= 0.22 then
+            local electrical =
+                train:GetNW2Float(
+                    "MEX.Damage.electrical",
+                    0
+                )
+            electrical = math.Clamp(
+                electrical
+                    + amount
+                    * 0.30
+                    * MEXD.GetElectricalDamageScale(),
+                0,
+                1
+            )
+            train:SetNW2Float(
+                "MEX.Damage.electrical",
+                electrical
+            )
+        end
 
-        if amount >= 0.10 then
-            local pitch = math.floor(Lerp(math.Clamp(amount, 0, 1), 115, 80))
-            train:EmitSound("physics/metal/metal_box_impact_hard3.wav", 82, pitch, 0.8)
+        if structuralScale > 0 then
+            UpdateDamageState(train)
+            SendImpactEffect(
+                train,
+                zone,
+                amount,
+                worldPos,
+                normal
+            )
+
+            if amount >= 0.10 then
+                local pitch = math.floor(
+                    Lerp(
+                        math.Clamp(amount, 0, 1),
+                        115,
+                        80
+                    )
+                )
+                train:EmitSound(
+                    "physics/metal/metal_box_impact_hard3.wav",
+                    82,
+                    pitch,
+                    0.8
+                )
+            end
         end
 
         hook.Run(
@@ -5942,7 +6054,7 @@ if SERVER then
     end)
 
     hook.Add("EntityTakeDamage", "MEX.Damage.FromEntityDamage", function(ent, dmginfo)
-        if not MEXD.IsDamageEnabled() then return end
+        if not MEXD.IsAnyDamageEnabled() then return end
         if not IsSubwayTrain(ent) then return end
 
         InitializeTrainDamage(ent)
