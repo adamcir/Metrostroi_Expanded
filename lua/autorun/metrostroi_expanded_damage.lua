@@ -10,7 +10,54 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.10.2"
+MEXD.Version = "0.10.3"
+
+local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
+local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
+
+local damageEnabledConVar
+local deformationEnabledConVar
+
+if SERVER then
+    local settingFlags = bit.bor(
+        FCVAR_ARCHIVE,
+        FCVAR_REPLICATED,
+        FCVAR_NOTIFY
+    )
+
+    damageEnabledConVar = CreateConVar(
+        DAMAGE_ENABLED_CVAR_NAME,
+        "1",
+        settingFlags,
+        "Enable Metrostroi Expanded damage system",
+        0,
+        1
+    )
+
+    deformationEnabledConVar = CreateConVar(
+        DEFORMATION_ENABLED_CVAR_NAME,
+        "1",
+        settingFlags,
+        "Enable Metrostroi Expanded visual deformation",
+        0,
+        1
+    )
+end
+
+local function ReadBoolConVar(name, defaultValue)
+    local convar = GetConVar(name)
+    if not convar then return defaultValue == true end
+    return convar:GetBool()
+end
+
+function MEXD.IsDamageEnabled()
+    return ReadBoolConVar(DAMAGE_ENABLED_CVAR_NAME, true)
+end
+
+function MEXD.IsDeformationEnabled()
+    return MEXD.IsDamageEnabled()
+        and ReadBoolConVar(DEFORMATION_ENABLED_CVAR_NAME, true)
+end
 
 local MEXD_SOURCE_FILE = "unknown"
 if debug and isfunction(debug.getinfo) then
@@ -1656,6 +1703,7 @@ if SERVER then
         worldImpulse,
         isBlast
     )
+        if not MEXD.IsDamageEnabled() then return end
         if not IsSubwayTrain(train) or not isvector(worldPos) then return end
 
         power = math.Clamp(tonumber(power) or 0, 0.05, 2.0)
@@ -1823,6 +1871,7 @@ if SERVER then
         -- that Source does not report to the scripted train entity.
         if not train.MEXDamagePhysicsCallback then
             train.MEXDamagePhysicsCallback = train:AddCallback("PhysicsCollide", function(ent, data)
+                if not MEXD.IsDamageEnabled() then return end
                 if not IsSubwayTrain(ent) then return end
                 if CurTime() < (ent.MEXDamageIgnoreUntil or 0) then return end
                 if (ent.MEXDamageCrashCooldown or 0) > CurTime() then return end
@@ -2005,6 +2054,79 @@ if SERVER then
         hook.Run("MetrostroiExpandedDamageReset", train)
     end
 
+    local function SetServerDamageEnabled(enabled)
+        if not damageEnabledConVar then return end
+
+        enabled = enabled == true
+        damageEnabledConVar:SetBool(enabled)
+
+        if not enabled and deformationEnabledConVar then
+            deformationEnabledConVar:SetBool(false)
+        end
+
+        if not enabled then
+            for _, train in ipairs(ents.GetAll()) do
+                if IsSubwayTrain(train) then
+                    MEXD.Reset(train)
+                end
+            end
+        end
+    end
+
+    local function SetServerDeformationEnabled(enabled)
+        if not deformationEnabledConVar then return end
+
+        if not MEXD.IsDamageEnabled() then
+            deformationEnabledConVar:SetBool(false)
+            return
+        end
+
+        deformationEnabledConVar:SetBool(enabled == true)
+    end
+
+    concommand.Add("mex_damage_set_enabled", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetServerDamageEnabled(tobool(args[1]))
+    end)
+
+    concommand.Add("mex_damage_set_deformation_enabled", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetServerDeformationEnabled(tobool(args[1]))
+    end)
+
+    cvars.AddChangeCallback(
+        DAMAGE_ENABLED_CVAR_NAME,
+        function(_, _, newValue)
+            if tobool(newValue) then return end
+
+            if deformationEnabledConVar
+                and deformationEnabledConVar:GetBool()
+            then
+                deformationEnabledConVar:SetBool(false)
+            end
+
+            for _, train in ipairs(ents.GetAll()) do
+                if IsSubwayTrain(train) then
+                    MEXD.Reset(train)
+                end
+            end
+        end,
+        "MEX.Damage.Settings.DamageEnabled"
+    )
+
+    cvars.AddChangeCallback(
+        DEFORMATION_ENABLED_CVAR_NAME,
+        function(_, _, newValue)
+            if MEXD.IsDamageEnabled() then return end
+            if not tobool(newValue) then return end
+
+            if deformationEnabledConVar then
+                deformationEnabledConVar:SetBool(false)
+            end
+        end,
+        "MEX.Damage.Settings.DeformationEnabled"
+    )
+
     local function SendImpactEffect(train, zone, amount, worldPos, normal)
         if not IsValid(train) then return end
 
@@ -2040,6 +2162,10 @@ if SERVER then
     end
 
     function MEXD.ApplyDamage(train, zone, amount, worldPos, normal, source)
+        if not MEXD.IsDamageEnabled() then
+            return MEXD.GetZoneDamage(train, zone)
+        end
+
         if not IsSubwayTrain(train) or not ZONES[zone] then return 0 end
 
         amount = math.Clamp(tonumber(amount) or 0, 0, 1)
@@ -2166,6 +2292,8 @@ if SERVER then
     end
 
     net.Receive("MEX.DetachRequest", function(_, ply)
+        if not MEXD.IsDamageEnabled() then return end
+
         local train = net.ReadEntity()
         local name = net.ReadString()
         local model = net.ReadString()
@@ -2514,6 +2642,7 @@ if SERVER then
     end)
 
     hook.Add("EntityTakeDamage", "MEX.Damage.FromEntityDamage", function(ent, dmginfo)
+        if not MEXD.IsDamageEnabled() then return end
         if not IsSubwayTrain(ent) then return end
 
         InitializeTrainDamage(ent)
@@ -2790,6 +2919,16 @@ if SERVER then
     concommand.Add("mex_damage_test", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
+        if not MEXD.IsDamageEnabled() then
+            print("[Metrostroi Expanded/Damage] Damage is disabled.")
+            return
+        end
+
+        if not MEXD.IsDamageEnabled() then
+            print("[Metrostroi Expanded/Damage] Damage is disabled.")
+            return
+        end
+
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
@@ -2931,6 +3070,123 @@ if SERVER then
 end
 
 if CLIENT then
+    ---------------------------------------------------------------------------
+    -- Utilities -> Metrostroi Expanded
+    ---------------------------------------------------------------------------
+
+    hook.Add("PopulateToolMenu", "MEX.Damage.PopulateUtilities", function()
+        spawnmenu.AddToolMenuOption(
+            "Utilities",
+            "Metrostroi Expanded",
+            "MEXDamageSettings",
+            "Damage",
+            "",
+            "",
+            function(panel)
+                panel:ClearControls()
+
+                panel:Help(
+                    "Metrostroi Expanded damage settings. "
+                    .. "These options are server-wide."
+                )
+
+                local damageCheck = vgui.Create("DCheckBoxLabel", panel)
+                damageCheck:SetText("Enable damage")
+                damageCheck:SetDark(true)
+                damageCheck:SizeToContents()
+                panel:AddItem(damageCheck)
+
+                local deformationCheck =
+                    vgui.Create("DCheckBoxLabel", panel)
+                deformationCheck:SetText("Enable deformation")
+                deformationCheck:SetDark(true)
+                deformationCheck:SizeToContents()
+                panel:AddItem(deformationCheck)
+
+                panel:Help(
+                    "Deformation can only be enabled while damage is enabled."
+                )
+
+                local updating = false
+                local nextRefresh = 0
+
+                local function RefreshSettings()
+                    if not IsValid(damageCheck)
+                        or not IsValid(deformationCheck)
+                    then
+                        return
+                    end
+
+                    local damageEnabled = MEXD.IsDamageEnabled()
+                    local deformationEnabled =
+                        MEXD.IsDeformationEnabled()
+                    local canEdit =
+                        IsValid(LocalPlayer())
+                        and LocalPlayer():IsAdmin()
+
+                    updating = true
+                    damageCheck:SetChecked(damageEnabled)
+                    deformationCheck:SetChecked(
+                        damageEnabled and deformationEnabled
+                    )
+                    updating = false
+
+                    damageCheck:SetEnabled(canEdit)
+                    deformationCheck:SetEnabled(
+                        canEdit and damageEnabled
+                    )
+                end
+
+                damageCheck.OnChange = function(_, enabled)
+                    if updating then return end
+                    if not IsValid(LocalPlayer())
+                        or not LocalPlayer():IsAdmin()
+                    then
+                        RefreshSettings()
+                        return
+                    end
+
+                    RunConsoleCommand(
+                        "mex_damage_set_enabled",
+                        enabled and "1" or "0"
+                    )
+
+                    if not enabled then
+                        updating = true
+                        deformationCheck:SetChecked(false)
+                        deformationCheck:SetEnabled(false)
+                        updating = false
+                    end
+                end
+
+                deformationCheck.OnChange = function(_, enabled)
+                    if updating then return end
+
+                    if not MEXD.IsDamageEnabled()
+                        or not IsValid(LocalPlayer())
+                        or not LocalPlayer():IsAdmin()
+                    then
+                        RefreshSettings()
+                        return
+                    end
+
+                    RunConsoleCommand(
+                        "mex_damage_set_deformation_enabled",
+                        enabled and "1" or "0"
+                    )
+                end
+
+                panel.Think = function()
+                    if RealTime() < nextRefresh then return end
+                    nextRefresh = RealTime() + 0.25
+                    RefreshSettings()
+                end
+
+                RefreshSettings()
+            end
+        )
+    end)
+
     ---------------------------------------------------------------------------
     -- v0.4 deformation model
     --
@@ -6414,6 +6670,8 @@ if CLIENT then
     end
 
     net.Receive("MEX.ComponentImpact", function()
+        if not MEXD.IsDamageEnabled() then return end
+
         local train = net.ReadEntity()
         net.ReadUInt(16) -- serial is currently only used server-side
         local hitLocal = net.ReadVector()
@@ -8256,6 +8514,11 @@ if CLIENT then
 
         ClearLegacyTransforms(train)
 
+        if not MEXD.IsDeformationEnabled() then
+            ClearAllVisualDamage(train)
+            return
+        end
+
         local state = BuildDamageState(train)
         if not state then
             ClearAllVisualDamage(train)
@@ -8301,6 +8564,14 @@ if CLIENT then
 
             ReconcileAttachedButtonHitboxes(train)
             EnforceDisabledButtonHitboxes(train)
+
+            if not MEXD.IsDeformationEnabled() then
+                continue
+            end
+
+            if not MEXD.IsDeformationEnabled() then
+                continue
+            end
 
             local state = BuildDamageState(train)
             if state then
