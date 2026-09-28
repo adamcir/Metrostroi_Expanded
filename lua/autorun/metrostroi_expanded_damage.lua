@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.14.0"
+MEXD.Version = "0.15.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1234,6 +1234,12 @@ if SERVER then
         "ambient/energy/zap2.wav",
         "ambient/energy/zap3.wav",
         "ambient/energy/zap5.wav",
+    }
+
+    local WATER_RELAY_CHATTER_SOUNDS = {
+        "buttons/lightswitch2.wav",
+        "buttons/button14.wav",
+        "buttons/button15.wav",
     }
 
     local function NumberOrZero(value)
@@ -2488,6 +2494,501 @@ if SERVER then
         end
     end
 
+    local function PackedBoolLooksLikeIndicator(idx)
+        if not isstring(idx) then return false end
+
+        local lower = string.lower(idx)
+
+        local tokens = {
+            "lamp",
+            "light",
+            "led",
+            "indicator",
+            "signal",
+            "warning",
+            "fault",
+            "alarm",
+            "gauge",
+            "panel",
+        }
+
+        for _, token in ipairs(tokens) do
+            if string.find(lower, token, 1, true) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function PackedRatioLooksLikeElectricGauge(idx)
+        if not isstring(idx) then return false end
+
+        local lower = string.lower(idx)
+
+        if string.find(lower, "pressure", 1, true)
+            or string.find(lower, "brake", 1, true)
+            or string.find(lower, "trainline", 1, true)
+        then
+            return false
+        end
+
+        local tokens = {
+            "voltage",
+            "volt",
+            "current",
+            "amp",
+            "battery",
+            "ammeter",
+            "voltmeter",
+            "meter",
+            "electric",
+            "power",
+        }
+
+        for _, token in ipairs(tokens) do
+            if string.find(lower, token, 1, true) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function RestoreWaterVisualGlitchHooks(train)
+        if not IsValid(train) then return end
+
+        if train.MEXDamageOriginalSetPackedBool then
+            train.SetPackedBool =
+                train.MEXDamageOriginalSetPackedBool
+        end
+
+        if train.MEXDamageOriginalSetPackedRatio then
+            train.SetPackedRatio =
+                train.MEXDamageOriginalSetPackedRatio
+        end
+
+        train.MEXDamageOriginalSetPackedBool = nil
+        train.MEXDamageOriginalSetPackedRatio = nil
+        train.MEXDamageWaterVisualHooksInstalled = nil
+        train.MEXDamageWaterVisualGlitchUntil = nil
+        train.MEXDamageWaterVisualGlitchIntensity = 0
+    end
+
+    local function EnsureWaterVisualGlitchHooks(train)
+        if not IsSubwayTrain(train)
+            or train.MEXDamageWaterVisualHooksInstalled
+        then
+            return
+        end
+
+        if isfunction(train.SetPackedBool) then
+            local originalSetPackedBool =
+                train.SetPackedBool
+
+            train.MEXDamageOriginalSetPackedBool =
+                originalSetPackedBool
+
+            train.SetPackedBool = function(self, idx, value)
+                local glitching =
+                    (self.MEXDamageWaterVisualGlitchUntil or 0)
+                        > CurTime()
+                local intensity = math.Clamp(
+                    tonumber(
+                        self.MEXDamageWaterVisualGlitchIntensity
+                    ) or 0,
+                    0,
+                    1
+                )
+
+                if glitching
+                    and intensity > 0.01
+                    and PackedBoolLooksLikeIndicator(idx)
+                    and math.Rand(0, 1)
+                        < 0.18 + intensity * 0.62
+                then
+                    value = not tobool(value)
+                end
+
+                return originalSetPackedBool(
+                    self,
+                    idx,
+                    value
+                )
+            end
+        end
+
+        if isfunction(train.SetPackedRatio) then
+            local originalSetPackedRatio =
+                train.SetPackedRatio
+
+            train.MEXDamageOriginalSetPackedRatio =
+                originalSetPackedRatio
+
+            train.SetPackedRatio = function(self, idx, value)
+                local glitching =
+                    (self.MEXDamageWaterVisualGlitchUntil or 0)
+                        > CurTime()
+                local intensity = math.Clamp(
+                    tonumber(
+                        self.MEXDamageWaterVisualGlitchIntensity
+                    ) or 0,
+                    0,
+                    1
+                )
+
+                if glitching
+                    and intensity > 0.01
+                    and PackedRatioLooksLikeElectricGauge(idx)
+                then
+                    local mode = math.random(1, 4)
+
+                    if mode == 1 then
+                        value = math.Rand(0, 1)
+                    elseif mode == 2 then
+                        value = math.Clamp(
+                            (tonumber(value) or 0)
+                                + math.Rand(-0.75, 0.75)
+                                    * intensity,
+                            0,
+                            1
+                        )
+                    elseif mode == 3 then
+                        value = math.Rand(0.82, 1.0)
+                    else
+                        value = math.Rand(0, 0.16)
+                    end
+                end
+
+                return originalSetPackedRatio(
+                    self,
+                    idx,
+                    value
+                )
+            end
+        end
+
+        train.MEXDamageWaterVisualHooksInstalled = true
+    end
+
+    local function CollectWaterRelayChatterCandidates(train)
+        local candidates = {}
+
+        if not istable(train.Systems) then
+            return candidates
+        end
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system) then
+                continue
+            end
+
+            if IsManualOperatorElectricalSystem(
+                systemName,
+                system
+            ) then
+                continue
+            end
+
+            if IsCircuitBreakerSystem(systemName, system)
+                or IsFuseSystemName(systemName)
+            then
+                continue
+            end
+
+            if train.MEXDamageElectricalFailureSystems
+                and train.MEXDamageElectricalFailureSystems[systemName]
+            then
+                continue
+            end
+
+            if train.MEXDamageWetSensitiveSystems
+                and train.MEXDamageWetSensitiveSystems[systemName]
+            then
+                continue
+            end
+
+            if not isfunction(system.TriggerInput) then
+                continue
+            end
+
+            candidates[#candidates + 1] = {
+                name = systemName,
+                system = system,
+            }
+        end
+
+        return candidates
+    end
+
+    local function RestoreWaterRelayChatter(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageRelayChatter)
+        then
+            return
+        end
+
+        for systemName, data in pairs(
+            train.MEXDamageRelayChatter
+        ) do
+            local system = train[systemName]
+
+            if istable(system)
+                and istable(data)
+                and isfunction(data.trigger)
+            then
+                pcall(
+                    data.trigger,
+                    system,
+                    "Set",
+                    tonumber(data.originalTarget)
+                        or tonumber(data.originalValue)
+                        or 0
+                )
+            end
+        end
+
+        train.MEXDamageRelayChatter = {}
+        train:SetNW2String(
+            "MEX.Damage.ChatteringRelay",
+            ""
+        )
+    end
+
+    local function ProcessWaterRelayChatter(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageRelayChatter)
+        then
+            return
+        end
+
+        local now = CurTime()
+
+        for systemName, data in pairs(
+            train.MEXDamageRelayChatter
+        ) do
+            if now < (data.restoreAt or 0) then
+                continue
+            end
+
+            local system = train[systemName]
+            if istable(system)
+                and isfunction(data.trigger)
+            then
+                pcall(
+                    data.trigger,
+                    system,
+                    "Set",
+                    tonumber(data.originalTarget)
+                        or tonumber(data.originalValue)
+                        or 0
+                )
+            end
+
+            train.MEXDamageRelayChatter[systemName] = nil
+        end
+
+        if next(train.MEXDamageRelayChatter) == nil then
+            train:SetNW2String(
+                "MEX.Damage.ChatteringRelay",
+                ""
+            )
+        end
+    end
+
+    local function StartWaterRelayChatter(
+        train,
+        glitchIntensity
+    )
+        if not IsSubwayTrain(train) then return false end
+
+        local candidates =
+            CollectWaterRelayChatterCandidates(train)
+
+        if #candidates <= 0 then return false end
+
+        train.MEXDamageRelayChatter =
+            train.MEXDamageRelayChatter or {}
+
+        local item =
+            candidates[math.random(1, #candidates)]
+
+        if train.MEXDamageRelayChatter[item.name] then
+            return false
+        end
+
+        local system = item.system
+        local trigger = system.TriggerInput
+        local originalTarget =
+            tonumber(system.TargetValue)
+        local originalValue =
+            tonumber(system.Value)
+        local current =
+            originalTarget ~= nil
+                and originalTarget
+                or originalValue
+                or 0
+
+        local glitchValue =
+            current > 0.5 and 0 or 1
+
+        train.MEXDamageRelayChatter[item.name] = {
+            trigger = trigger,
+            originalTarget = originalTarget,
+            originalValue = originalValue,
+            restoreAt =
+                CurTime()
+                + math.Rand(
+                    0.035,
+                    0.10 + glitchIntensity * 0.13
+                ),
+        }
+
+        pcall(
+            trigger,
+            system,
+            "Set",
+            glitchValue
+        )
+
+        train:SetNW2String(
+            "MEX.Damage.ChatteringRelay",
+            item.name
+        )
+
+        train:EmitSound(
+            WATER_RELAY_CHATTER_SOUNDS[
+                math.random(
+                    1,
+                    #WATER_RELAY_CHATTER_SOUNDS
+                )
+            ],
+            62 + math.floor(glitchIntensity * 12),
+            math.random(92, 116),
+            0.45 + glitchIntensity * 0.25
+        )
+
+        return true
+    end
+
+    local function UpdateWaterTransientGlitches(
+        train,
+        wetness,
+        surfaceMoisture,
+        deepMoisture,
+        voltage,
+        current
+    )
+        if not IsSubwayTrain(train) then return end
+
+        EnsureWaterVisualGlitchHooks(train)
+        ProcessWaterRelayChatter(train)
+
+        local powered = voltage >= 24
+        local moistureLevel = math.Clamp(
+            math.max(
+                tonumber(wetness) or 0,
+                (tonumber(surfaceMoisture) or 0) * 0.88,
+                (tonumber(deepMoisture) or 0) * 0.42
+            ),
+            0,
+            1
+        )
+
+        local powerFactor = math.Clamp(
+            voltage / 120,
+            0,
+            1
+        )
+        local currentFactor = math.Clamp(
+            current / 250,
+            0,
+            1
+        )
+
+        local glitchIntensity = math.Clamp(
+            moistureLevel
+                * (0.38 + powerFactor * 0.42
+                    + currentFactor * 0.20),
+            0,
+            1
+        )
+
+        train:SetNW2Float(
+            "MEX.Damage.WaterGlitchIntensity",
+            glitchIntensity
+        )
+
+        if not powered or glitchIntensity < 0.06 then
+            train.MEXDamageWaterVisualGlitchIntensity = 0
+            train.MEXDamageWaterVisualGlitchUntil = nil
+
+            if moistureLevel < 0.025 then
+                RestoreWaterRelayChatter(train)
+            end
+
+            return
+        end
+
+        local now = CurTime()
+        local nextVisual =
+            train.MEXDamageNextWaterVisualGlitch or 0
+
+        if now >= nextVisual then
+            local chance = math.Clamp(
+                0.10 + glitchIntensity * 0.72,
+                0,
+                0.90
+            )
+
+            if math.Rand(0, 1) < chance then
+                train.MEXDamageWaterVisualGlitchIntensity =
+                    glitchIntensity
+                train.MEXDamageWaterVisualGlitchUntil =
+                    now
+                    + math.Rand(
+                        0.04,
+                        0.16 + glitchIntensity * 0.34
+                    )
+            end
+
+            train.MEXDamageNextWaterVisualGlitch =
+                now
+                + math.Rand(
+                    0.08,
+                    Lerp(glitchIntensity, 0.72, 0.16)
+                )
+        end
+
+        local nextRelay =
+            train.MEXDamageNextRelayChatter or 0
+
+        if now >= nextRelay then
+            local relayChance = math.Clamp(
+                0.025
+                    + glitchIntensity * glitchIntensity * 0.42,
+                0,
+                0.52
+            )
+
+            if math.Rand(0, 1) < relayChance then
+                StartWaterRelayChatter(
+                    train,
+                    glitchIntensity
+                )
+            end
+
+            train.MEXDamageNextRelayChatter =
+                now
+                + math.Rand(
+                    0.10,
+                    Lerp(glitchIntensity, 1.30, 0.22)
+                )
+        end
+    end
+
     local function DistanceToTrainOBB(train, worldPos)
         if not IsSubwayTrain(train) or not isvector(worldPos) then
             return math.huge
@@ -2673,6 +3174,16 @@ if SERVER then
             train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
             train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
             train:SetNW2Float("MEX.Damage.DrySeconds", 0)
+            train:SetNW2Float(
+                "MEX.Damage.WaterGlitchIntensity",
+                0
+            )
+            train:SetNW2String(
+                "MEX.Damage.ChatteringRelay",
+                ""
+            )
+            RestoreWaterRelayChatter(train)
+            RestoreWaterVisualGlitchHooks(train)
             return
         end
 
@@ -2730,6 +3241,15 @@ if SERVER then
             surfaceMoisture,
             deepMoisture,
             drySeconds
+        )
+
+        UpdateWaterTransientGlitches(
+            train,
+            wetness,
+            surfaceMoisture,
+            deepMoisture,
+            voltage,
+            current
         )
 
         local exposure = NumberOrZero(
@@ -4252,6 +4772,8 @@ if SERVER then
 
         RestoreTrippedProtection(train)
         RestoreSensitiveWaterSystems(train)
+        RestoreWaterRelayChatter(train)
+        RestoreWaterVisualGlitchHooks(train)
 
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterMoisture = 0
@@ -4259,6 +4781,10 @@ if SERVER then
         train.MEXDamageDrySince = nil
         train.MEXDamageWaterNextFailureExposure = nil
         train.MEXDamageNextWaterArc = nil
+        train.MEXDamageNextWaterVisualGlitch = nil
+        train.MEXDamageNextRelayChatter = nil
+        train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
+        train:SetNW2String("MEX.Damage.ChatteringRelay", "")
         train:SetNW2Float("MEX.Damage.WaterWetness", 0)
         train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
         train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
@@ -5289,7 +5815,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -5320,6 +5846,14 @@ if SERVER then
             istable(train.MEXDamageWetSensitiveSystems)
                 and table.Count(train.MEXDamageWetSensitiveSystems)
                 or 0,
+            train:GetNW2Float(
+                "MEX.Damage.WaterGlitchIntensity",
+                0
+            ),
+            train:GetNW2String(
+                "MEX.Damage.ChatteringRelay",
+                "none"
+            ),
             train:GetNW2String(
                 "MEX.Damage.LastProtection",
                 "none"
@@ -5329,6 +5863,10 @@ if SERVER then
 
     hook.Add("EntityRemoved", "MEX.Damage.CleanupServerDebris", function(ent)
         if not IsSubwayTrain(ent) then return end
+
+        RestoreWaterRelayChatter(ent)
+        RestoreWaterVisualGlitchHooks(ent)
+        RestoreSensitiveWaterSystems(ent)
 
         if istable(ent.MEXDamageDetachedServer) then
             for _, data in pairs(ent.MEXDamageDetachedServer) do
