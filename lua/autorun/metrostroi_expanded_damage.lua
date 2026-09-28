@@ -1345,6 +1345,12 @@ if SERVER then
     local WATER_SHOCK_COOLDOWN = 0.32
     local WATER_SURFACE_DRY_SECONDS = 45
     local WATER_DEEP_DRY_SECONDS = 180
+    -- Metrostroi's generic relay model uses a 0.050 s opening time. Water
+    -- protection uses that native mechanism instead of a slow gameplay delay.
+    local WATER_BREAKER_RETRIP_INTERVAL = 0.05
+    local WATER_BREAKER_TRIP_WETNESS = 0.10
+    local WATER_BATTERY_COLLAPSE_START_WETNESS = 0.055
+    local WATER_BATTERY_BLACKOUT_LEVEL = 0.90
 
     local WATER_ARC_SOUNDS = {
         "ambient/energy/zap1.wav",
@@ -1469,6 +1475,30 @@ if SERVER then
             )
         end
         return best
+    end
+
+    local function GetThirdRailVoltage(train)
+        if not IsSubwayTrain(train) then return 0 end
+
+        -- TR.Main750V is Metrostroi's contact-rail output. Prefer it over the
+        -- downstream Electric fields so an open GV/AV does not look like the
+        -- train physically lost contact with the third rail.
+        if istable(train.TR) then
+            local trVoltage = math.abs(NumberOrZero(train.TR.Main750V))
+            if trVoltage > 0 then
+                return math.Clamp(trVoltage, 0, 1200)
+            end
+        end
+
+        local electric = istable(train.Electric)
+            and train.Electric
+            or nil
+
+        return math.Clamp(
+            MaxAbsField(electric, { "Main750V" }),
+            0,
+            1200
+        )
     end
 
     local function GetTrainElectricalWaterState(train)
@@ -1916,6 +1946,48 @@ if SERVER then
         return false
     end
 
+    local function TripAllFloodedCircuitBreakers(
+        train,
+        wetness,
+        voltage,
+        current,
+        sparkPos
+    )
+        if not IsSubwayTrain(train)
+            or wetness < WATER_BREAKER_TRIP_WETNESS
+            or voltage < 24
+        then
+            return 0
+        end
+
+        local breakers =
+            CollectWaterProtectionCandidates(train, false)
+
+        local tripped = 0
+        for _, systemName in ipairs(breakers) do
+            if TripCircuitBreaker(train, systemName) then
+                tripped = tripped + 1
+            end
+        end
+
+        if tripped > 0 then
+            train:SetNW2String(
+                "MEX.Damage.LastProtection",
+                string.format("%d breakers tripped", tripped)
+            )
+
+            EmitWaterElectricalArc(
+                train,
+                sparkPos,
+                voltage,
+                current,
+                voltage >= 200
+            )
+        end
+
+        return tripped
+    end
+
     local function RetripWaterProtectionIfNeeded(
         train,
         wetness,
@@ -1929,7 +2001,8 @@ if SERVER then
         if (train.MEXDamageNextProtectionRetrip or 0) > now then
             return
         end
-        train.MEXDamageNextProtectionRetrip = now + 0.07
+        train.MEXDamageNextProtectionRetrip =
+            now + WATER_BREAKER_RETRIP_INTERVAL
 
         for systemName, data in pairs(
             train.MEXDamageTrippedProtection or {}
@@ -2197,6 +2270,8 @@ if SERVER then
     local SENSITIVE_WATER_ELECTRONICS = {
         "ars",
         "als",
+        "als_ars",
+        "ars_mp",
         "bars",
         "bpsn",
         "bup",
@@ -2893,9 +2968,19 @@ if SERVER then
         train.MEXDamageBatteryGlitchHookInstalled = nil
         train.MEXDamageBatteryGlitchUntil = nil
         train.MEXDamageBatteryVoltageFactor = nil
+        train.MEXDamageBatteryFloodFactor = nil
+        train.MEXDamageBatteryFloodLevel = nil
         train:SetNW2Float(
             "MEX.Damage.BatteryGlitchFactor",
             1
+        )
+        train:SetNW2Float(
+            "MEX.Damage.BatteryFloodLevel",
+            0
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            false
         )
     end
 
@@ -2916,23 +3001,33 @@ if SERVER then
         battery.Think = function(self, ...)
             local result = originalThink(self, ...)
 
-            if IsValid(train)
-                and (train.MEXDamageBatteryGlitchUntil or 0)
-                    > CurTime()
-            then
+            if IsValid(train) then
                 local factor = math.Clamp(
-                    tonumber(
-                        train.MEXDamageBatteryVoltageFactor
-                    ) or 1,
-                    0.10,
-                    1.10
+                    tonumber(train.MEXDamageBatteryFloodFactor) or 1,
+                    0.015,
+                    1
                 )
+
+                if (train.MEXDamageBatteryGlitchUntil or 0)
+                    > CurTime()
+                then
+                    factor = math.min(
+                        factor,
+                        math.Clamp(
+                            tonumber(
+                                train.MEXDamageBatteryVoltageFactor
+                            ) or 1,
+                            0.10,
+                            1.10
+                        )
+                    )
+                end
 
                 if isnumber(self.Voltage) then
                     self.Voltage = self.Voltage * factor
                 end
 
-                if isnumber(self.Current) then
+                if isnumber(self.Current) and factor < 0.999 then
                     self.Current =
                         self.Current
                         + math.Rand(-18, 18)
@@ -3001,24 +3096,111 @@ if SERVER then
         return true
     end
 
+    local function DisableSensitiveSystemsForFloodBlackout(train)
+        for _, systemName in ipairs(
+            CollectSensitiveWaterSystemCandidates(train)
+        ) do
+            DisableSensitiveWaterSystem(
+                train,
+                systemName,
+                {
+                    permanent = false,
+                    sensitivity = "sensitive",
+                    minDrySeconds = 45,
+                    recoverMoisture = 0.035,
+                }
+            )
+        end
+    end
+
+    local function UpdateFloodedBatteryCollapse(
+        train,
+        dT,
+        wetness,
+        thirdRailVoltage
+    )
+        if not IsSubwayTrain(train) then return end
+
+        local level = math.Clamp(
+            tonumber(train.MEXDamageBatteryFloodLevel) or 0,
+            0,
+            1
+        )
+
+        local hasThirdRail =
+            (tonumber(thirdRailVoltage) or 0) >= 200
+
+        if wetness >= WATER_BATTERY_COLLAPSE_START_WETNESS
+            and not hasThirdRail
+        then
+            -- With no 750 V supply the flooded low-voltage network is fed only
+            -- by the battery. Leakage/short-circuit load collapses it over a
+            -- few seconds instead of leaving the train alive indefinitely.
+            local rate =
+                (
+                    0.035
+                    + math.Clamp(wetness, 0, 1) * 0.095
+                )
+                * MEXD.GetElectricalDamageScale()
+
+            level = math.Clamp(level + dT * rate, 0, 1)
+        elseif hasThirdRail then
+            -- External supply/charger can slowly recover the simulated battery
+            -- collapse, but not instantly erase moisture faults.
+            level = math.max(0, level - dT * 0.018)
+        elseif wetness < 0.015 then
+            level = math.max(0, level - dT * 0.006)
+        end
+
+        train.MEXDamageBatteryFloodLevel = level
+
+        local factor = math.Clamp(
+            1 - math.pow(level, 1.30),
+            0.015,
+            1
+        )
+
+        train.MEXDamageBatteryFloodFactor = factor
+        train:SetNW2Float(
+            "MEX.Damage.BatteryFloodLevel",
+            level
+        )
+
+        if istable(train.Battery) then
+            EnsureWaterBatteryGlitchHook(train)
+        end
+
+        local blackout =
+            level >= WATER_BATTERY_BLACKOUT_LEVEL
+            and not hasThirdRail
+
+        train:SetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            blackout
+        )
+
+        if blackout then
+            DisableSensitiveSystemsForFloodBlackout(train)
+        end
+    end
+
+    -- Water must not operate the driver's visible door buttons. Classic
+    -- Metrostroi cars expose those buttons as Relay "Switch" systems
+    -- (KDL/KDP/VDL/VUD...), so toggling them makes the model move. Instead,
+    -- short the downstream door distributor solenoids/contactors.
     local DOOR_WATER_RELAY_NAMES = {
-        kdl = true,
-        kdlr = true,
-        kdp = true,
-        kdpk = true,
-        kdlk = true,
-        kdph = true,
-        vdl = true,
-        vud = true,
-        vud1 = true,
-        vud2 = true,
-        doorleft = true,
-        doorright = true,
-        doorleft2 = true,
-        doorright2 = true,
-        doorclose = true,
-        emerclosedoors = true,
-        emergencydoors = true,
+        vdol = true, -- left door distributor solenoid
+        vdop = true, -- right door distributor solenoid
+        vdz = true,  -- close-door distributor solenoid
+        u1 = true,   -- 81-718 family close solenoid
+        u2 = true,   -- 81-718 family left solenoid
+        u3 = true,   -- 81-718 family right solenoid
+        doorleftrelay = true,
+        doorrightrelay = true,
+        doorcloserelay = true,
+        doorleftcontactor = true,
+        doorrightcontactor = true,
+        doorclosecontactor = true,
     }
 
     local function CollectWaterDoorRelayCandidates(train)
@@ -3038,6 +3220,18 @@ if SERVER then
 
             if not IsRelayLikeElectricalSystem(system)
                 or not isfunction(system.TriggerInput)
+            then
+                continue
+            end
+
+            -- Door controls on the driver's desk are Relay "Switch" systems.
+            -- They must remain in the position selected by the player; water
+            -- only bridges downstream relays/solenoids.
+            if tostring(system.relay_type or "") == "Switch"
+                or IsManualOperatorElectricalSystem(
+                    tostring(systemName),
+                    system
+                )
             then
                 continue
             end
@@ -3073,8 +3267,20 @@ if SERVER then
         train.MEXDamageRelayChatter =
             train.MEXDamageRelayChatter or {}
 
+        local arsals = {}
+        for _, candidate in ipairs(candidates) do
+            if candidate.arsals then
+                arsals[#arsals + 1] = candidate
+            end
+        end
+
+        local source =
+            (#arsals > 0 and math.Rand(0, 1) < 0.42)
+                and arsals
+                or candidates
+
         local item =
-            candidates[math.random(1, #candidates)]
+            source[math.random(1, #source)]
 
         if train.MEXDamageRelayChatter[item.name] then
             return false
@@ -3142,6 +3348,24 @@ if SERVER then
         return true
     end
 
+    local function IsARSALSWaterRelay(systemName, system)
+        if not isstring(systemName) or not istable(system) then
+            return false
+        end
+
+        local lower = string.lower(systemName)
+        local related =
+            string.find(lower, "ars", 1, true) ~= nil
+            or string.find(lower, "als", 1, true) ~= nil
+
+        if not related then return false end
+
+        -- A panel ARS/ALS selector is a physical Switch and must not visibly
+        -- move by itself. Hidden relays/contactors and ARS relay types may.
+        return tostring(system.relay_type or "") ~= "Switch"
+            and not IsManualOperatorElectricalSystem(systemName, system)
+    end
+
     local function CollectWaterRelayChatterCandidates(train)
         local candidates = {}
 
@@ -3188,6 +3412,7 @@ if SERVER then
             candidates[#candidates + 1] = {
                 name = systemName,
                 system = system,
+                arsals = IsARSALSWaterRelay(systemName, system),
             }
         end
 
@@ -3723,6 +3948,9 @@ if SERVER then
             train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
             train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
             train:SetNW2Float("MEX.Damage.DrySeconds", 0)
+            train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
+            train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
+            train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
             train:SetNW2Float(
                 "MEX.Damage.WaterGlitchIntensity",
                 0
@@ -3738,8 +3966,27 @@ if SERVER then
         end
 
         local wetness, sparkPos = SampleTrainWater(train)
+        local thirdRailVoltage = GetThirdRailVoltage(train)
         local voltage, current, hv, lv =
             GetTrainElectricalWaterState(train)
+
+        UpdateFloodedBatteryCollapse(
+            train,
+            dT,
+            wetness,
+            thirdRailVoltage
+        )
+
+        -- Battery collapse changes the low-voltage state after Battery:Think.
+        -- Refresh the electrical snapshot so the rest of this pass sees the
+        -- reduced supply as soon as possible.
+        voltage, current, hv, lv =
+            GetTrainElectricalWaterState(train)
+
+        train:SetNW2Float(
+            "MEX.Damage.ThirdRailVoltage",
+            thirdRailVoltage
+        )
 
         train:SetNW2Float(
             "MEX.Damage.WaterWetness",
@@ -3852,6 +4099,16 @@ if SERVER then
                     waterElectricalDamage
                 )
             end
+        end
+
+        if wetness >= WATER_BREAKER_TRIP_WETNESS and powered then
+            TripAllFloodedCircuitBreakers(
+                train,
+                wetness,
+                voltage,
+                current,
+                sparkPos
+            )
         end
 
         if wetness > 0.02 and powered then
@@ -5374,6 +5631,9 @@ if SERVER then
         train.MEXDamageNextBatteryGlitch = nil
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
+        train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
+        train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
+        train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
         train:SetNW2String("MEX.Damage.ChatteringRelay", "")
         train:SetNW2String("MEX.Damage.DoorWaterFault", "")
         train:SetNW2Float("MEX.Damage.WaterWetness", 0)
@@ -5414,6 +5674,9 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
+        train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
+        train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
+        train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
         train:SetNW2String("MEX.Damage.ChatteringRelay", "")
         train:SetNW2String("MEX.Damage.DoorWaterFault", "")
         train:SetNW2Float("MEX.Damage.WaterWetness", 0)
