@@ -523,6 +523,32 @@ local function TargetDescription(trace, ply)
     if isvector(rayStart)
         and isvector(rayDirection)
     then
+        -- On the server we also know the original mount position of parts that
+        -- were torn away. Prefer that exact damaged component before falling
+        -- back to the still-existing ButtonMap/structure underneath it.
+        if SERVER
+            and istable(MetrostroiExpandedDamage)
+            and isfunction(
+                MetrostroiExpandedDamage.GetDetachedRepairTargetAtRay
+            )
+        then
+            local componentName =
+                MetrostroiExpandedDamage.GetDetachedRepairTargetAtRay(
+                    train,
+                    rayStart,
+                    rayDirection,
+                    maxDistance
+                )
+
+            if isstring(componentName)
+                and componentName ~= ""
+            then
+                return train,
+                    "component:" .. componentName,
+                    "Damaged component: " .. componentName
+            end
+        end
+
         local controlTarget, controlLabel =
             NearestButtonTarget(
                 train,
