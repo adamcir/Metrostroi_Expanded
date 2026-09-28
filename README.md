@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.13.0**
+Current damage-system module version: **0.14.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -468,3 +468,20 @@ The player-shock calculation is a gameplay model and is not intended as real-wor
 - repair restores deformation, detached parts, electrical failed-open states, blown fuses, tripped protection and water-exposure state
 
 The protection model follows the actual systems exposed by each Metrostroi train. Exact real-world behaviour still depends on how completely that train addon models its breakers, fuses, wiring and protection logic.
+
+
+### Damage 0.14.0 – movable wet controls, moisture and drying
+
+- ordinary physical panel switches are no longer selected as persistent water-failure targets
+- a soaked switch/lever can therefore still be moved after flooding; the downstream circuit or electronic module may simply fail to respond
+- automatic breakers remain physically resettable; if the conductive fault is still present they can trip again
+- blown fuses remain non-resettable until Train Fixer / `mex_damage_reset`
+- added separate **surface moisture** and **deep moisture** state instead of treating removal from water as instant recovery
+- fully saturated surface equipment takes roughly 45 seconds of dry time to reach zero surface moisture
+- deep moisture in sensitive electronics can take roughly 180 seconds to dissipate from full saturation
+- ordinary temporary wet relay/contact faults normally recover after at least ~25 seconds dry and sufficiently low surface moisture
+- sensitive electronics normally require at least ~95 seconds dry plus very low deep moisture before they can recover
+- live high-voltage/current immersion can permanently damage a wet component; permanent faults require Train Fixer/reset
+- sensitive Metrostroi systems such as ARS/ALS/BPSN/radio/information electronics can go offline while their physical controls remain movable
+- while a sensitive module is offline, its inputs may still change but its published outputs are forced inactive until recovery
+- `mex_damage_status` now reports surface/deep moisture, elapsed dry time and the number of sensitive electronic systems currently offline
