@@ -1,4 +1,4 @@
--- Metrostroi Extended - Damage System
+-- Metrostroi Expanded - Damage System
 -- Simple directional crash damage and visual deformation for Metrostroi trains.
 -- Copyright (C) 2026 Adam Cir / Adava Software
 -- Licensed under GNU GPL v3.0.
@@ -39,7 +39,7 @@ if SERVER then
         DAMAGE_ENABLED_CVAR_NAME,
         "1",
         settingFlags,
-        "Enable Metrostroi Extended physical/component damage",
+        "Enable Metrostroi Expanded physical/component damage",
         0,
         1
     )
@@ -48,7 +48,7 @@ if SERVER then
         DEFORMATION_ENABLED_CVAR_NAME,
         "0",
         settingFlags,
-        "Enable Metrostroi Extended ALPHA visual deformation",
+        "Enable Metrostroi Expanded ALPHA visual deformation",
         0,
         1
     )
@@ -57,7 +57,7 @@ if SERVER then
         ELECTRICAL_ENABLED_CVAR_NAME,
         "1",
         settingFlags,
-        "Enable Metrostroi Extended electrical damage",
+        "Enable Metrostroi Expanded electrical damage",
         0,
         1
     )
@@ -171,7 +171,7 @@ end
 MEXD.SourceFile = MEXD_SOURCE_FILE
 
 print(string.format(
-    "[Metrostroi Extended/Damage] loaded v%s from %s (%s)",
+    "[Metrostroi Expanded/Damage] loaded v%s from %s (%s)",
     tostring(MEXD.Version),
     tostring(MEXD.SourceFile),
     SERVER and "SERVER" or "CLIENT"
@@ -179,7 +179,7 @@ print(string.format(
 
 concommand.Add("mex_damage_version", function()
     print(string.format(
-        "[Metrostroi Extended/Damage] v%s | source: %s | realm: %s",
+        "[Metrostroi Expanded/Damage] v%s | source: %s | realm: %s",
         tostring(MEXD.Version),
         tostring(MEXD.SourceFile),
         SERVER and "SERVER" or "CLIENT"
@@ -2808,7 +2808,7 @@ if SERVER then
 
                 -- Metrostroi normally keeps publishing physical Speed even on
                 -- several cars whose cab speedometer should be electrically
-                -- dead. Extended gates the displayed speed by the actual
+                -- dead. Expanded gates the displayed speed by the actual
                 -- low-voltage/instrument power state.
                 if speedIndicator
                     and not IsTrainInstrumentationPowered(self)
@@ -6478,25 +6478,25 @@ if SERVER then
         if IsValid(ply) and not ply:IsAdmin() then return end
 
         if not MEXD.IsAnyDamageEnabled() then
-            print("[Metrostroi Extended/Damage] All damage subsystems are disabled.")
+            print("[Metrostroi Expanded/Damage] All damage subsystems are disabled.")
             return
         end
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
 
         InitializeTrainDamage(train)
         if CurTime() < (train.MEXDamageIgnoreUntil or 0) then
-            print("[Metrostroi Extended/Damage] Damage system is still in the 1000 ms spawn grace period.")
+            print("[Metrostroi Expanded/Damage] Damage system is still in the 1000 ms spawn grace period.")
             return
         end
 
         local zone = string.lower(args[1] or "front")
         if not ZONES[zone] then
-            print("[Metrostroi Extended/Damage] Zone must be: front, rear, left, right, roof or floor.")
+            print("[Metrostroi Expanded/Damage] Zone must be: front, rear, left, right, roof or floor.")
             return
         end
 
@@ -6517,19 +6517,19 @@ if SERVER then
         if IsValid(ply) and not ply:IsAdmin() then return end
 
         if not MEXD.IsDeformationEnabled() then
-            print("[Metrostroi Extended/Damage] Deformation is disabled.")
+            print("[Metrostroi Expanded/Damage] Deformation is disabled.")
             return
         end
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
 
         InitializeTrainDamage(train)
         if CurTime() < (train.MEXDamageIgnoreUntil or 0) then
-            print("[Metrostroi Extended/Damage] Damage system is still in the spawn grace period.")
+            print("[Metrostroi Expanded/Damage] Damage system is still in the spawn grace period.")
             return
         end
 
@@ -6556,7 +6556,7 @@ if SERVER then
         )
 
         print(string.format(
-            "[Metrostroi Extended/Damage] front scrap test set to %.2f for %s",
+            "[Metrostroi Expanded/Damage] front scrap test set to %.2f for %s",
             energy,
             train:GetClass()
         ))
@@ -6567,12 +6567,12 @@ if SERVER then
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
 
         MEXD.Reset(train)
-        print("[Metrostroi Extended/Damage] Damage reset for " .. train:GetClass())
+        print("[Metrostroi Expanded/Damage] Damage reset for " .. train:GetClass())
     end)
 
     concommand.Add("mex_damage_status", function(ply)
@@ -6580,12 +6580,12 @@ if SERVER then
 
         local train = GetAimedTrain(ply)
         if not IsValid(train) then
-            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
 
         print(string.format(
-            "[Metrostroi Extended/Damage] subsystems | physical %s x%.2f | deformation %s x%.2f (ALPHA) | electrical %s x%.2f",
+            "[Metrostroi Expanded/Damage] subsystems | physical %s x%.2f | deformation %s x%.2f (ALPHA) | electrical %s x%.2f",
             MEXD.IsPhysicalDamageEnabled() and "ON" or "OFF",
             MEXD.GetPhysicalDamageScale(),
             MEXD.IsDeformationEnabled() and "ON" or "OFF",
@@ -6595,7 +6595,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Extended/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -6680,7 +6680,7 @@ end
 
 if CLIENT then
     ---------------------------------------------------------------------------
-    -- Utilities -> Metrostroi Extended
+    -- Utilities -> Metrostroi Expanded
     ---------------------------------------------------------------------------
 
     local function MEXUtilitiesCanEdit()
@@ -6823,7 +6823,7 @@ if CLIENT then
     hook.Add("PopulateToolMenu", "MEX.Damage.PopulateUtilities", function()
         spawnmenu.AddToolMenuOption(
             "Utilities",
-            "Metrostroi Extended",
+            "Metrostroi Expanded",
             "MEXPhysicalDamageSettings",
             "Physical Damage & Deformation",
             "",
@@ -6904,7 +6904,7 @@ if CLIENT then
 
         spawnmenu.AddToolMenuOption(
             "Utilities",
-            "Metrostroi Extended",
+            "Metrostroi Expanded",
             "MEXElectricalDamageSettings",
             "Electrical Damage",
             "",
@@ -6913,7 +6913,7 @@ if CLIENT then
                 panel:ClearControls()
 
                 panel:Help(
-                    "Electrical and environmental failures in Metrostroi Extended."
+                    "Electrical and environmental failures in Metrostroi Expanded."
                 )
 
                 local enabled = AddMEXUtilityCheck(
@@ -11301,7 +11301,7 @@ if CLIENT then
 
         if count <= 1 or frontBones == 0 then
             print(string.format(
-                "[Metrostroi Extended/Damage] %s: stock body model %s has no usable non-root bones near the front; using main-body vertex mesh fallback for front deformation.",
+                "[Metrostroi Expanded/Damage] %s: stock body model %s has no usable non-root bones near the front; using main-body vertex mesh fallback for front deformation.",
                 train:GetClass(),
                 tostring(train:GetModel())
             ))
@@ -11646,7 +11646,7 @@ if CLIENT then
         if not train.MEXDamageMeshFallbackAnnounced then
             train.MEXDamageMeshFallbackAnnounced = true
             print(string.format(
-                "[Metrostroi Extended/Damage] main-body crumple mesh active for %s (%s), %d render parts",
+                "[Metrostroi Expanded/Damage] main-body crumple mesh active for %s (%s), %d render parts",
                 tostring(train:GetClass()),
                 tostring(model),
                 #newParts
@@ -12573,21 +12573,21 @@ if CLIENT then
 
         chat.AddText(
             Color(120, 255, 120),
-            "[Metrostroi Extended] Visual control layout restored. Detached server components stay disabled until mex_damage_reset."
+            "[Metrostroi Expanded] Visual control layout restored. Detached server components stay disabled until mex_damage_reset."
         )
     end)
 
     concommand.Add("mex_damage_bones", function()
         local train = GetAimedClientTrain()
         if not IsValid(train) then
-            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
 
         train:SetupBones()
 
         print("------------------------------------------------------------")
-        print("[Metrostroi Extended/Damage] Bone dump: " .. train:GetClass())
+        print("[Metrostroi Expanded/Damage] Bone dump: " .. train:GetClass())
         print("model: " .. tostring(train:GetModel()))
         CheckFrontBoneCapability(train)
         print("body bones: " .. tostring(train:GetBoneCount()))
@@ -12648,13 +12648,13 @@ if CLIENT then
     concommand.Add("mex_damage_mesh_status", function()
         local train = GetAimedClientTrain()
         if not IsValid(train) then
-            print("[Metrostroi Extended/Damage] Aim at a Metrostroi train.")
+            print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
 
         local state = BuildDamageState(train)
         print("------------------------------------------------------------")
-        print("[Metrostroi Extended/Damage] mesh deformation status")
+        print("[Metrostroi Expanded/Damage] mesh deformation status")
         print("class: " .. tostring(train:GetClass()))
         print("model: " .. tostring(train:GetModel()))
         print("version: " .. tostring(MEXD.Version))
@@ -12715,7 +12715,7 @@ if CLIENT then
         "0",
         true,
         false,
-        "Draw Metrostroi Extended impact/deformation debug markers"
+        "Draw Metrostroi Expanded impact/deformation debug markers"
     )
 
     hook.Add("PostDrawTranslucentRenderables", "MEX.Damage.V4Debug", function()
