@@ -8549,6 +8549,13 @@ if SERVER then
         RestoreWaterVisualGlitchHooks(train)
         RestoreWaterBatteryGlitchHook(train)
         RestoreWaterElectricBlackoutHook(train)
+        RestoreGRKVWearFailure(train)
+
+        train.MEXDamageGRKVWear = 0
+        train.MEXDamageGRKVLastPosition = nil
+        train.MEXDamageGRKVFailureThreshold = nil
+        train:SetNW2Float("MEX.Damage.GRKVWear", 0)
+        train:SetNW2Bool("MEX.Damage.GRKVFailed", false)
 
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterMoisture = 0
