@@ -6386,6 +6386,35 @@ if SERVER then
             local localImpact = ZoneLocalImpactPoint(train, zone)
             local worldImpact = train:LocalToWorld(localImpact)
 
+            -- Some Source/Metrostroi collisions never reach PhysicsCollide
+            -- (constraint corrections, bogey/coupler impulses, etc.). The
+            -- fallback must still produce a local component impact so physical
+            -- breakaway works with deformation disabled.
+            if MEXD.IsPhysicalDamageEnabled() then
+                SendComponentImpact(
+                    train,
+                    worldImpact,
+                    math.Clamp(
+                        deltaKmh / 42,
+                        0.18,
+                        1.65
+                    ),
+                    math.Clamp(
+                        20 + deltaKmh * 1.55,
+                        24,
+                        180
+                    ),
+                    math.Clamp(
+                        1 + math.floor(deltaKmh / 13),
+                        1,
+                        14
+                    ),
+                    "velocity",
+                    deltaVelocity,
+                    false
+                )
+            end
+
             MEXD.ApplyDamage(
                 train,
                 zone,
@@ -6530,6 +6559,16 @@ if SERVER then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
         end
+
+        print(string.format(
+            "[Metrostroi Expanded/Damage] subsystems | physical %s x%.2f | deformation %s x%.2f (ALPHA) | electrical %s x%.2f",
+            MEXD.IsPhysicalDamageEnabled() and "ON" or "OFF",
+            MEXD.GetPhysicalDamageScale(),
+            MEXD.IsDeformationEnabled() and "ON" or "OFF",
+            MEXD.GetDeformationScale(),
+            MEXD.IsElectricalDamageEnabled() and "ON" or "OFF",
+            MEXD.GetElectricalDamageScale()
+        ))
 
         print(string.format(
             "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
