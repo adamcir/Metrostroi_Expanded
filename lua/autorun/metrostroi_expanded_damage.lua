@@ -6305,6 +6305,349 @@ if SERVER then
     local GRKV_WEAR_PER_POSITION = 0.000080
     local LEGACY_RELAY_WEAR_PER_OPERATION = 0.000012
 
+    local function StableWearUnit(train, key, salt)
+        local wagon = isfunction(train.GetWagonNumber)
+            and train:GetWagonNumber()
+            or train:EntIndex()
+
+        local crc = tonumber(
+            util.CRC(
+                tostring(train:GetClass())
+                .. ":"
+                .. tostring(wagon)
+                .. ":"
+                .. tostring(key)
+                .. ":"
+                .. tostring(salt or "")
+            )
+        ) or 1
+
+        return (crc % 100000) / 100000
+    end
+
+    local function ControlWearKey(button)
+        button = tostring(button or "")
+            :gsub("^.+:", "")
+
+        local lower = string.lower(button)
+
+        if string.find(lower, "pneumaticbrake", 1, true)
+            or lower == "emergencybrake"
+        then
+            return "PneumaticBrake"
+        end
+
+        if string.find(lower, "parkingbrake", 1, true) then
+            return "ParkingBrake"
+        end
+
+        if string.find(lower, "kvup", 1, true)
+            or string.find(lower, "kvdown", 1, true)
+            or string.find(lower, "kvset", 1, true)
+        then
+            return "KVController"
+        end
+
+        if string.find(lower, "reverser", 1, true)
+            or string.find(lower, "kvwrench", 1, true)
+            or lower == "kro"
+            or lower == "krr"
+        then
+            return "Reverser"
+        end
+
+        if string.find(lower, "drivervalvebl", 1, true) then
+            return "DriverValveBLDisconnect"
+        end
+
+        if string.find(lower, "drivervalvetl", 1, true) then
+            return "DriverValveTLDisconnect"
+        end
+
+        if string.find(lower, "drivervalvedisconnect", 1, true) then
+            return "DriverValveDisconnect"
+        end
+
+        return button
+    end
+
+    local function ControlNominalCycles(button, key)
+        local lower = string.lower(
+            tostring(button or "") .. " " .. tostring(key or "")
+        )
+
+        if string.find(lower, "pneumaticbrake", 1, true)
+            or string.find(lower, "parkingbrake", 1, true)
+            or string.find(lower, "controller", 1, true)
+            or string.find(lower, "reverser", 1, true)
+            or string.find(lower, "wrench", 1, true)
+            or string.find(lower, "valve", 1, true)
+        then
+            return 35000
+        end
+
+        if string.find(lower, "toggle", 1, true)
+            or string.find(lower, "switch", 1, true)
+            or string.find(lower, "disconnect", 1, true)
+        then
+            return 65000
+        end
+
+        if string.find(lower, "door", 1, true) then
+            return 120000
+        end
+
+        return 90000
+    end
+
+    local function RegisterWearControlButton(
+        train,
+        key,
+        button
+    )
+        train.MEXDamageWearControlButtons =
+            train.MEXDamageWearControlButtons or {}
+        train.MEXDamageWearControlButtons[key] =
+            train.MEXDamageWearControlButtons[key] or {}
+
+        train.MEXDamageWearControlButtons[key][button] = true
+    end
+
+    local function BlockWearControl(
+        train,
+        key
+    )
+        if not IsSubwayTrain(train) then return end
+
+        EnsureButtonEventGuard(train)
+
+        train.MEXDamageWearBlockedButtons =
+            train.MEXDamageWearBlockedButtons or {}
+        train.MEXDamageFailedControls =
+            train.MEXDamageFailedControls or {}
+
+        train.MEXDamageFailedControls[key] = true
+
+        local registered =
+            train.MEXDamageWearControlButtons
+            and train.MEXDamageWearControlButtons[key]
+            or {}
+
+        local seeds = {}
+
+        for button in pairs(registered or {}) do
+            seeds[#seeds + 1] = button
+        end
+
+        if #seeds == 0 then
+            seeds[1] = key
+        end
+
+        for _, button in ipairs(
+            ExpandDetachedButtonAliases(
+                train,
+                seeds
+            )
+        ) do
+            train.MEXDamageWearBlockedButtons[button] = true
+        end
+
+        for _, button in ipairs(seeds) do
+            train.MEXDamageWearBlockedButtons[
+                button:gsub("^.+:", "")
+            ] = true
+        end
+
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            key
+        )
+        train:SetNW2Int(
+            "MEX.Damage.FailedControlCount",
+            table.Count(train.MEXDamageFailedControls)
+        )
+    end
+
+    function MEXD.RecordControlUse(
+        train,
+        button
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(button)
+            or button == ""
+            or not MEXD.IsPhysicalDamageEnabled()
+        then
+            return false
+        end
+
+        button = button:gsub("^.+:", "")
+        local key = ControlWearKey(button)
+
+        train.MEXDamageControlWear =
+            train.MEXDamageControlWear or {}
+        train.MEXDamageControlWearThreshold =
+            train.MEXDamageControlWearThreshold or {}
+        train.MEXDamageControlWearLastUse =
+            train.MEXDamageControlWearLastUse or {}
+        train.MEXDamageFailedControls =
+            train.MEXDamageFailedControls or {}
+
+        RegisterWearControlButton(
+            train,
+            key,
+            button
+        )
+
+        if train.MEXDamageFailedControls[key] then
+            return true
+        end
+
+        local now = CurTime()
+        if now - (
+            train.MEXDamageControlWearLastUse[key]
+            or -10
+        ) < 0.055
+        then
+            return false
+        end
+
+        train.MEXDamageControlWearLastUse[key] = now
+
+        local threshold =
+            train.MEXDamageControlWearThreshold[key]
+
+        if not threshold then
+            local nominal =
+                ControlNominalCycles(button, key)
+
+            threshold =
+                math.floor(
+                    nominal
+                    * Lerp(
+                        StableWearUnit(
+                            train,
+                            key,
+                            "control-life"
+                        ),
+                        0.72,
+                        1.35
+                    )
+                )
+
+            train.MEXDamageControlWearThreshold[key] =
+                math.max(threshold, 1000)
+        end
+
+        local uses =
+            (train.MEXDamageControlWear[key] or 0) + 1
+
+        train.MEXDamageControlWear[key] = uses
+
+        local realism =
+            MEXD.GetPhysicalDamageScale()
+        local effective =
+            uses * realism
+
+        if effective >= threshold then
+            BlockWearControl(train, key)
+            return true
+        end
+
+        return false
+    end
+
+    function MEXD.RepairWearControl(
+        train,
+        button
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(button)
+        then
+            return false
+        end
+
+        local key = ControlWearKey(button)
+
+        if not train.MEXDamageFailedControls
+            or not train.MEXDamageFailedControls[key]
+        then
+            return false
+        end
+
+        train.MEXDamageFailedControls[key] = nil
+
+        local registered =
+            train.MEXDamageWearControlButtons
+            and train.MEXDamageWearControlButtons[key]
+            or {}
+
+        for id in pairs(registered or {}) do
+            if train.MEXDamageWearBlockedButtons then
+                train.MEXDamageWearBlockedButtons[id] = nil
+            end
+        end
+
+        local seeds = {}
+        for id in pairs(registered or {}) do
+            seeds[#seeds + 1] = id
+        end
+
+        for _, id in ipairs(
+            ExpandDetachedButtonAliases(
+                train,
+                seeds
+            )
+        ) do
+            if train.MEXDamageWearBlockedButtons then
+                train.MEXDamageWearBlockedButtons[id] = nil
+            end
+        end
+
+        train.MEXDamageControlWear =
+            train.MEXDamageControlWear or {}
+        train.MEXDamageControlWear[key] = 0
+
+        train:SetNW2Int(
+            "MEX.Damage.FailedControlCount",
+            table.Count(train.MEXDamageFailedControls)
+        )
+
+        return true
+    end
+
+    function MEXD.GetControlWearFraction(
+        train,
+        button
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(button)
+        then
+            return 0, false
+        end
+
+        local key = ControlWearKey(button)
+        local uses =
+            train.MEXDamageControlWear
+            and train.MEXDamageControlWear[key]
+            or 0
+        local threshold =
+            train.MEXDamageControlWearThreshold
+            and train.MEXDamageControlWearThreshold[key]
+            or ControlNominalCycles(button, key)
+
+        local fraction = math.Clamp(
+            uses
+                * MEXD.GetPhysicalDamageScale()
+                / math.max(threshold, 1),
+            0,
+            1
+        )
+
+        return fraction,
+            train.MEXDamageFailedControls
+                and train.MEXDamageFailedControls[key] == true
+    end
+
     local function RestoreGRKVWearFailure(train)
         if not IsSubwayTrain(train) then return end
 
