@@ -40,7 +40,7 @@ LEGACY="$ADDONS_DIR/metrostroi-passenger-seats"
 mkdir -p "$ADDONS_DIR"
 
 if [[ "$(readlink -f "$REPO_DIR")" == "$(readlink -m "$DEST")" ]]; then
-    echo "Metrostroi Extended is already located in Garry's Mod addons:"
+    echo "Metrostroi Expanded is already located in Garry's Mod addons:"
     echo "  $DEST"
     exit 0
 fi
@@ -51,7 +51,7 @@ if [[ -d "$LEGACY" ]]; then
     rm -rf "$LEGACY"
 fi
 
-echo "Installing Metrostroi Extended..."
+echo "Installing Metrostroi Expanded..."
 echo "Source:      $REPO_DIR"
 echo "Destination: $DEST"
 
