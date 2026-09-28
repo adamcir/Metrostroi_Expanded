@@ -84,7 +84,7 @@ if SERVER then
         ELECTRICAL_SCALE_CVAR_NAME,
         "1.0",
         settingFlags,
-        "Electrical damage intensity",
+        "Electrical damage realism level",
         0.1,
         3.0
     )
@@ -156,6 +156,24 @@ function MEXD.GetElectricalDamageScale()
         0.1,
         3.0
     )
+end
+
+-- All three scale controls are realism multipliers:
+--   1.00 = the intended realistic baseline
+--   <1.00 = reduced / more forgiving than reality
+--   >1.00 = deliberately exaggerated ("over-realistic") damage
+-- Keep the raw getter values for addon compatibility; individual systems use
+-- them as multipliers around the 1.00 baseline.
+function MEXD.GetRealismDescription(scale)
+    scale = tonumber(scale) or 1
+
+    if scale < 0.95 then
+        return "reduced"
+    elseif scale > 1.05 then
+        return "over-realistic"
+    end
+
+    return "realistic"
 end
 
 local MEXD_SOURCE_FILE = "unknown"
@@ -1502,6 +1520,41 @@ if SERVER then
             0,
             1200
         )
+    end
+
+    local function HasThirdRailContact(train, voltage)
+        if not IsSubwayTrain(train) then return false end
+
+        local tr = istable(train.TR) and train.TR or nil
+        if tr then
+            local states = {
+                tr.ContactState1,
+                tr.ContactState2,
+                tr.ContactState3,
+                tr.ContactState4,
+            }
+
+            local exposesContactState = false
+            for _, state in ipairs(states) do
+                if state ~= nil then
+                    exposesContactState = true
+                    if tonumber(state) and tonumber(state) > 0.5 then
+                        return (tonumber(voltage) or 0) >= 100
+                    end
+                end
+            end
+
+            -- If the TR system exposes collector-contact state, zero active
+            -- contacts means the car is physically off the third rail even if
+            -- a stale downstream 750 V value survives for another tick.
+            if exposesContactState then
+                return false
+            end
+        end
+
+        -- Compatibility fallback for third-party trains without TR contact
+        -- metadata.
+        return (tonumber(voltage) or 0) >= 200
     end
 
     local function GetTrainElectricalWaterState(train)
@@ -3192,7 +3245,8 @@ if SERVER then
         train,
         dT,
         wetness,
-        thirdRailVoltage
+        thirdRailVoltage,
+        thirdRailConnected
     )
         if not IsSubwayTrain(train) then return end
 
@@ -3203,7 +3257,7 @@ if SERVER then
         )
 
         local hasThirdRail =
-            (tonumber(thirdRailVoltage) or 0) >= 200
+            thirdRailConnected == true
 
         if wetness >= WATER_BATTERY_COLLAPSE_START_WETNESS
             and not hasThirdRail
@@ -3211,12 +3265,13 @@ if SERVER then
             -- With no 750 V supply the flooded low-voltage network is fed only
             -- by the battery. Leakage/short-circuit load collapses it over a
             -- few seconds instead of leaving the train alive indefinitely.
+            local realism = MEXD.GetElectricalDamageScale()
             local rate =
                 (
-                    0.035
-                    + math.Clamp(wetness, 0, 1) * 0.095
+                    0.024
+                    + math.Clamp(wetness, 0, 1) * 0.072
                 )
-                * MEXD.GetElectricalDamageScale()
+                * realism
 
             level = math.Clamp(level + dT * rate, 0, 1)
         elseif hasThirdRail then
@@ -3234,6 +3289,12 @@ if SERVER then
             0.015,
             1
         )
+
+        if level >= WATER_BATTERY_BLACKOUT_LEVEL
+            and not hasThirdRail
+        then
+            factor = 0.015
+        end
 
         train.MEXDamageBatteryFloodFactor = factor
         train:SetNW2Float(
@@ -3724,10 +3785,12 @@ if SERVER then
             1
         )
 
+        local realism = MEXD.GetElectricalDamageScale()
         local glitchIntensity = math.Clamp(
             moistureLevel
                 * (0.38 + powerFactor * 0.42
-                    + currentFactor * 0.20),
+                    + currentFactor * 0.20)
+                * realism,
             0,
             1
         )
@@ -3958,7 +4021,8 @@ if SERVER then
                 * proximity
                 * immersion
                 * (0.30 + voltageFactor * 0.70)
-                * (0.25 + currentFactor * 0.75),
+                * (0.25 + currentFactor * 0.75)
+                * MEXD.GetElectricalDamageScale(),
             0,
             1
         )
@@ -4043,6 +4107,7 @@ if SERVER then
             train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
             train:SetNW2Float("MEX.Damage.DrySeconds", 0)
             train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
+            train:SetNW2Bool("MEX.Damage.ThirdRailConnected", false)
             train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
             train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
             train:SetNW2Float(
@@ -4061,6 +4126,8 @@ if SERVER then
 
         local wetness, sparkPos = SampleTrainWater(train)
         local thirdRailVoltage = GetThirdRailVoltage(train)
+        local thirdRailConnected =
+            HasThirdRailContact(train, thirdRailVoltage)
         local voltage, current, hv, lv =
             GetTrainElectricalWaterState(train)
 
@@ -4068,7 +4135,8 @@ if SERVER then
             train,
             dT,
             wetness,
-            thirdRailVoltage
+            thirdRailVoltage,
+            thirdRailConnected
         )
 
         -- Battery collapse changes the low-voltage state after Battery:Think.
@@ -4080,6 +4148,10 @@ if SERVER then
         train:SetNW2Float(
             "MEX.Damage.ThirdRailVoltage",
             thirdRailVoltage
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.ThirdRailConnected",
+            thirdRailConnected
         )
 
         train:SetNW2Float(
@@ -4195,7 +4267,14 @@ if SERVER then
             end
         end
 
-        if wetness >= WATER_BREAKER_TRIP_WETNESS and powered then
+        local breakerWetnessThreshold = math.Clamp(
+            WATER_BREAKER_TRIP_WETNESS
+                / math.max(electricalScale, 0.1),
+            0.035,
+            0.60
+        )
+
+        if wetness >= breakerWetnessThreshold and powered then
             TripAllFloodedCircuitBreakers(
                 train,
                 wetness,
@@ -5728,6 +5807,7 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
         train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
         train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
+        train:SetNW2Bool("MEX.Damage.ThirdRailConnected", false)
         train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
         train:SetNW2String("MEX.Damage.ChatteringRelay", "")
         train:SetNW2String("MEX.Damage.DoorWaterFault", "")
@@ -5771,6 +5851,7 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
         train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
         train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
+        train:SetNW2Bool("MEX.Damage.ThirdRailConnected", false)
         train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
         train:SetNW2String("MEX.Damage.ChatteringRelay", "")
         train:SetNW2String("MEX.Damage.DoorWaterFault", "")
@@ -6977,7 +7058,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V | battery flood %.2f | blackout %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery flood %.2f | blackout %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -6995,6 +7076,10 @@ if SERVER then
             train:GetNW2Float("MEX.Damage.WaterVoltage", 0),
             train:GetNW2Float("MEX.Damage.WaterCurrent", 0),
             train:GetNW2Float("MEX.Damage.ThirdRailVoltage", 0),
+            train:GetNW2Bool(
+                "MEX.Damage.ThirdRailConnected",
+                false
+            ) and "CONTACT" or "NO CONTACT",
             train:GetNW2Float("MEX.Damage.BatteryFloodLevel", 0),
             train:GetNW2Bool(
                 "MEX.Damage.LowVoltageBlackout",
@@ -7234,13 +7319,13 @@ if CLIENT then
 
                 local physicalScale = AddMEXUtilitySlider(
                     panel,
-                    "Physical damage intensity",
+                    "Physical damage realism level",
                     "mex_damage_set_physical_scale",
                     MEXD.GetPhysicalDamageScale
                 )
 
                 panel:Help(
-                    "1.00 = standard intensity, range 0.10 to 3.00."
+                    "1.00 = realistic baseline. Below 1.00 is more forgiving / less realistic. Above 1.00 deliberately exaggerates failures and is no longer the normal realistic setting. Range: 0.10 to 3.00."
                 )
 
                 panel:Help(
@@ -7262,7 +7347,7 @@ if CLIENT then
 
                 local deformationScale = AddMEXUtilitySlider(
                     panel,
-                    "Deformation intensity",
+                    "Deformation realism level",
                     "mex_damage_set_deformation_scale",
                     MEXD.GetDeformationScale,
                     MEXD.IsPhysicalDamageEnabled
@@ -7275,7 +7360,7 @@ if CLIENT then
                     "Deformation may be disabled while physical breakaway remains enabled."
                 )
                 panel:Help(
-                    "1.00 = standard intensity, range 0.10 to 3.00."
+                    "1.00 = realistic baseline. Below 1.00 is more forgiving / less realistic. Above 1.00 deliberately exaggerates failures and is no longer the normal realistic setting. Range: 0.10 to 3.00."
                 )
 
                 InstallMEXUtilityRefresh(
@@ -7313,7 +7398,7 @@ if CLIENT then
 
                 local scale = AddMEXUtilitySlider(
                     panel,
-                    "Electrical damage intensity",
+                    "Electrical damage realism level",
                     "mex_damage_set_electrical_scale",
                     MEXD.GetElectricalDamageScale
                 )
@@ -7324,7 +7409,7 @@ if CLIENT then
                     .. "and incorrect electrical gauge indications."
                 )
                 panel:Help(
-                    "1.00 = standard intensity, range 0.10 to 3.00."
+                    "1.00 = realistic baseline. Below 1.00 is more forgiving / less realistic. Above 1.00 deliberately exaggerates failures and is no longer the normal realistic setting. Range: 0.10 to 3.00."
                 )
 
                 InstallMEXUtilityRefresh(
