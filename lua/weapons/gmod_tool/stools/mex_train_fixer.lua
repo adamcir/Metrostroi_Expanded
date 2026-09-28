@@ -1,8 +1,8 @@
--- Metrostroi Extended - Train Fixer Tool
+-- Metrostroi Expanded - Train Fixer Tool
 -- Copyright (C) 2026 Adam Cir / Adava Software
 -- Licensed under GNU GPL v3.0.
 
-TOOL.Category = "Metrostroi Extended"
+TOOL.Category = "Metrostroi Expanded"
 TOOL.Name = "#tool.mex_train_fixer.name"
 TOOL.Command = nil
 TOOL.ConfigName = ""
@@ -14,7 +14,7 @@ if CLIENT then
     )
     language.Add(
         "tool.mex_train_fixer.desc",
-        "Repairs Metrostroi Extended train damage"
+        "Repairs Metrostroi Expanded train damage"
     )
     language.Add(
         "tool.mex_train_fixer.0",
@@ -146,7 +146,7 @@ function TOOL:RightClick(trace)
     if repaired > 0 then
         ply:ChatPrint(
             string.format(
-                "[Metrostroi Extended] Train Fixer repaired %d wagon%s.",
+                "[Metrostroi Expanded] Train Fixer repaired %d wagon%s.",
                 repaired,
                 repaired == 1 and "" or "s"
             )
@@ -172,7 +172,7 @@ function TOOL.BuildCPanel(panel)
         "Right click repairs every wagon in the connected consist."
     )
     panel:Help(
-        "Repairs deformation, detached parts, electrical failures, blown fuses and tripped protection created by Metrostroi Extended."
+        "Repairs deformation, detached parts, electrical failures, blown fuses and tripped protection created by Metrostroi Expanded."
     )
     panel:Help(
         "A repaired train can be damaged again immediately if it is still exposed to the original cause, for example live electrical equipment submerged in water."
