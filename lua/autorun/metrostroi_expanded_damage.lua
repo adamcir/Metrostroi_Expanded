@@ -2856,6 +2856,7 @@ if SERVER then
         )
 
         if wetness > 0.04 then
+            train.MEXDamageLastSubmergedAt = now
             train.MEXDamagePeakRecentWetness = math.max(
                 NumberOrZero(train.MEXDamagePeakRecentWetness),
                 wetness
@@ -2868,8 +2869,12 @@ if SERVER then
                 train.MEXDamageLastWetArcLocal =
                     train:WorldToLocal(sparkPos)
             end
-        elseif previousWetness > 0.04
-            and wetness <= 0.015
+        elseif wetness <= 0.015
+            and train.MEXDamageLastSubmergedAt
+            and now - train.MEXDamageLastSubmergedAt <= 1.5
+            and not (
+                NumberOrZero(train.MEXDamageSurfaceArcUntil) > now
+            )
         then
             local peak = math.Clamp(
                 math.max(
@@ -3439,6 +3444,7 @@ if SERVER then
         train.MEXDamageBatteryFloodFactor = nil
         train.MEXDamageBatteryFloodLevel = nil
         train.MEXDamagePreviousWetness = nil
+        train.MEXDamageLastSubmergedAt = nil
         train.MEXDamagePeakRecentWetness = nil
         train.MEXDamageSurfaceArcStarted = nil
         train.MEXDamageSurfaceArcUntil = nil
