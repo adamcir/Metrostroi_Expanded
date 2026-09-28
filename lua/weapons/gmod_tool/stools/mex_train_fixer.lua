@@ -14,19 +14,11 @@ if CLIENT then
     )
     language.Add(
         "tool.mex_train_fixer.desc",
-        "Repairs Metrostroi Expanded train damage"
+        "Repairs only the Metrostroi Expanded part you are aiming at"
     )
     language.Add(
         "tool.mex_train_fixer.0",
-        "Left click: repair one wagon. Right click: repair the whole consist."
-    )
-    language.Add(
-        "tool.mex_train_fixer.left",
-        "Repair wagon"
-    )
-    language.Add(
-        "tool.mex_train_fixer.right",
-        "Repair consist"
+        "Left click: repair only the targeted component, service point or damage zone."
     )
 end
 
@@ -42,6 +34,15 @@ end
 local function ResolveTrain(ent)
     if IsSubwayTrain(ent) then return ent end
     if not IsValid(ent) then return nil end
+
+    if ent:GetClass() == "mex_damage_debris"
+        and ent.GetSourceTrain
+    then
+        local source = ent:GetSourceTrain()
+        if IsSubwayTrain(source) then
+            return source
+        end
+    end
 
     local candidates = {
         ent:GetParent(),
@@ -66,7 +67,10 @@ local function CanRepair(ply, train)
     end
 
     if train.CPPICanTool
-        and not train:CPPICanTool(ply, "mex_train_fixer")
+        and not train:CPPICanTool(
+            ply,
+            "mex_train_fixer"
+        )
     then
         return false
     end
@@ -74,87 +78,367 @@ local function CanRepair(ply, train)
     return true
 end
 
-local function RepairTrain(train)
-    if not IsSubwayTrain(train) then return false end
-
-    local damage = MetrostroiExpandedDamage
-    if not istable(damage) or not isfunction(damage.Reset) then
-        return false
+local function RunningGearTarget(train, ent)
+    if not IsSubwayTrain(train)
+        or not IsValid(ent)
+    then
+        return nil
     end
 
-    damage.Reset(train)
+    if ent == train.FrontBogey then
+        return "front_bogey", "Front bogey"
+    elseif ent == train.RearBogey then
+        return "rear_bogey", "Rear bogey"
+    elseif ent == train.FrontCouple then
+        return "front_coupler", "Front coupler"
+    elseif ent == train.RearCouple then
+        return "rear_coupler", "Rear coupler"
+    end
 
-    train:EmitSound(
+    return nil
+end
+
+local function LocalServiceTarget(
+    train,
+    worldPos
+)
+    if not IsSubwayTrain(train)
+        or not isvector(worldPos)
+    then
+        return nil, "Unknown"
+    end
+
+    local localPos = train:WorldToLocal(worldPos)
+    local mins = train:OBBMins()
+    local maxs = train:OBBMaxs()
+    local center = (mins + maxs) * 0.5
+    local length = math.max(maxs.x - mins.x, 1)
+    local width = math.max(maxs.y - mins.y, 1)
+    local height = math.max(maxs.z - mins.z, 1)
+
+    -- These are service hotspots rather than claims about an exact battery-box
+    -- location on every supported train model. They give the player a stable
+    -- place to target hidden equipment that has no separate server entity.
+    local battery = Vector(
+        center.x - length * 0.16,
+        maxs.y - width * 0.10,
+        mins.z + height * 0.16
+    )
+    local grkv = Vector(
+        center.x + length * 0.12,
+        mins.y + width * 0.10,
+        mins.z + height * 0.16
+    )
+
+    local batteryDistance =
+        localPos:Distance(battery)
+    local grkvDistance =
+        localPos:Distance(grkv)
+
+    if batteryDistance <= 115
+        and batteryDistance <= grkvDistance
+    then
+        return "battery", "Battery service point"
+    end
+
+    if grkvDistance <= 115 then
+        return "grkv", "GRKV / rheostat controller service point"
+    end
+
+    local centerX = center.x
+    local centerY = center.y
+    local centerZ = center.z
+
+    local nx = math.abs(localPos.x - centerX)
+        / math.max((maxs.x - mins.x) * 0.5, 1)
+    local ny = math.abs(localPos.y - centerY)
+        / math.max((maxs.y - mins.y) * 0.5, 1)
+    local nz = math.abs(localPos.z - centerZ)
+        / math.max((maxs.z - mins.z) * 0.5, 1)
+
+    if nx >= ny and nx >= nz then
+        if localPos.x >= centerX then
+            return "front", "Front structure"
+        end
+        return "rear", "Rear structure"
+    elseif ny >= nz then
+        if localPos.y >= centerY then
+            return "right", "Right-side structure"
+        end
+        return "left", "Left-side structure"
+    end
+
+    if localPos.z >= centerZ then
+        return "roof", "Roof structure"
+    end
+
+    return "floor", "Floor / underframe structure"
+end
+
+local function TargetDescription(trace)
+    if not trace or not IsValid(trace.Entity) then
+        return nil, nil, nil
+    end
+
+    local ent = trace.Entity
+
+    if ent:GetClass() == "mex_damage_debris"
+        and ent.GetSourceTrain
+        and ent.GetComponentName
+    then
+        local train = ent:GetSourceTrain()
+        if IsSubwayTrain(train) then
+            local name = ent:GetComponentName()
+            return train,
+                "component:" .. tostring(name),
+                "Detached component: " .. tostring(name)
+        end
+    end
+
+    local train = ResolveTrain(ent)
+    if not IsSubwayTrain(train) then
+        return nil, nil, nil
+    end
+
+    local runningTarget, runningLabel =
+        RunningGearTarget(train, ent)
+
+    if runningTarget then
+        return train, runningTarget, runningLabel
+    end
+
+    local target, label =
+        LocalServiceTarget(
+            train,
+            trace.HitPos
+        )
+
+    return train, target, label
+end
+
+local function PlayRepairFeedback(
+    train,
+    worldPos
+)
+    if not IsSubwayTrain(train) then return end
+
+    sound.Play(
         "items/suitchargeok1.wav",
-        72,
+        isvector(worldPos)
+            and worldPos
+            or train:WorldSpaceCenter(),
+        62,
         105,
-        0.75
+        0.72
     )
 
     local effect = EffectData()
-    effect:SetOrigin(train:WorldSpaceCenter())
-    effect:SetEntity(train)
-    util.Effect("cball_bounce", effect, true, true)
-
-    return true
+    effect:SetOrigin(
+        isvector(worldPos)
+            and worldPos
+            or train:WorldSpaceCenter()
+    )
+    util.Effect(
+        "cball_bounce",
+        effect,
+        true,
+        true
+    )
 end
 
 function TOOL:LeftClick(trace)
-    local train = ResolveTrain(trace.Entity)
-    if not IsSubwayTrain(train) then return false end
+    local train, target =
+        TargetDescription(trace)
+
+    if not IsSubwayTrain(train)
+        or not isstring(target)
+    then
+        return false
+    end
 
     if CLIENT then return true end
 
     local ply = self:GetOwner()
-    if not CanRepair(ply, train) then return false end
+    if not CanRepair(ply, train) then
+        return false
+    end
 
-    return RepairTrain(train)
+    local damage = MetrostroiExpandedDamage
+    if not istable(damage) then
+        return false
+    end
+
+    local repaired = false
+
+    if string.sub(target, 1, 10) == "component:" then
+        local name = string.sub(target, 11)
+
+        if isfunction(
+            damage.RepairDetachedComponent
+        ) then
+            repaired =
+                damage.RepairDetachedComponent(
+                    train,
+                    name
+                )
+        end
+    elseif target == "front_bogey"
+        or target == "rear_bogey"
+        or target == "front_coupler"
+        or target == "rear_coupler"
+    then
+        if isfunction(
+            damage.RepairRunningGearEntity
+        ) then
+            repaired =
+                damage.RepairRunningGearEntity(
+                    trace.Entity
+                )
+        end
+    elseif isfunction(
+        damage.GetServiceTargetAtPosition
+    ) and isfunction(
+        damage.RepairServiceTarget
+    ) then
+        local authoritativeTarget =
+            damage.GetServiceTargetAtPosition(
+                train,
+                trace.HitPos
+            )
+
+        repaired =
+            damage.RepairServiceTarget(
+                train,
+                authoritativeTarget or target
+            )
+    end
+
+    if repaired then
+        PlayRepairFeedback(
+            train,
+            trace.HitPos
+        )
+    end
+
+    return repaired == true
 end
 
-function TOOL:RightClick(trace)
-    local train = ResolveTrain(trace.Entity)
-    if not IsSubwayTrain(train) then return false end
+-- The ordinary fixer intentionally has no whole-wagon/whole-consist action.
+-- Those operations belong to Admin Train Fixer.
+function TOOL:RightClick()
+    return false
+end
 
-    if CLIENT then return true end
+if CLIENT then
+    local function BoolState(value)
+        return value and "DAMAGED" or "OK"
+    end
 
-    local ply = self:GetOwner()
-    if not CanRepair(ply, train) then return false end
+    function TOOL:DrawHUD()
+        local ply = LocalPlayer()
+        if not IsValid(ply) then return end
 
-    local repaired = 0
-    local seen = {}
+        local trace = ply:GetEyeTrace()
+        local train, _, label =
+            TargetDescription(trace)
 
-    local function repair(candidate)
-        if not IsSubwayTrain(candidate) or seen[candidate] then
+        if not IsSubwayTrain(train) then
             return
         end
 
-        seen[candidate] = true
+        local x = ScrW() * 0.5 + 28
+        local y = ScrH() * 0.5 + 22
 
-        if CanRepair(ply, candidate) and RepairTrain(candidate) then
-            repaired = repaired + 1
-        end
-    end
-
-    if istable(train.WagonList) and #train.WagonList > 0 then
-        for _, wagon in ipairs(train.WagonList) do
-            repair(wagon)
-        end
-    else
-        repair(train)
-    end
-
-    if repaired > 0 then
-        ply:ChatPrint(
-            string.format(
-                "[Metrostroi Expanded] Train Fixer repaired %d wagon%s.",
-                repaired,
-                repaired == 1 and "" or "s"
-            )
+        draw.SimpleText(
+            "Train Fixer target: "
+                .. tostring(label or "unknown"),
+            "DermaDefaultBold",
+            x,
+            y,
+            Color(255, 215, 90),
+            TEXT_ALIGN_LEFT,
+            TEXT_ALIGN_TOP
         )
-        return true
-    end
 
-    return false
+        local batteryHealth = math.Clamp(
+            train:GetNW2Float(
+                "MEX.Damage.BatteryHealth",
+                1
+            ),
+            0,
+            1
+        )
+        local grkvWear = math.Clamp(
+            train:GetNW2Float(
+                "MEX.Damage.GRKVWear",
+                0
+            ),
+            0,
+            1
+        )
+
+        local lines = {
+            string.format(
+                "Battery: %.0f%% %s",
+                batteryHealth * 100,
+                train:GetNW2Bool(
+                    "MEX.Damage.BatteryFailed",
+                    false
+                ) or train:GetNW2Bool(
+                    "MEX.Damage.BatteryWaterFailed",
+                    false
+                ) and "FAILED" or ""
+            ),
+            string.format(
+                "GRKV wear: %.0f%% %s",
+                grkvWear * 100,
+                train:GetNW2Bool(
+                    "MEX.Damage.GRKVFailed",
+                    false
+                ) and "FAILED" or ""
+            ),
+            "Front bogey: "
+                .. BoolState(
+                    train:GetNW2Bool(
+                        "MEX.Damage.FrontBogeyDetached",
+                        false
+                    )
+                ),
+            "Rear bogey: "
+                .. BoolState(
+                    train:GetNW2Bool(
+                        "MEX.Damage.RearBogeyDetached",
+                        false
+                    )
+                ),
+            "Front coupler: "
+                .. BoolState(
+                    train:GetNW2Bool(
+                        "MEX.Damage.FrontCouplerDetached",
+                        false
+                    )
+                ),
+            "Rear coupler: "
+                .. BoolState(
+                    train:GetNW2Bool(
+                        "MEX.Damage.RearCouplerDetached",
+                        false
+                    )
+                ),
+        }
+
+        for i, line in ipairs(lines) do
+            draw.SimpleText(
+                line,
+                "DermaDefault",
+                x,
+                y + 18 + i * 15,
+                Color(235, 235, 235),
+                TEXT_ALIGN_LEFT,
+                TEXT_ALIGN_TOP
+            )
+        end
+    end
 end
 
 function TOOL.BuildCPanel(panel)
@@ -166,15 +450,21 @@ function TOOL.BuildCPanel(panel)
     )
 
     panel:Help(
-        "Left click repairs the selected wagon."
+        "Left click repairs only the exact target."
     )
     panel:Help(
-        "Right click repairs every wagon in the connected consist."
+        "Aim at detached debris to restore only that component."
     )
     panel:Help(
-        "Repairs deformation, detached parts, electrical failures, blown fuses and tripped protection created by Metrostroi Expanded."
+        "Aim directly at a bogey or coupler to repair only that running-gear item."
     )
     panel:Help(
-        "A repaired train can be damaged again immediately if it is still exposed to the original cause, for example live electrical equipment submerged in water."
+        "Hidden Battery and GRKV systems have service hotspots on the lower underframe; the HUD tells you when one is targeted."
+    )
+    panel:Help(
+        "A normal body hit repairs only the structural damage zone you are pointing at."
+    )
+    panel:Help(
+        "Whole-wagon, whole-consist and all-train repairs are available only through Admin Train Fixer."
     )
 end
