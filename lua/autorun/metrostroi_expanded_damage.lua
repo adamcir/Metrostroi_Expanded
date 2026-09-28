@@ -10,13 +10,23 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.16.0"
+MEXD.Version = "0.17.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
+local ELECTRICAL_ENABLED_CVAR_NAME = "mex_damage_electrical_enabled"
+
+local DAMAGE_SCALE_CVAR_NAME = "mex_damage_physical_scale"
+local DEFORMATION_SCALE_CVAR_NAME = "mex_damage_deformation_scale"
+local ELECTRICAL_SCALE_CVAR_NAME = "mex_damage_electrical_scale"
 
 local damageEnabledConVar
 local deformationEnabledConVar
+local electricalEnabledConVar
+
+local damageScaleConVar
+local deformationScaleConVar
+local electricalScaleConVar
 
 if SERVER then
     local settingFlags = bit.bor(
@@ -29,18 +39,54 @@ if SERVER then
         DAMAGE_ENABLED_CVAR_NAME,
         "1",
         settingFlags,
-        "Enable Metrostroi Expanded damage system",
+        "Enable Metrostroi Expanded physical/component damage",
         0,
         1
     )
 
     deformationEnabledConVar = CreateConVar(
         DEFORMATION_ENABLED_CVAR_NAME,
-        "1",
+        "0",
         settingFlags,
-        "Enable Metrostroi Expanded visual deformation",
+        "Enable Metrostroi Expanded ALPHA visual deformation",
         0,
         1
+    )
+
+    electricalEnabledConVar = CreateConVar(
+        ELECTRICAL_ENABLED_CVAR_NAME,
+        "1",
+        settingFlags,
+        "Enable Metrostroi Expanded electrical damage",
+        0,
+        1
+    )
+
+    damageScaleConVar = CreateConVar(
+        DAMAGE_SCALE_CVAR_NAME,
+        "1.0",
+        settingFlags,
+        "Physical/component damage intensity",
+        0.1,
+        3.0
+    )
+
+    deformationScaleConVar = CreateConVar(
+        DEFORMATION_SCALE_CVAR_NAME,
+        "1.0",
+        settingFlags,
+        "Visual deformation intensity",
+        0.1,
+        3.0
+    )
+
+    electricalScaleConVar = CreateConVar(
+        ELECTRICAL_SCALE_CVAR_NAME,
+        "1.0",
+        settingFlags,
+        "Electrical damage intensity",
+        0.1,
+        3.0
     )
 end
 
@@ -50,13 +96,65 @@ local function ReadBoolConVar(name, defaultValue)
     return convar:GetBool()
 end
 
-function MEXD.IsDamageEnabled()
+local function ReadFloatConVar(name, defaultValue, minValue, maxValue)
+    local convar = GetConVar(name)
+    local value = convar and convar:GetFloat() or defaultValue
+
+    return math.Clamp(
+        tonumber(value) or defaultValue,
+        minValue,
+        maxValue
+    )
+end
+
+function MEXD.IsPhysicalDamageEnabled()
     return ReadBoolConVar(DAMAGE_ENABLED_CVAR_NAME, true)
 end
 
+-- Backward-compatible alias used by older parts/addons.
+function MEXD.IsDamageEnabled()
+    return MEXD.IsPhysicalDamageEnabled()
+end
+
 function MEXD.IsDeformationEnabled()
-    return MEXD.IsDamageEnabled()
-        and ReadBoolConVar(DEFORMATION_ENABLED_CVAR_NAME, true)
+    return ReadBoolConVar(DEFORMATION_ENABLED_CVAR_NAME, false)
+end
+
+function MEXD.IsElectricalDamageEnabled()
+    return ReadBoolConVar(ELECTRICAL_ENABLED_CVAR_NAME, true)
+end
+
+function MEXD.IsAnyDamageEnabled()
+    return MEXD.IsPhysicalDamageEnabled()
+        or MEXD.IsDeformationEnabled()
+        or MEXD.IsElectricalDamageEnabled()
+end
+
+function MEXD.GetPhysicalDamageScale()
+    return ReadFloatConVar(
+        DAMAGE_SCALE_CVAR_NAME,
+        1.0,
+        0.1,
+        3.0
+    )
+end
+
+function MEXD.GetDeformationScale()
+    return ReadFloatConVar(
+        DEFORMATION_SCALE_CVAR_NAME,
+        1.0,
+        0.1,
+        3.0
+    )
+end
+
+function MEXD.GetElectricalDamageScale()
+    return ReadFloatConVar(
+        ELECTRICAL_SCALE_CVAR_NAME,
+        1.0,
+        0.1,
+        3.0
+    )
 end
 
 local MEXD_SOURCE_FILE = "unknown"
