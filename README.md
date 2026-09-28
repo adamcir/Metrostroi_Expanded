@@ -514,8 +514,9 @@ The protection model follows the actual systems exposed by each Metrostroi train
 - ARS/ALS/BARS and other sensitive electronics can also go offline as actual wet electronic modules
 - significant live flooding trips all exposed automatic circuit breakers through their normal Metrostroi trip/open path; the water scan/re-trip cadence is 0.05 s, matching the generic Metrostroi relay opening time
 - true third-rail supply is taken from `TR.Main750V` when available
-- when the flooded car is no longer connected to the third rail, leakage/short-circuit load progressively collapses the battery/low-voltage supply over several seconds
-- after the low-voltage blackout threshold is reached, non-manual electrical relays and sensitive electronics are forced offline and electrical gauges/indicators go dark; mechanical/manual switch positions are left unchanged
+- third-rail connection now uses the TR collector `ContactState1..4` values when available instead of trusting voltage alone; a disconnected collector therefore starts the flood battery-collapse path even if a stale voltage value remains for a simulation tick
+- when the flooded car is no longer physically connected to the third rail, leakage/short-circuit load progressively collapses the battery/low-voltage supply; at realism level `1.00`, severe/full flooding typically reaches blackout in roughly 9–12 seconds, while shallower flooding takes longer
+- after the low-voltage blackout threshold is reached, the Battery voltage is clamped near zero, `Electric.Aux80V`, `Lights80V`, `Battery80V` and compatible low-voltage outputs are forced to zero, non-manual electrical relays and sensitive electronics are forced offline, and electrical gauges/indicators go dark; mechanical/manual switch positions are left unchanged
 - light/lighting packed outputs can be corrupted by wet wiring, allowing lamps to flicker, extinguish, or flash on even when their normal switch state says otherwise
 - electrical speed indications require instrument/control power; when the low-voltage cab/instrument supply is dead the displayed speed ratio is forced to zero
 - while wet and still powered, the speedometer can jump, fall to zero, briefly indicate a wrong value, or flicker
@@ -531,12 +532,12 @@ The damage system is split into physical/component damage, optional visual defor
 
 - **Physical Damage & Deformation**
   - `Enable physical damage`
-  - `Physical damage intensity` (0.10–3.00)
+  - `Physical damage realism level` (0.10–3.00)
   - `Enable deformation (ALPHA - not recommended)`
-  - `Deformation intensity` (0.10–3.00)
+  - `Deformation realism level` (0.10–3.00)
 - **Electrical Damage**
   - `Enable electrical damage`
-  - `Electrical damage intensity` (0.10–3.00)
+  - `Electrical damage realism level` (0.10–3.00)
 
 Deformation is subordinate to physical damage: it cannot be enabled while physical damage is disabled, and disabling physical damage automatically disables deformation. Deformation can still be disabled independently while physical component breakaway remains active.
 
@@ -553,4 +554,4 @@ Replicated archived server ConVars:
 - `mex_damage_electrical_enabled`
 - `mex_damage_electrical_scale`
 
-`mex_damage_status` prints the ON/OFF state and intensity of the damage subsystems before the per-train damage details.
+`mex_damage_status` prints the ON/OFF state and realism level of each damage subsystem. `1.00` is the intended realistic baseline; values below `1.00` are deliberately more forgiving, while values above `1.00` deliberately exaggerate damage/failure behaviour and are not the normal realistic setting.
