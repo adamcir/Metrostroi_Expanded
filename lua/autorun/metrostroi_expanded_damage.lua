@@ -7313,8 +7313,14 @@ if SERVER then
 
         train.MEXDamageLegacyRelaySnapshot =
             train.MEXDamageLegacyRelaySnapshot or {}
+        train.MEXDamageRelayWear =
+            train.MEXDamageRelayWear or {}
+        train.MEXDamageRelayWearThreshold =
+            train.MEXDamageRelayWearThreshold or {}
+        train.MEXDamageWearFailedSystems =
+            train.MEXDamageWearFailedSystems or {}
 
-        local operations = 0
+        local maxRelayWear = 0
 
         for systemName, system in pairs(train.Systems) do
             systemName = tostring(systemName)
@@ -7343,74 +7349,264 @@ if SERVER then
                 systemName
             ] = value
 
-            if previous ~= nil
-                and math.abs(value - previous) > 0.40
-            then
-                operations = operations + 1
-            end
-        end
-
-        if operations > 0 then
-            train.MEXDamageLegacyWear =
-                math.Clamp(
-                    NumberOrZero(
-                        train.MEXDamageLegacyWear
-                    )
-                    + operations
-                    * LEGACY_RELAY_WEAR_PER_OPERATION
-                    * realism,
-                    0,
-                    1.25
+            local wear =
+                NumberOrZero(
+                    train.MEXDamageRelayWear[systemName]
                 )
 
-            train:SetNW2Float(
-                "MEX.Damage.LegacyWear",
+            if previous ~= nil
+                and math.abs(value - previous) > 0.40
+                and not train.MEXDamageWearFailedSystems[
+                    systemName
+                ]
+            then
+                local nominal =
+                    RelayNominalCycles(
+                        systemName,
+                        system
+                    )
+
+                local current = 0
+                if istable(train.Electric) then
+                    current = math.max(
+                        math.abs(
+                            tonumber(train.Electric.I13)
+                            or 0
+                        ),
+                        math.abs(
+                            tonumber(train.Electric.I24)
+                            or 0
+                        ),
+                        math.abs(
+                            tonumber(train.Electric.Itotal)
+                            or 0
+                        )
+                    )
+                end
+
+                local loadMultiplier =
+                    1
+                    + math.Clamp(
+                        (current - 300) / 900,
+                        0,
+                        2.2
+                    )
+
+                wear = wear
+                    + (
+                        1
+                        / math.max(nominal, 1)
+                    )
+                    * loadMultiplier
+                    * realism
+
+                train.MEXDamageRelayWear[
+                    systemName
+                ] = wear
+            end
+
+            local threshold =
+                train.MEXDamageRelayWearThreshold[
+                    systemName
+                ]
+
+            if not threshold then
+                threshold = Lerp(
+                    StableWearUnit(
+                        train,
+                        systemName,
+                        "relay-life"
+                    ),
+                    0.76,
+                    1.34
+                )
+
+                train.MEXDamageRelayWearThreshold[
+                    systemName
+                ] = threshold
+            end
+
+            maxRelayWear = math.max(
+                maxRelayWear,
                 math.Clamp(
-                    train.MEXDamageLegacyWear,
+                    wear
+                        / math.max(threshold, 0.01),
                     0,
                     1
                 )
             )
-        end
 
-        train.MEXDamageLegacyFailureThreshold =
-            train.MEXDamageLegacyFailureThreshold
-            or math.Rand(0.90, 1.05)
-
-        if NumberOrZero(train.MEXDamageLegacyWear)
-            >= train.MEXDamageLegacyFailureThreshold
-        then
-            local active, inactive =
-                CollectWaterFailureCandidates(train)
-            local source =
-                #active > 0 and active or inactive
-
-            if #source > 0 then
-                local item =
-                    source[math.random(1, #source)]
-
+            if wear >= threshold
+                and not train.MEXDamageWearFailedSystems[
+                    systemName
+                ]
+            then
                 if FailElectricalSystemOpen(
                     train,
-                    item.name,
+                    systemName,
                     {
                         cause = "wear",
                         temporary = false,
                     }
                 ) then
+                    train.MEXDamageWearFailedSystems[
+                        systemName
+                    ] = true
+
                     train:SetNW2String(
                         "MEX.Damage.WearFailure",
-                        item.name
+                        systemName
                     )
-
-                    train.MEXDamageLegacyWear = 0.45
-                    train:SetNW2Float(
-                        "MEX.Damage.LegacyWear",
-                        0.45
+                    train:SetNW2Int(
+                        "MEX.Damage.FailedRelayCount",
+                        table.Count(
+                            train.MEXDamageWearFailedSystems
+                        )
                     )
-                    train.MEXDamageLegacyFailureThreshold =
-                        math.Rand(0.88, 1.05)
                 end
             end
+        end
+
+        train.MEXDamageLegacyWear = maxRelayWear
+        train:SetNW2Float(
+            "MEX.Damage.LegacyWear",
+            maxRelayWear
+        )
+
+        EnsureWearLightGuard(train)
+        EnsureIndicatorWearGuard(train)
+
+        -- Lamp wear contains both switching fatigue and operating hours.
+        -- Headlights run hotter and have a shorter nominal service life than
+        -- low-power cab/panel lamps.
+        for index, state in pairs(
+            train.MEXDamageWearLightState or {}
+        ) do
+            if not state.on
+                or (
+                    train.MEXDamageWearFailedLights
+                    and train.MEXDamageWearFailedLights[index]
+                )
+            then
+                continue
+            end
+
+            local lightData =
+                istable(train.Lights)
+                    and train.Lights[index]
+                    or nil
+            local kind =
+                istable(lightData)
+                    and tostring(lightData[1] or "")
+                    or ""
+
+            local serviceHours =
+                kind == "headlight"
+                    and 450
+                    or 1400
+
+            local brightness =
+                math.Clamp(
+                    tonumber(state.brightness) or 1,
+                    0.05,
+                    2.5
+                )
+
+            train.MEXDamageWearLight[index] =
+                NumberOrZero(
+                    train.MEXDamageWearLight[index]
+                )
+                + dT
+                    / (serviceHours * 3600)
+                    * math.pow(brightness, 1.18)
+                    * realism
+
+            local threshold =
+                train.MEXDamageWearLightThreshold
+                and train.MEXDamageWearLightThreshold[index]
+                or 1
+
+            if train.MEXDamageWearLight[index]
+                >= threshold
+            then
+                train.MEXDamageWearFailedLights[index] =
+                    true
+
+                train:SetNW2Bool(
+                    "MEX.Damage.WearLight."
+                        .. tostring(index),
+                    true
+                )
+                train:SetNW2String(
+                    "MEX.Damage.WearFailure",
+                    "Light #" .. tostring(index)
+                )
+                train:SetNW2Int(
+                    "MEX.Damage.FailedLightCount",
+                    table.Count(
+                        train.MEXDamageWearFailedLights
+                    )
+                )
+
+                if train.MEXDamageWearOriginalSetLightPower then
+                    train:MEXDamageWearOriginalSetLightPower(
+                        index,
+                        false,
+                        0
+                    )
+                end
+            end
+        end
+
+        -- Packed indicator lamps are also individual consumable components.
+        for index, on in pairs(
+            train.MEXDamageIndicatorState or {}
+        ) do
+            if not on
+                or (
+                    train.MEXDamageFailedIndicators
+                    and train.MEXDamageFailedIndicators[index]
+                )
+            then
+                continue
+            end
+
+            train.MEXDamageIndicatorWear[index] =
+                NumberOrZero(
+                    train.MEXDamageIndicatorWear[index]
+                )
+                + dT
+                    / (2200 * 3600)
+                    * realism
+
+            local threshold =
+                train.MEXDamageIndicatorThreshold
+                and train.MEXDamageIndicatorThreshold[index]
+                or 1
+
+            if train.MEXDamageIndicatorWear[index]
+                >= threshold
+            then
+                train.MEXDamageFailedIndicators[index] =
+                    true
+
+                train:SetNW2Bool(
+                    "MEX.Damage.WearIndicator."
+                        .. tostring(index),
+                    true
+                )
+                train:SetNW2String(
+                    "MEX.Damage.WearFailure",
+                    "Indicator #" .. tostring(index)
+                )
+                train:SetNW2Int(
+                    "MEX.Damage.FailedIndicatorCount",
+                    table.Count(
+                        train.MEXDamageFailedIndicators
+                    )
+                )
+            end
+        end
         end
     end
 
