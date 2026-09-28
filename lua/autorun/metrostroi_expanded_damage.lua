@@ -1226,6 +1226,8 @@ if SERVER then
     local WATER_FAILURE_BASE_EXPOSURE = 0.85
     local WATER_PLAYER_RADIUS = 220
     local WATER_SHOCK_COOLDOWN = 0.32
+    local WATER_SURFACE_DRY_SECONDS = 45
+    local WATER_DEEP_DRY_SECONDS = 180
 
     local WATER_ARC_SOUNDS = {
         "ambient/energy/zap1.wav",
@@ -1784,6 +1786,75 @@ if SERVER then
         end
     end
 
+    local function IsManualOperatorElectricalSystem(
+        systemName,
+        system
+    )
+        if not isstring(systemName) or not istable(system) then
+            return false
+        end
+
+        local relayType = tostring(system.relay_type or "")
+
+        -- These are physical panel switches, breaker handles or mechanical HV
+        -- operators. Water may make the circuit behind them ineffective, but
+        -- it must not freeze the visible handle in one position.
+        if relayType == "Switch"
+            or relayType == "VA21-29"
+            or relayType == "GV_10ZH"
+        then
+            return true
+        end
+
+        if IsCircuitBreakerSystem(systemName, system)
+            or IsFuseSystemName(systemName)
+        then
+            return true
+        end
+
+        return IsMechanicalElectricalException(
+            systemName,
+            "",
+            {}
+        )
+    end
+
+    local SENSITIVE_WATER_ELECTRONICS = {
+        "ars",
+        "als",
+        "bars",
+        "bpsn",
+        "bup",
+        "buv",
+        "bep",
+        "igla",
+        "asnp",
+        "upo",
+        "pa",
+        "puav",
+        "vityaz",
+        "inverter",
+        "async",
+        "radio",
+        "rri",
+        "announcer",
+        "informator",
+        "computer",
+        "display",
+    }
+
+    local function WaterElectronicSensitivity(systemName)
+        local lower = string.lower(tostring(systemName or ""))
+
+        for _, token in ipairs(SENSITIVE_WATER_ELECTRONICS) do
+            if string.find(lower, token, 1, true) then
+                return "sensitive"
+            end
+        end
+
+        return "normal"
+    end
+
     local function CollectWaterFailureCandidates(train)
         local active = {}
         local inactive = {}
@@ -1805,13 +1876,21 @@ if SERVER then
                 continue
             end
 
-            if IsMechanicalElectricalException(
+            -- Important: do not water-fail the operator itself. A soaked VU,
+            -- battery switch, breaker lever etc. must remain physically
+            -- movable. The downstream circuit/equipment may fail instead.
+            if IsManualOperatorElectricalSystem(
                 systemName,
-                "",
-                {}
+                system
             ) then
                 continue
             end
+
+            local item = {
+                name = systemName,
+                sensitivity =
+                    WaterElectronicSensitivity(systemName),
+            }
 
             local target = tonumber(system.TargetValue)
             local value = tonumber(system.Value)
@@ -1820,9 +1899,9 @@ if SERVER then
                 or (value and value > 0.05)
 
             if energized then
-                active[#active + 1] = systemName
+                active[#active + 1] = item
             else
-                inactive[#inactive + 1] = systemName
+                inactive[#inactive + 1] = item
             end
         end
 
@@ -1833,7 +1912,8 @@ if SERVER then
         train,
         worldPos,
         voltage,
-        current
+        current,
+        wetness
     )
         local active, inactive =
             CollectWaterFailureCandidates(train)
@@ -1841,8 +1921,44 @@ if SERVER then
         local source = #active > 0 and active or inactive
         if #source <= 0 then return false end
 
-        local systemName = source[math.random(1, #source)]
-        if not FailElectricalSystemOpen(train, systemName) then
+        local item = source[math.random(1, #source)]
+        local systemName = item.name
+        local sensitive = item.sensitivity == "sensitive"
+
+        -- Most water faults are temporary once the hardware is fully dry.
+        -- Sensitive electronics dry much more slowly and are more likely to be
+        -- permanently damaged by an energized immersion event.
+        local permanentChance = math.Clamp(
+            (sensitive and 0.06 or 0.015)
+                + math.Clamp(voltage / 750, 0, 1) *
+                    (sensitive and 0.18 or 0.06)
+                + math.Clamp(current / 600, 0, 1) *
+                    (sensitive and 0.12 or 0.04)
+                + math.Clamp(tonumber(wetness) or 0, 0, 1) *
+                    (sensitive and 0.08 or 0.025),
+            0,
+            sensitive and 0.42 or 0.14
+        )
+
+        local permanent =
+            math.Rand(0, 1) < permanentChance
+
+        local options = {
+            cause = "water",
+            temporary = not permanent,
+            waterSensitivity =
+                sensitive and "sensitive" or "normal",
+            minDrySeconds =
+                sensitive and 80 or 25,
+            recoverMoisture =
+                sensitive and 0.055 or 0.14,
+        }
+
+        if not FailElectricalSystemOpen(
+            train,
+            systemName,
+            options
+        ) then
             return false
         end
 
@@ -1857,7 +1973,11 @@ if SERVER then
         )
         train:SetNW2Float(
             "MEX.Damage.electrical",
-            math.Clamp(electrical + 0.08, 0, 1)
+            math.Clamp(
+                electrical + (sensitive and 0.10 or 0.06),
+                0,
+                1
+            )
         )
 
         EmitWaterElectricalArc(
@@ -1869,6 +1989,144 @@ if SERVER then
         )
 
         return true
+    end
+
+    local function UpdateWaterMoistureState(
+        train,
+        wetness,
+        dT
+    )
+        local surface = math.Clamp(
+            NumberOrZero(train.MEXDamageWaterMoisture),
+            0,
+            1
+        )
+        local deep = math.Clamp(
+            NumberOrZero(train.MEXDamageDeepMoisture),
+            0,
+            1
+        )
+
+        if wetness > 0.015 then
+            train.MEXDamageDrySince = nil
+
+            surface = math.Clamp(
+                surface
+                    + dT * (0.045 + wetness * 0.11),
+                0,
+                1
+            )
+
+            deep = math.Clamp(
+                deep
+                    + dT * wetness * 0.035,
+                0,
+                1
+            )
+        else
+            if not train.MEXDamageDrySince then
+                train.MEXDamageDrySince = CurTime()
+            end
+
+            surface = math.max(
+                0,
+                surface - dT / WATER_SURFACE_DRY_SECONDS
+            )
+            deep = math.max(
+                0,
+                deep - dT / WATER_DEEP_DRY_SECONDS
+            )
+        end
+
+        train.MEXDamageWaterMoisture = surface
+        train.MEXDamageDeepMoisture = deep
+
+        local drySeconds =
+            train.MEXDamageDrySince
+            and math.max(0, CurTime() - train.MEXDamageDrySince)
+            or 0
+
+        train:SetNW2Float(
+            "MEX.Damage.WaterMoisture",
+            surface
+        )
+        train:SetNW2Float(
+            "MEX.Damage.DeepMoisture",
+            deep
+        )
+        train:SetNW2Float(
+            "MEX.Damage.DrySeconds",
+            drySeconds
+        )
+
+        return surface, deep, drySeconds
+    end
+
+    local function RecoverDriedWaterFailures(
+        train,
+        surfaceMoisture,
+        deepMoisture,
+        drySeconds
+    )
+        if not istable(train.MEXDamageElectricalFailureSystems) then
+            return
+        end
+
+        local recover = {}
+
+        for systemName, data in pairs(
+            train.MEXDamageElectricalFailureSystems
+        ) do
+            if not istable(data)
+                or data.permanent == true
+                or data.temporary ~= true
+                or not (data.causes and data.causes.water)
+            then
+                continue
+            end
+
+            local sensitive =
+                data.waterSensitivity == "sensitive"
+            local moisture =
+                sensitive and deepMoisture or surfaceMoisture
+            local threshold =
+                tonumber(data.recoverMoisture)
+                or (sensitive and 0.055 or 0.14)
+            local minDry =
+                tonumber(data.minDrySeconds)
+                or (sensitive and 80 or 25)
+
+            if moisture <= threshold
+                and drySeconds >= minDry
+            then
+                recover[#recover + 1] = systemName
+            end
+        end
+
+        for _, systemName in ipairs(recover) do
+            RestoreSingleElectricalFailure(
+                train,
+                systemName,
+                true
+            )
+        end
+
+        if #recover > 0 then
+            local failures =
+                train.MEXDamageElectricalFailureSystems
+            local anyFailure =
+                istable(failures)
+                and next(failures) ~= nil
+
+            train:SetNW2Bool(
+                "MEX.Damage.ElectricalFault",
+                anyFailure
+                    or (
+                        istable(train.MEXDamageBlownFuses)
+                        and next(train.MEXDamageBlownFuses) ~= nil
+                    )
+            )
+        end
     end
 
     local function DistanceToTrainOBB(train, worldPos)
@@ -2098,6 +2356,20 @@ if SERVER then
             hazard
         )
 
+        local surfaceMoisture, deepMoisture, drySeconds =
+            UpdateWaterMoistureState(
+                train,
+                wetness,
+                dT
+            )
+
+        RecoverDriedWaterFailures(
+            train,
+            surfaceMoisture,
+            deepMoisture,
+            drySeconds
+        )
+
         local exposure = NumberOrZero(
             train.MEXDamageWaterExposure
         )
@@ -2206,7 +2478,8 @@ if SERVER then
                 train,
                 sparkPos,
                 voltage,
-                current
+                current,
+                wetness
             ) then
                 train.MEXDamageWaterNextFailureExposure =
                     exposure + math.Rand(0.55, 1.10)
@@ -3618,6 +3891,9 @@ if SERVER then
         RestoreTrippedProtection(train)
 
         train.MEXDamageWaterExposure = 0
+        train.MEXDamageWaterMoisture = 0
+        train.MEXDamageDeepMoisture = 0
+        train.MEXDamageDrySince = nil
         train.MEXDamageWaterNextFailureExposure = nil
         train.MEXDamageNextWaterArc = nil
         train:SetNW2Float("MEX.Damage.WaterWetness", 0)
@@ -3625,6 +3901,9 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
         train:SetNW2Float("MEX.Damage.WaterHazard", 0)
         train:SetNW2Float("MEX.Damage.WaterExposure", 0)
+        train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
+        train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
+        train:SetNW2Float("MEX.Damage.DrySeconds", 0)
         train:SetNW2String("MEX.Damage.LastProtection", "")
 
         hook.Run("MetrostroiExpandedDamageReset", train)
