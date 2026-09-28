@@ -13383,6 +13383,67 @@ if CLIENT then
         train.MEXDamageDeadBindings = {}
     end
 
+    local function RepairDetachedClientComponent(
+        train,
+        repairedName
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(repairedName)
+            or not istable(train.MEXDamageV4ServerDetached)
+            or not train.MEXDamageV4ServerDetached[repairedName]
+        then
+            return
+        end
+
+        local remaining = {}
+
+        for name, data in pairs(
+            train.MEXDamageV4ServerDetached
+        ) do
+            if name ~= repairedName then
+                remaining[name] = {
+                    debris = istable(data)
+                        and data.debris
+                        or nil,
+                }
+            end
+        end
+
+        RestoreDetachedComponents(train)
+        RestoreBrokenGlassMaterials(train)
+        RestoreInteractivePanels(train)
+        train.MEXDamageV4PanelProps = nil
+        train.MEXDamageV4PropCache = nil
+
+        for name, data in pairs(remaining) do
+            MarkDetachedClient(
+                train,
+                name,
+                data.debris
+            )
+        end
+    end
+
+    net.Receive("MEX.ComponentRepaired", function()
+        local train = net.ReadEntity()
+        local name = net.ReadString()
+
+        if not IsSubwayTrain(train)
+            or not isstring(name)
+        then
+            return
+        end
+
+        RepairDetachedClientComponent(
+            train,
+            name
+        )
+
+        surface.PlaySound(
+            "items/suitchargeok1.wav"
+        )
+    end)
+
     net.Receive("MEX.ComponentDetached", function()
         local train = net.ReadEntity()
         local name = net.ReadString()
