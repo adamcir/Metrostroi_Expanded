@@ -2766,6 +2766,56 @@ if SERVER then
         return false
     end
 
+    local function RestoreWaterFailedVisibleOperators(train)
+        if not IsSubwayTrain(train)
+            or not istable(
+                train.MEXDamageElectricalFailureSystems
+            )
+        then
+            return
+        end
+
+        local restore = {}
+
+        for systemName, data in pairs(
+            train.MEXDamageElectricalFailureSystems
+        ) do
+            local causes =
+                istable(data)
+                and data.causes
+                or nil
+
+            if not istable(causes)
+                or not causes.water
+                or causes.detached
+                or causes.wear
+                or causes.fuse
+            then
+                continue
+            end
+
+            local system = train[systemName]
+            if istable(system)
+                and IsVisiblePanelOperatorSystem(
+                    train,
+                    tostring(systemName),
+                    system
+                )
+            then
+                restore[#restore + 1] =
+                    tostring(systemName)
+            end
+        end
+
+        for _, systemName in ipairs(restore) do
+            RestoreSingleElectricalFailure(
+                train,
+                systemName,
+                true
+            )
+        end
+    end
+
     local SENSITIVE_WATER_ELECTRONICS = {
         "ars",
         "als",
@@ -5323,6 +5373,11 @@ if SERVER then
             "MEX.Damage.WaterHazard",
             hazard
         )
+
+        -- Older damage state or a previous wet short may have wrapped a real
+        -- panel switch as an electrical failure. Keep the physical operator
+        -- movable even when the battery and the circuit behind it are dead.
+        RestoreWaterFailedVisibleOperators(train)
 
         RecoverDriedWaterFailures(
             train,
