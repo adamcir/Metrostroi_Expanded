@@ -1,6 +1,6 @@
 ENT.Type = "anim"
 ENT.Base = "base_anim"
-ENT.PrintName = "Metrostroi Expanded Damage Debris"
+ENT.PrintName = "Metrostroi Extended Damage Debris"
 ENT.Spawnable = false
 ENT.AdminOnly = false
 
