@@ -3294,6 +3294,21 @@ if SERVER then
                 continue
             end
 
+            -- U1/U2/U3 are door distributor solenoids on the 81-718 family,
+            -- but those short names can be reused by third-party trains. Only
+            -- treat them as door hardware when a pneumatic door state exists.
+            if (lower == "u1" or lower == "u2" or lower == "u3")
+                and (
+                    not istable(train.Pneumatic)
+                    or (
+                        not istable(train.Pneumatic.LeftDoorState)
+                        and not istable(train.Pneumatic.RightDoorState)
+                    )
+                )
+            then
+                continue
+            end
+
             if not IsRelayLikeElectricalSystem(system)
                 or not isfunction(system.TriggerInput)
             then
