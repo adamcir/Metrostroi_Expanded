@@ -661,23 +661,36 @@ If protection cannot clear the live fault, prolonged water exposure can then esc
 
 The simulation deliberately relies on the protection and electrical systems actually exposed by the current train addon. It cannot reproduce wiring or protective devices that the train itself does not model.
 
-## Train Fixer Toolgun
+## Train Fixer Toolguns
+
+### Train Fixer
 
 Toolgun category: **Metrostroi Expanded → Train Fixer**
 
-- **Left click** repairs the selected wagon.
-- **Right click** repairs all wagons in the selected train's `WagonList`.
+The normal Train Fixer is deliberately **component-local**. It never performs an implicit whole-wagon repair.
 
-Repair invokes the same authoritative server reset used by the damage system and restores:
+- aim at detached debris → restore only that detached component
+- aim directly at a detached bogey/coupler → repair only that running-gear item
+- aim at a ButtonMap button/switch/lever/brake handle → repair only that physical wear item
+- aim at an individual light/headlight → repair only that lamp
+- aim at the Battery service hotspot → repair only Battery damage
+- aim at the GRKV service hotspot → repair only the rheostat controller
+- aim at the electrical-cabinet hotspot → repair one failed hidden relay or indicator circuit at a time
+- aim at ordinary carbody structure → clear only that structural damage zone
 
-- structural/crush damage and deformation
-- detached controls/components and debris
-- failed-open electrical switches
-- blown fuses
-- tripped protection to its pre-damage state
-- accumulated water/electrical exposure
+Electrical cabinet repair refuses failures whose cause is a physically missing component. A torn-off switch therefore has to be physically restored instead of bypassing the missing hardware by repairing its relay.
 
-If the repaired wagon is still submerged with live power available, the original fault can immediately begin again.
+### Admin Train Fixer
+
+The separate **Admin Train Fixer** is admin-only:
+
+- **Left click** – complete reset of one wagon
+- **Right click** – complete reset of the selected consist
+- **Reload (R)** – complete reset of every Metrostroi wagon on the map
+
+The admin reset includes structural/component damage, detached hardware, bogeys/couplers, Battery damage, GRKV wear, per-control wear, relay wear, lamp/indicator wear, water failures and protection state.
+
+If repaired equipment remains exposed to the original fault (for example energized wet equipment), it can immediately begin failing again.
 
 
 ## Moisture, drying and movable controls
@@ -903,3 +916,78 @@ Water arcs, relay chatter, door-relay faults, battery-fault clicks and collision
 
 `mex_damage_reset` / Train Fixer restores temporary flooded relay failures, sensitive-system wrappers, breaker state, battery flood state, visual glitch hooks and blackout state.
 
+
+
+## Persistent component wear
+
+Damage System 0.18.0 adds long-term service wear independently of visual deformation.
+
+### Buttons, switches, levers and brake controls
+
+Every real ButtonMap operation is counted per physical mechanism. Duplicate input paths are debounced so one physical press is not counted twice through `OnButtonPress` and `ButtonEvent`.
+
+Related logical actions are grouped when they represent one physical mechanism:
+
+- `PneumaticBrakeUp/Down/Set*` → one pneumatic brake valve/handle
+- parking-brake actions → one parking-brake mechanism
+- `KVUp/KVDown/KVSet*` → one KV controller
+- reverser/key actions → one reverser mechanism
+
+Nominal lifetimes are intentionally high. Mechanical valves/controllers are shorter-lived than ordinary momentary buttons, while door controls use a high operation-count lifetime. Each wagon receives deterministic manufacturing/service variation around the nominal threshold.
+
+When the threshold is reached, the physical control remains visible and attached, but its input path is blocked. Keyboard aliases belonging to the same physical mechanism are blocked too.
+
+### Relays and contactors
+
+Relay-like systems track their own state transitions. Every relay/contact system therefore has independent wear instead of consuming one shared global failure meter.
+
+High traction current increases the wear increment for switching contacts. Contactor-style systems use shorter nominal switching life than small signal relays; door and ARS/ALS relay families use their own higher cycle targets.
+
+A worn relay fails open through the same electrical failure layer used by other damage causes and can be repaired individually from the electrical service hotspot.
+
+### GRKV / rheostat controller
+
+GRKV wear remains separate because its mechanical rotor moves through many positions rather than simply changing one Boolean relay state.
+
+Wear increases from:
+
+- number of controller position transitions
+- traction-current load while those transitions occur
+
+After sufficiently heavy use the mechanism can jam in its current position until repaired.
+
+### Lights and indicators
+
+Each Metrostroi light index has independent wear from:
+
+- on/off start cycles
+- actual powered time
+- brightness/loading
+
+Headlights use a shorter nominal service life than low-power lamps.
+
+Packed electrical indicator lamps also track switching and powered time independently. Failed lamps/indicators are forced dark rather than changing the underlying electrical measurement.
+
+### Battery aging
+
+Battery health is separate from temporary flood level.
+
+Health is reduced by:
+
+- severe impact shock
+- water intrusion and water-short damage
+- repeated/deep low-voltage discharge
+- sustained high current
+- excessive charging/overvoltage
+
+Reduced health lowers both effective terminal voltage and usable capacity. At critical health the battery becomes failed until repaired.
+
+### Repairability
+
+Wear is stored per item, so one repair does not clear unrelated failures. The normal Train Fixer repairs exactly the aimed component or one hidden electrical item at the electrical-service hotspot. `mex_damage_status` exposes:
+
+- failed physical-control count
+- failed relay count
+- failed light count
+- failed indicator count
+- last wear-related failure
