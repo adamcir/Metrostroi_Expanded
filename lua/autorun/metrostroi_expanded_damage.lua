@@ -3370,16 +3370,45 @@ if SERVER then
         electric.Think = function(self, ...)
             local result = originalThink(self, ...)
 
-            if IsValid(train)
-                and train:GetNW2Bool(
-                    "MEX.Damage.LowVoltageBlackout",
-                    false
+            if IsValid(train) then
+                local blackout =
+                    train:GetNW2Bool(
+                        "MEX.Damage.LowVoltageBlackout",
+                        false
+                    )
+                local connected =
+                    train:GetNW2Bool(
+                        "MEX.Damage.ThirdRailConnected",
+                        false
+                    )
+                local floodFactor = math.Clamp(
+                    tonumber(
+                        train.MEXDamageBatteryFloodFactor
+                    ) or 1,
+                    0,
+                    1
                 )
-            then
+
                 for _, fieldName in ipairs(
                     WATER_BLACKOUT_ELECTRIC_FIELDS
                 ) do
-                    if isnumber(self[fieldName]) then
+                    if not isnumber(self[fieldName]) then
+                        continue
+                    end
+
+                    if blackout then
+                        self[fieldName] = 0
+                    elseif not connected
+                        and floodFactor < 0.999
+                    then
+                        self[fieldName] =
+                            self[fieldName] * floodFactor
+                    elseif fieldName == "Battery80V"
+                        and train:GetNW2Bool(
+                            "MEX.Damage.BatteryWaterFailed",
+                            false
+                        )
+                    then
                         self[fieldName] = 0
                     end
                 end
@@ -3418,6 +3447,7 @@ if SERVER then
         train.MEXDamagePostSurfaceBatteryStress = nil
         train.MEXDamageLastWetArcLocal = nil
         train:SetNW2Bool("MEX.Damage.BatteryWaterFailed", false)
+        train:SetNW2Bool("MEX.Damage.LowVoltageBrownout", false)
         train:SetNW2Bool("MEX.Damage.RecentlySurfaced", false)
         train:SetNW2Float("MEX.Damage.PostSurfaceWetness", 0)
         train:SetNW2Float(
@@ -3716,6 +3746,16 @@ if SERVER then
             "MEX.Damage.BatteryFloodLevel",
             level
         )
+        train:SetNW2Bool(
+            "MEX.Damage.LowVoltageBrownout",
+            factor < 0.82
+                and not hasThirdRail
+                and not batteryWaterFailed
+        )
+
+        if factor < 0.999 or batteryWaterFailed then
+            EnsureWaterElectricBlackoutHook(train)
+        end
 
         if istable(train.Battery) then
             EnsureWaterBatteryGlitchHook(train)
@@ -7572,7 +7612,7 @@ if SERVER then
         ))
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery %.1f V | LV %.1f V | battery flood %.2f | blackout %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | moisture %.2f/%.2f | dry %.0fs | %.0f V | %.1f A | third rail %.0f V/%s | battery %.1f V | LV %.1f V | battery flood %.2f | brownout %s | blackout %s | surfaced %s/%.2f | battery failed %s | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d | sensitive offline %d | glitch %.2f | chatter %s | doorfault %s | batt %.2f | instruments %s | protection %s",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -7603,7 +7643,23 @@ if SERVER then
             ),
             train:GetNW2Float("MEX.Damage.BatteryFloodLevel", 0),
             train:GetNW2Bool(
+                "MEX.Damage.LowVoltageBrownout",
+                false
+            ) and "YES" or "NO",
+            train:GetNW2Bool(
                 "MEX.Damage.LowVoltageBlackout",
+                false
+            ) and "YES" or "NO",
+            train:GetNW2Bool(
+                "MEX.Damage.RecentlySurfaced",
+                false
+            ) and "YES" or "NO",
+            train:GetNW2Float(
+                "MEX.Damage.PostSurfaceWetness",
+                0
+            ),
+            train:GetNW2Bool(
+                "MEX.Damage.BatteryWaterFailed",
                 false
             ) and "YES" or "NO",
             train:GetNW2Float("MEX.Damage.WaterHazard", 0),
