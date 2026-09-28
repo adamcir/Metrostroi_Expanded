@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.11.0"
+MEXD.Version = "0.12.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1100,6 +1100,684 @@ if SERVER then
                     system,
                     "Open",
                     1
+                )
+            end
+        end
+    end
+
+    ---------------------------------------------------------------------------
+    -- Water + live electrical equipment
+    ---------------------------------------------------------------------------
+
+    local WATER_SCAN_INTERVAL = 0.12
+    local WATER_FAILURE_BASE_EXPOSURE = 0.85
+    local WATER_PLAYER_RADIUS = 220
+    local WATER_SHOCK_COOLDOWN = 0.32
+
+    local WATER_ARC_SOUNDS = {
+        "ambient/energy/zap1.wav",
+        "ambient/energy/zap2.wav",
+        "ambient/energy/zap3.wav",
+        "ambient/energy/zap5.wav",
+    }
+
+    local function NumberOrZero(value)
+        value = tonumber(value)
+        if not value or value ~= value then return 0 end
+        return value
+    end
+
+    local function IsPointInConductiveWater(worldPos)
+        if not isvector(worldPos) then return false end
+
+        local contents = util.PointContents(worldPos)
+        local waterMask = bit.bor(
+            CONTENTS_WATER or 32,
+            CONTENTS_SLIME or 16
+        )
+
+        return bit.band(contents, waterMask) ~= 0
+    end
+
+    local function SampleTrainWater(train)
+        if not IsSubwayTrain(train) then
+            return 0, nil
+        end
+
+        local mins = train:OBBMins()
+        local maxs = train:OBBMaxs()
+
+        if not isvector(mins) or not isvector(maxs) then
+            return 0, nil
+        end
+
+        local centerX = (mins.x + maxs.x) * 0.5
+        local centerY = (mins.y + maxs.y) * 0.5
+        local length = math.max(maxs.x - mins.x, 1)
+        local width = math.max(maxs.y - mins.y, 1)
+        local height = math.max(maxs.z - mins.z, 1)
+
+        -- Sample the equipment/floor region along the whole car. This catches
+        -- partial flooding even when the entity origin itself remains dry.
+        local xs = {
+            mins.x + length * 0.12,
+            centerX,
+            maxs.x - length * 0.12,
+        }
+        local ys = {
+            centerY - width * 0.28,
+            centerY,
+            centerY + width * 0.28,
+        }
+        local zs = {
+            mins.z + height * 0.10,
+            mins.z + height * 0.32,
+        }
+
+        local wet = 0
+        local total = 0
+        local wetPoints = {}
+
+        for _, x in ipairs(xs) do
+            for _, y in ipairs(ys) do
+                for _, z in ipairs(zs) do
+                    total = total + 1
+                    local worldPos = train:LocalToWorld(
+                        Vector(x, y, z)
+                    )
+
+                    if IsPointInConductiveWater(worldPos) then
+                        wet = wet + 1
+                        wetPoints[#wetPoints + 1] = worldPos
+                    end
+                end
+            end
+        end
+
+        local sampled = total > 0 and wet / total or 0
+
+        -- WaterLevel is useful on maps where brush-water sampling around a
+        -- large scripted entity is sparse. Never let it reduce point sampling.
+        local entityLevel = 0
+        if isfunction(train.WaterLevel) then
+            local level = math.Clamp(train:WaterLevel() or 0, 0, 3)
+            entityLevel = level / 3
+        end
+
+        local wetness = math.Clamp(
+            math.max(sampled, entityLevel * 0.8),
+            0,
+            1
+        )
+
+        local sparkPos
+        if #wetPoints > 0 then
+            sparkPos = wetPoints[math.random(1, #wetPoints)]
+        elseif wetness > 0 then
+            sparkPos = train:WorldSpaceCenter()
+        end
+
+        return wetness, sparkPos
+    end
+
+    local function MaxAbsField(object, fields)
+        if not istable(object) then return 0 end
+
+        local best = 0
+        for _, key in ipairs(fields) do
+            best = math.max(
+                best,
+                math.abs(NumberOrZero(object[key]))
+            )
+        end
+        return best
+    end
+
+    local function GetTrainElectricalWaterState(train)
+        local electric = istable(train.Electric)
+            and train.Electric
+            or nil
+        local tr = istable(train.TR) and train.TR or nil
+        local battery = istable(train.Battery)
+            and train.Battery
+            or nil
+
+        local hv = math.max(
+            MaxAbsField(electric, {
+                "Main750V",
+                "Power750V",
+                "Aux750V",
+            }),
+            MaxAbsField(tr, {
+                "Main750V",
+            })
+        )
+
+        local lv = MaxAbsField(electric, {
+            "Aux80V",
+            "Lights80V",
+            "Battery80V",
+            "ControlVoltage",
+        })
+
+        local batteryVoltage = NumberOrZero(
+            battery and battery.Voltage
+        )
+
+        -- Classic trains use VB as the battery disconnect. Do not treat the
+        -- battery terminals as feeding the flooded car when VB is definitely
+        -- open; modern cars may expose their low-voltage relay differently.
+        if istable(train.VB)
+            and isnumber(train.VB.Value)
+            and train.VB.Value <= 0.05
+        then
+            batteryVoltage = 0
+        end
+
+        lv = math.max(lv, batteryVoltage)
+
+        local measuredCurrent = math.max(
+            MaxAbsField(electric, {
+                "Itotal",
+                "I13",
+                "I24",
+                "Current",
+                "Current750V",
+                "BatteryCurrent",
+            }),
+            MaxAbsField(
+                istable(train.AsyncInverter)
+                    and train.AsyncInverter
+                    or nil,
+                {
+                    "Current",
+                    "Current1",
+                    "Current2",
+                }
+            ),
+            MaxAbsField(
+                istable(train.Engines)
+                    and train.Engines
+                    or nil,
+                {
+                    "Current",
+                    "I",
+                    "I13",
+                    "I24",
+                }
+            )
+        )
+
+        local voltage = math.max(hv, lv)
+
+        -- This is a gameplay fault-current capacity, not an electrical-safety
+        -- calculator. Prefer actual Metrostroi current when present, but keep
+        -- an energized source hazardous even while traction load is currently
+        -- zero.
+        local sourceCurrent
+        if hv >= 200 then
+            sourceCurrent = math.max(
+                measuredCurrent,
+                90 + hv * 0.20
+            )
+        elseif lv >= 24 then
+            sourceCurrent = math.max(
+                measuredCurrent,
+                8 + lv * 0.22
+            )
+        else
+            sourceCurrent = measuredCurrent
+        end
+
+        return math.Clamp(voltage, 0, 1200),
+            math.Clamp(sourceCurrent, 0, 2000),
+            math.Clamp(hv, 0, 1200),
+            math.Clamp(lv, 0, 200)
+    end
+
+    local function EmitWaterElectricalArc(
+        train,
+        worldPos,
+        voltage,
+        current,
+        severe
+    )
+        if not IsSubwayTrain(train) then return end
+
+        worldPos = isvector(worldPos)
+            and worldPos
+            or train:WorldSpaceCenter()
+
+        local effect = EffectData()
+        effect:SetOrigin(worldPos)
+        effect:SetNormal(VectorRand():GetNormalized())
+        effect:SetMagnitude(
+            math.Clamp(1 + voltage / 220, 1, 6)
+        )
+        effect:SetScale(
+            math.Clamp(0.6 + current / 180, 0.6, 3.2)
+        )
+        effect:SetRadius(
+            math.Clamp(8 + voltage / 15, 10, 70)
+        )
+        util.Effect("Sparks", effect, true, true)
+
+        local soundName = WATER_ARC_SOUNDS[
+            math.random(1, #WATER_ARC_SOUNDS)
+        ]
+
+        train:EmitSound(
+            soundName,
+            severe and 92 or 78,
+            math.random(severe and 82 or 94, severe and 102 or 116),
+            math.Clamp(0.45 + voltage / 1200, 0.45, 1)
+        )
+    end
+
+    local function CollectWaterFailureCandidates(train)
+        local active = {}
+        local inactive = {}
+
+        if not istable(train.Systems) then
+            return active, inactive
+        end
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system) then
+                continue
+            end
+
+            if train.MEXDamageElectricalFailureSystems
+                and train.MEXDamageElectricalFailureSystems[systemName]
+            then
+                continue
+            end
+
+            if IsMechanicalElectricalException(
+                systemName,
+                "",
+                {}
+            ) then
+                continue
+            end
+
+            local target = tonumber(system.TargetValue)
+            local value = tonumber(system.Value)
+            local energized =
+                (target and target > 0.05)
+                or (value and value > 0.05)
+
+            if energized then
+                active[#active + 1] = systemName
+            else
+                inactive[#inactive + 1] = systemName
+            end
+        end
+
+        return active, inactive
+    end
+
+    local function FailRandomWaterElectricalSystem(
+        train,
+        worldPos,
+        voltage,
+        current
+    )
+        local active, inactive =
+            CollectWaterFailureCandidates(train)
+
+        local source = #active > 0 and active or inactive
+        if #source <= 0 then return false end
+
+        local systemName = source[math.random(1, #source)]
+        if not FailElectricalSystemOpen(train, systemName) then
+            return false
+        end
+
+        train:SetNW2Bool(
+            "MEX.Damage.ElectricalFault",
+            true
+        )
+
+        local electrical = train:GetNW2Float(
+            "MEX.Damage.electrical",
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.electrical",
+            math.Clamp(electrical + 0.08, 0, 1)
+        )
+
+        EmitWaterElectricalArc(
+            train,
+            worldPos,
+            voltage,
+            current,
+            voltage >= 200
+        )
+
+        return true
+    end
+
+    local function DistanceToTrainOBB(train, worldPos)
+        if not IsSubwayTrain(train) or not isvector(worldPos) then
+            return math.huge
+        end
+
+        local localPos = train:WorldToLocal(worldPos)
+        local mins = train:OBBMins()
+        local maxs = train:OBBMaxs()
+
+        local dx = math.max(
+            mins.x - localPos.x,
+            0,
+            localPos.x - maxs.x
+        )
+        local dy = math.max(
+            mins.y - localPos.y,
+            0,
+            localPos.y - maxs.y
+        )
+        local dz = math.max(
+            mins.z - localPos.z,
+            0,
+            localPos.z - maxs.z
+        )
+
+        return math.sqrt(dx * dx + dy * dy + dz * dz)
+    end
+
+    local function ShockPlayerFromFloodedTrain(
+        train,
+        ply,
+        wetness,
+        voltage,
+        availableCurrent,
+        sparkPos
+    )
+        if not IsValid(ply)
+            or not ply:IsPlayer()
+            or not ply:Alive()
+            or (ply:WaterLevel() or 0) <= 0
+        then
+            return
+        end
+
+        if voltage < 24 or availableCurrent <= 0.01 then
+            return
+        end
+
+        local playerPos = ply:WorldSpaceCenter()
+        local distance = DistanceToTrainOBB(train, playerPos)
+        if distance > WATER_PLAYER_RADIUS then return end
+
+        -- Require actual conductive water at the player as well as WaterLevel.
+        -- This prevents a nearby dry player being shocked through open air.
+        if not IsPointInConductiveWater(
+            ply:GetPos() + Vector(0, 0, 8)
+        ) and ply:WaterLevel() < 2 then
+            return
+        end
+
+        local proximity = 1 - math.Clamp(
+            distance / WATER_PLAYER_RADIUS,
+            0,
+            1
+        )
+        local immersion = math.Clamp(
+            (ply:WaterLevel() or 0) / 3,
+            0.25,
+            1
+        )
+
+        -- Gameplay body-current estimate. Voltage determines the attempted
+        -- current through the wet path, while Metrostroi's available source
+        -- current caps it. These numbers are intentionally game tuning, not
+        -- real-world electrocution guidance.
+        local simulatedPathResistance = Lerp(
+            immersion,
+            1800,
+            720
+        )
+        local simulatedCurrent = math.min(
+            availableCurrent,
+            voltage / simulatedPathResistance
+        )
+
+        local voltageFactor = math.Clamp(
+            (voltage - 20) / 730,
+            0,
+            1
+        )
+        local currentFactor = math.Clamp(
+            simulatedCurrent / 0.75,
+            0,
+            1
+        )
+
+        local hazard = math.Clamp(
+            wetness
+                * proximity
+                * immersion
+                * (0.30 + voltageFactor * 0.70)
+                * (0.25 + currentFactor * 0.75),
+            0,
+            1
+        )
+
+        if hazard < 0.025 then return end
+
+        local now = CurTime()
+        if (ply.MEXDamageWaterShockUntil or 0) > now then
+            return
+        end
+
+        local chance = math.Clamp(
+            0.10 + hazard * 0.78,
+            0.10,
+            0.88
+        )
+
+        if math.Rand(0, 1) > chance then return end
+
+        ply.MEXDamageWaterShockUntil =
+            now + WATER_SHOCK_COOLDOWN
+
+        local damageAmount = math.Clamp(
+            (
+                simulatedCurrent * 92
+                + voltage / 38
+            )
+                * (0.45 + wetness * 0.55)
+                * (0.45 + proximity * 0.55),
+            2,
+            120
+        )
+
+        local dmg = DamageInfo()
+        dmg:SetDamage(damageAmount)
+        dmg:SetDamageType(DMG_SHOCK)
+        dmg:SetAttacker(IsValid(train) and train or game.GetWorld())
+        dmg:SetInflictor(IsValid(train) and train or game.GetWorld())
+        dmg:SetDamagePosition(playerPos)
+        dmg:SetDamageForce(
+            VectorRand() * math.Clamp(damageAmount * 8, 20, 500)
+        )
+        ply:TakeDamageInfo(dmg)
+
+        if isfunction(ply.ViewPunch) then
+            ply:ViewPunch(
+                Angle(
+                    math.Rand(-5, 5) * hazard,
+                    math.Rand(-4, 4) * hazard,
+                    math.Rand(-3, 3) * hazard
+                )
+            )
+        end
+
+        ply:EmitSound(
+            WATER_ARC_SOUNDS[
+                math.random(1, #WATER_ARC_SOUNDS)
+            ],
+            82,
+            math.random(92, 112),
+            math.Clamp(0.55 + hazard * 0.45, 0.55, 1)
+        )
+
+        EmitWaterElectricalArc(
+            train,
+            isvector(sparkPos) and sparkPos or playerPos,
+            voltage,
+            availableCurrent,
+            damageAmount >= 45
+        )
+    end
+
+    local function UpdateWaterElectricalDamage(train, dT)
+        if not IsSubwayTrain(train) then return end
+
+        if not MEXD.IsDamageEnabled() then
+            train:SetNW2Float("MEX.Damage.WaterWetness", 0)
+            train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
+            train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
+            train:SetNW2Float("MEX.Damage.WaterHazard", 0)
+            return
+        end
+
+        local wetness, sparkPos = SampleTrainWater(train)
+        local voltage, current, hv, lv =
+            GetTrainElectricalWaterState(train)
+
+        train:SetNW2Float(
+            "MEX.Damage.WaterWetness",
+            wetness
+        )
+        train:SetNW2Float(
+            "MEX.Damage.WaterVoltage",
+            voltage
+        )
+        train:SetNW2Float(
+            "MEX.Damage.WaterCurrent",
+            current
+        )
+
+        local powered = voltage >= 24
+        local voltageFactor = math.Clamp(
+            voltage / 750,
+            0,
+            1.4
+        )
+        local currentFactor = math.Clamp(
+            current / 300,
+            0,
+            1.5
+        )
+        local hazard = math.Clamp(
+            wetness
+                * (powered and 0.35 or 0.08)
+                * (0.25 + voltageFactor * 0.75)
+                * (0.30 + currentFactor * 0.70),
+            0,
+            1
+        )
+
+        train:SetNW2Float(
+            "MEX.Damage.WaterHazard",
+            hazard
+        )
+
+        local exposure = NumberOrZero(
+            train.MEXDamageWaterExposure
+        )
+
+        if wetness > 0.015 then
+            -- Electronics can still be ruined by immersion while unpowered;
+            -- live HV accelerates the failure and adds arcing/shock hazards.
+            local rate =
+                wetness
+                * (
+                    0.18
+                    + math.Clamp(voltage / 750, 0, 1) * 0.95
+                    + math.Clamp(current / 500, 0, 1) * 0.32
+                )
+
+            exposure = exposure + dT * rate
+        else
+            exposure = math.max(
+                0,
+                exposure - dT * 0.10
+            )
+        end
+
+        train.MEXDamageWaterExposure = exposure
+        train:SetNW2Float(
+            "MEX.Damage.WaterExposure",
+            math.Clamp(exposure, 0, 10)
+        )
+
+        if wetness > 0.02 and powered then
+            local now = CurTime()
+            local nextArc =
+                train.MEXDamageNextWaterArc or 0
+
+            if now >= nextArc then
+                local interval = Lerp(
+                    math.Clamp(hazard, 0, 1),
+                    1.25,
+                    0.20
+                )
+
+                train.MEXDamageNextWaterArc =
+                    now + interval * math.Rand(0.70, 1.25)
+
+                if math.Rand(0, 1)
+                    < math.Clamp(0.18 + hazard * 0.72, 0, 0.9)
+                then
+                    EmitWaterElectricalArc(
+                        train,
+                        sparkPos,
+                        voltage,
+                        current,
+                        hv >= 200
+                    )
+                end
+            end
+        end
+
+        train.MEXDamageWaterNextFailureExposure =
+            train.MEXDamageWaterNextFailureExposure
+            or WATER_FAILURE_BASE_EXPOSURE
+
+        if wetness > 0.04
+            and exposure
+                >= train.MEXDamageWaterNextFailureExposure
+        then
+            if FailRandomWaterElectricalSystem(
+                train,
+                sparkPos,
+                voltage,
+                current
+            ) then
+                train.MEXDamageWaterNextFailureExposure =
+                    exposure + math.Rand(0.55, 1.10)
+            else
+                -- No suitable relay remains. Do not search every scan forever.
+                train.MEXDamageWaterNextFailureExposure =
+                    exposure + 1.5
+            end
+        end
+
+        if powered and wetness > 0.02 then
+            for _, ply in ipairs(player.GetHumans()) do
+                ShockPlayerFromFloodedTrain(
+                    train,
+                    ply,
+                    wetness,
+                    voltage,
+                    current,
+                    sparkPos
                 )
             end
         end
@@ -2475,6 +3153,15 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.RearEquipment", false)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
 
+        train.MEXDamageWaterExposure = 0
+        train.MEXDamageWaterNextFailureExposure = nil
+        train.MEXDamageNextWaterArc = nil
+        train:SetNW2Float("MEX.Damage.WaterWetness", 0)
+        train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
+        train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
+        train:SetNW2Float("MEX.Damage.WaterHazard", 0)
+        train:SetNW2Float("MEX.Damage.WaterExposure", 0)
+
         hook.Run("MetrostroiExpandedDamageReset", train)
     end
 
@@ -3264,6 +3951,27 @@ if SERVER then
         MEXD.ApplyDamage(ent, zone, amount, pos, normal, source)
     end)
 
+    local nextWaterElectricalScan = 0
+
+    hook.Add("Think", "MEX.Damage.WaterElectrical", function()
+        local now = CurTime()
+        if now < nextWaterElectricalScan then return end
+
+        local dT = math.max(
+            WATER_SCAN_INTERVAL,
+            now - (nextWaterElectricalScan - WATER_SCAN_INTERVAL)
+        )
+        nextWaterElectricalScan = now + WATER_SCAN_INTERVAL
+
+        for _, train in ipairs(ents.GetAll()) do
+            if IsSubwayTrain(train) then
+                InitializeTrainDamage(train)
+                EnforceElectricalFailures(train)
+                UpdateWaterElectricalDamage(train, dT)
+            end
+        end
+    end)
+
     local nextVelocityScan = 0
 
     hook.Add("Think", "MEX.Damage.VelocityCrashDetection", function()
@@ -3274,7 +3982,6 @@ if SERVER then
             if not IsSubwayTrain(train) then continue end
 
             InitializeTrainDamage(train)
-            EnforceElectricalFailures(train)
 
             local velocity = train:GetVelocity()
             local position = train:GetPos()
@@ -3472,7 +4179,7 @@ if SERVER then
         end
 
         print(string.format(
-            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d",
+            "[Metrostroi Expanded/Damage] %s | front %.2f rear %.2f left %.2f right %.2f roof %.2f floor %.2f | front crush %.2f | structural health %.2f | electrical %.2f | water %.2f | %.0f V | %.1f A | hazard %.2f | last impact %.1f km/h | detached %d | blocked controls %d | failed electrical switches %d",
             train:GetClass(),
             MEXD.GetZoneDamage(train, "front"),
             MEXD.GetZoneDamage(train, "rear"),
@@ -3483,6 +4190,10 @@ if SERVER then
             MEXD.GetCrushEnergy(train, "front"),
             train:GetNW2Float("MEX.StructuralHealth", 1),
             train:GetNW2Float("MEX.Damage.electrical", 0),
+            train:GetNW2Float("MEX.Damage.WaterWetness", 0),
+            train:GetNW2Float("MEX.Damage.WaterVoltage", 0),
+            train:GetNW2Float("MEX.Damage.WaterCurrent", 0),
+            train:GetNW2Float("MEX.Damage.WaterHazard", 0),
             train:GetNW2Float("MEX.Damage.LastImpactKmh", 0),
             istable(train.MEXDamageDetachedServer)
                 and table.Count(train.MEXDamageDetachedServer)
