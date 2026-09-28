@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.13.0"
+MEXD.Version = "0.14.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -981,9 +981,17 @@ if SERVER then
         if not IsValid(train) then return end
 
         if istable(train.MEXDamageElectricalFailureSystems) then
-            for systemName, data in pairs(
+            local names = {}
+
+            for systemName in pairs(
                 train.MEXDamageElectricalFailureSystems
             ) do
+                names[#names + 1] = systemName
+            end
+
+            for _, systemName in ipairs(names) do
+                local data =
+                    train.MEXDamageElectricalFailureSystems[systemName]
                 local system = train[systemName]
 
                 if istable(data)
@@ -1010,6 +1018,8 @@ if SERVER then
                         )
                     end
                 end
+
+                train.MEXDamageElectricalFailureSystems[systemName] = nil
             end
         end
 
@@ -1017,7 +1027,61 @@ if SERVER then
         train.MEXDamageNextElectricalEnforce = nil
     end
 
-    local function FailElectricalSystemOpen(train, systemName)
+    local function RestoreSingleElectricalFailure(
+        train,
+        systemName,
+        restoreState
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(systemName)
+            or not istable(train.MEXDamageElectricalFailureSystems)
+        then
+            return false
+        end
+
+        local data =
+            train.MEXDamageElectricalFailureSystems[systemName]
+        local system = train[systemName]
+
+        if not istable(data)
+            or not istable(system)
+            or not isfunction(data.originalTriggerInput)
+        then
+            train.MEXDamageElectricalFailureSystems[systemName] = nil
+            return false
+        end
+
+        system.TriggerInput = data.originalTriggerInput
+
+        if restoreState ~= false then
+            local originalTarget =
+                tonumber(data.originalTargetValue)
+            local originalValue =
+                tonumber(data.originalValue)
+            local restoreValue =
+                originalTarget ~= nil
+                    and originalTarget
+                    or originalValue
+
+            if restoreValue ~= nil then
+                pcall(
+                    data.originalTriggerInput,
+                    system,
+                    "Set",
+                    restoreValue
+                )
+            end
+        end
+
+        train.MEXDamageElectricalFailureSystems[systemName] = nil
+        return true
+    end
+
+    local function FailElectricalSystemOpen(
+        train,
+        systemName,
+        options
+    )
         if not IsSubwayTrain(train)
             or not isstring(systemName)
             or systemName == ""
@@ -1030,25 +1094,38 @@ if SERVER then
             return false
         end
 
+        options = istable(options) and options or {}
+
         train.MEXDamageElectricalFailureSystems =
             train.MEXDamageElectricalFailureSystems or {}
 
-        if not train.MEXDamageElectricalFailureSystems[systemName] then
+        local data =
+            train.MEXDamageElectricalFailureSystems[systemName]
+
+        if not data then
             local original = system.TriggerInput
 
-            train.MEXDamageElectricalFailureSystems[systemName] = {
+            data = {
                 originalTriggerInput = original,
                 originalValue = tonumber(system.Value),
                 originalTargetValue = tonumber(system.TargetValue),
+                causes = {},
+                permanent = false,
             }
+
+            train.MEXDamageElectricalFailureSystems[systemName] =
+                data
 
             system.TriggerInput = function(self, input, value, ...)
                 local failures =
                     IsValid(train)
                     and train.MEXDamageElectricalFailureSystems
                     or nil
+                local failure =
+                    failures and failures[systemName]
+                    or nil
 
-                if failures and failures[systemName] then
+                if failure then
                     if ElectricalInputWouldEnergize(
                         self,
                         input,
@@ -1062,14 +1139,30 @@ if SERVER then
             end
         end
 
-        -- Use the original Metrostroi input API to open the circuit. Relay
-        -- systems then update Value/TargetValue through their normal logic.
-        local data =
-            train.MEXDamageElectricalFailureSystems[systemName]
-        local trigger =
-            data and data.originalTriggerInput
-            or system.TriggerInput
+        data.causes = data.causes or {}
+        local cause = tostring(options.cause or "damage")
+        data.causes[cause] = true
 
+        if options.temporary == true
+            and data.permanent ~= true
+        then
+            data.temporary = true
+            data.waterSensitivity =
+                options.waterSensitivity or data.waterSensitivity or "normal"
+            data.minDrySeconds = math.max(
+                tonumber(options.minDrySeconds) or 20,
+                tonumber(data.minDrySeconds) or 0
+            )
+            data.recoverMoisture = math.min(
+                tonumber(options.recoverMoisture) or 0.12,
+                tonumber(data.recoverMoisture) or 1
+            )
+        else
+            data.permanent = true
+            data.temporary = false
+        end
+
+        local trigger = data.originalTriggerInput
         if isfunction(trigger) then
             pcall(trigger, system, "Set", 0)
             pcall(trigger, system, "Open", 1)
@@ -1471,7 +1564,11 @@ if SERVER then
 
         -- A fuse is not a resettable breaker. Reuse the persistent failed-open
         -- layer so it stays open until Train Fixer / mex_damage_reset repairs it.
-        if not FailElectricalSystemOpen(train, systemName) then
+        if not FailElectricalSystemOpen(
+            train,
+            systemName,
+            { cause = "fuse", temporary = false }
+        ) then
             return false
         end
 
@@ -2308,7 +2405,11 @@ if SERVER then
         local failed = {}
 
         for _, systemName in ipairs(candidates) do
-            if FailElectricalSystemOpen(train, systemName) then
+            if FailElectricalSystemOpen(
+                train,
+                systemName,
+                { cause = "detached", temporary = false }
+            ) then
                 failed[#failed + 1] = systemName
             end
         end
