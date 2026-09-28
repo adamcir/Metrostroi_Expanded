@@ -996,6 +996,7 @@ if SERVER then
         end
 
         train.MEXDamageElectricalFailureSystems = {}
+        train.MEXDamageNextElectricalEnforce = nil
     end
 
     local function FailElectricalSystemOpen(train, systemName)
@@ -1055,6 +1056,53 @@ if SERVER then
         end
 
         return true
+    end
+
+    local function EnforceElectricalFailures(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageElectricalFailureSystems)
+        then
+            return
+        end
+
+        local now = CurTime()
+        if (train.MEXDamageNextElectricalEnforce or 0) > now then
+            return
+        end
+        train.MEXDamageNextElectricalEnforce = now + 0.10
+
+        for systemName, data in pairs(
+            train.MEXDamageElectricalFailureSystems
+        ) do
+            local system = train[systemName]
+
+            if not istable(system)
+                or not istable(data)
+                or not isfunction(data.originalTriggerInput)
+            then
+                continue
+            end
+
+            local value = tonumber(system.Value)
+            local target = tonumber(system.TargetValue)
+
+            if (value and value > 0.001)
+                or (target and target > 0.001)
+            then
+                pcall(
+                    data.originalTriggerInput,
+                    system,
+                    "Set",
+                    0
+                )
+                pcall(
+                    data.originalTriggerInput,
+                    system,
+                    "Open",
+                    1
+                )
+            end
+        end
     end
 
     local function AddElectricalCandidate(out, seen, value)
@@ -1122,6 +1170,13 @@ if SERVER then
         end
 
         for _, buttonID in ipairs(buttonIDs or {}) do
+            -- Some legacy ButtonMaps use the relay/system name directly as
+            -- the ButtonEvent ID; others append Toggle/Set/On/Off.
+            AddElectricalCandidate(
+                candidates,
+                seen,
+                buttonID
+            )
             AddElectricalCandidate(
                 candidates,
                 seen,
@@ -3137,6 +3192,7 @@ if SERVER then
             if not IsSubwayTrain(train) then continue end
 
             InitializeTrainDamage(train)
+            EnforceElectricalFailures(train)
 
             local velocity = train:GetVelocity()
             local position = train:GetPos()
@@ -6502,6 +6558,11 @@ if CLIENT then
 
                     local config = button.model
 
+                    -- Older Metrostroi ButtonMaps often put the logical relay
+                    -- variable directly on the button table, while newer ones
+                    -- use button.model.var.
+                    add(button.var)
+
                     if istable(config) then
                         add(config.var)
                     end
@@ -6529,6 +6590,7 @@ if CLIENT then
                             end
                         end
 
+                        add(id)
                         if base ~= id then add(base) end
                     end
                 end
