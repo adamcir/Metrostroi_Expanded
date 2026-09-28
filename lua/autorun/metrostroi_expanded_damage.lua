@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.1"
+MEXD.Version = "0.18.2"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1433,6 +1433,44 @@ if SERVER then
     MEXD.GetBatteryHealth = GetBatteryHealth
     MEXD.ApplyBatteryDamage = ApplyBatteryDamage
 
+    local function BatteryCanSupplyLowVoltage(train)
+        if not IsSubwayTrain(train)
+            or not istable(train.Battery)
+        then
+            return false
+        end
+
+        if train:GetNW2Bool(
+            "MEX.Damage.BatteryFailed",
+            false
+        ) or train:GetNW2Bool(
+            "MEX.Damage.BatteryWaterFailed",
+            false
+        ) then
+            return false
+        end
+
+        if GetBatteryHealth(train)
+            <= BATTERY_MIN_WORKING_HEALTH
+        then
+            return false
+        end
+
+        if istable(train.VB)
+            and isnumber(train.VB.Value)
+            and train.VB.Value <= 0.05
+        then
+            return false
+        end
+
+        return math.abs(
+            tonumber(train.Battery.Voltage) or 0
+        ) >= 18
+    end
+
+    MEXD.IsBatteryElectricallyAlive =
+        BatteryCanSupplyLowVoltage
+
 
     ---------------------------------------------------------------------------
     -- Water + live electrical equipment
@@ -1802,14 +1840,18 @@ if SERVER then
             battery and battery.Voltage
         )
 
-        -- Classic trains use VB as the battery disconnect. Do not treat the
-        -- battery terminals as feeding the flooded car when VB is definitely
-        -- open; modern cars may expose their low-voltage relay differently.
-        if istable(train.VB)
-            and isnumber(train.VB.Value)
-            and train.VB.Value <= 0.05
-        then
+        local batteryAvailable =
+            BatteryCanSupplyLowVoltage(train)
+
+        -- Electric.* low-voltage fields can retain a stale value for a Think
+        -- frame after a destroyed battery has actually gone dead. A live HV
+        -- supply may still feed an auxiliary converter; without HV there is no
+        -- real low-voltage source and therefore nothing that can arc.
+        if not batteryAvailable then
             batteryVoltage = 0
+            if hv < 200 then
+                lv = 0
+            end
         end
 
         lv = math.max(lv, batteryVoltage)
@@ -1933,13 +1975,29 @@ if SERVER then
         then
             return
         end
+        local thirdRailLive =
+            train:GetNW2Bool(
+                "MEX.Damage.ThirdRailConnected",
+                false
+            )
+            and train:GetNW2Float(
+                "MEX.Damage.ThirdRailVoltage",
+                0
+            ) >= 200
+
+        -- Moisture or a stored damage state cannot create energy. Arcing needs
+        -- a genuinely live third rail or a still-working connected battery.
+        if not thirdRailLive
+            and not BatteryCanSupplyLowVoltage(train)
+        then
+            return
+        end
+
         if train:GetNW2Bool(
             "MEX.Damage.LowVoltageBlackout",
             false
-        ) and not train:GetNW2Bool(
-            "MEX.Damage.ThirdRailConnected",
-            false
-        ) then
+        ) and not thirdRailLive
+        then
             return
         end
 
@@ -2571,6 +2629,97 @@ if SERVER then
         )
     end
 
+    local function NormalizeVisibleOperatorName(value)
+        local normalized = string.lower(
+            tostring(value or "")
+        ):gsub("[^%w]", "")
+
+        for _, suffix in ipairs({
+            "toggle",
+            "set",
+            "switch",
+            "button",
+            "on",
+            "off",
+            "open",
+            "close",
+        }) do
+            if #normalized > #suffix
+                and string.sub(
+                    normalized,
+                    -#suffix
+                ) == suffix
+            then
+                normalized = string.sub(
+                    normalized,
+                    1,
+                    #normalized - #suffix
+                )
+                break
+            end
+        end
+
+        return normalized
+    end
+
+    local function IsVisiblePanelOperatorSystem(
+        train,
+        systemName,
+        system
+    )
+        if IsManualOperatorElectricalSystem(
+            systemName,
+            system
+        ) then
+            return true
+        end
+
+        if not IsSubwayTrain(train)
+            or not istable(train.ButtonMap)
+        then
+            return false
+        end
+
+        local target =
+            NormalizeVisibleOperatorName(systemName)
+
+        for panelName, panel in pairs(train.ButtonMap) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                local id =
+                    istable(button)
+                    and button.ID
+                    or nil
+
+                if not isstring(id) then
+                    continue
+                end
+
+                id = id:gsub("^.+:", "")
+                local base =
+                    NormalizeVisibleOperatorName(id)
+
+                if train[id] == system
+                    or train[base] == system
+                    or (
+                        target ~= ""
+                        and base == target
+                    )
+                then
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
     local SENSITIVE_WATER_ELECTRONICS = {
         "ars",
         "als",
@@ -2626,7 +2775,8 @@ if SERVER then
                 continue
             end
 
-            if IsManualOperatorElectricalSystem(
+            if IsVisiblePanelOperatorSystem(
+                train,
                 systemName,
                 system
             ) then
@@ -2666,10 +2816,10 @@ if SERVER then
                 continue
             end
 
-            -- Important: do not water-fail the operator itself. A soaked VU,
-            -- battery switch, breaker lever etc. must remain physically
-            -- movable. The downstream circuit/equipment may fail instead.
-            if IsManualOperatorElectricalSystem(
+            -- Any visible panel operator remains mechanically movable even
+            -- with a dead battery. Only the circuit behind it may fail.
+            if IsVisiblePanelOperatorSystem(
+                train,
                 systemName,
                 system
             ) then
@@ -2985,6 +3135,7 @@ if SERVER then
             -- again, producing a few seconds of surface arcing before the
             -- battery collapses for a second time.
             if not thirdRailConnected
+                and BatteryCanSupplyLowVoltage(train)
                 and train:GetNW2Bool(
                     "MEX.Damage.LowVoltageBlackout",
                     false
@@ -3752,7 +3903,8 @@ if SERVER then
             systemName = tostring(systemName)
 
             if not IsRelayLikeElectricalSystem(system)
-                or IsManualOperatorElectricalSystem(
+                or IsVisiblePanelOperatorSystem(
+                    train,
                     systemName,
                     system
                 )
@@ -4043,7 +4195,8 @@ if SERVER then
             -- They must remain in the position selected by the player; water
             -- only bridges downstream relays/solenoids.
             if tostring(system.relay_type or "") == "Switch"
-                or IsManualOperatorElectricalSystem(
+                or IsVisiblePanelOperatorSystem(
+                    train,
                     tostring(systemName),
                     system
                 )
@@ -4189,7 +4342,8 @@ if SERVER then
                 continue
             end
 
-            if IsManualOperatorElectricalSystem(
+            if IsVisiblePanelOperatorSystem(
+                train,
                 systemName,
                 system
             ) then
@@ -9122,6 +9276,120 @@ if SERVER then
         return true
     end
 
+    function MEXD.GetDetachedRepairTargetAtRay(
+        train,
+        rayStart,
+        rayDirection,
+        maxDistance
+    )
+        if not IsSubwayTrain(train)
+            or not isvector(rayStart)
+            or not isvector(rayDirection)
+            or rayDirection:LengthSqr() <= 0.000001
+            or not istable(
+                train.MEXDamageDetachedServer
+            )
+        then
+            return nil
+        end
+
+        local direction =
+            rayDirection:GetNormalized()
+        local bestName
+        local bestScore = math.huge
+
+        for name, data in pairs(
+            train.MEXDamageDetachedServer
+        ) do
+            if not istable(data) then
+                continue
+            end
+
+            local point
+            if isvector(data.anchorLocal) then
+                point =
+                    train:LocalToWorld(
+                        data.anchorLocal
+                    )
+            elseif IsValid(data.debris) then
+                point =
+                    data.debris:WorldSpaceCenter()
+            end
+
+            if not isvector(point) then
+                continue
+            end
+
+            local delta = point - rayStart
+            local along = delta:Dot(direction)
+
+            if along < 0
+                or (
+                    isnumber(maxDistance)
+                    and along > maxDistance
+                )
+            then
+                continue
+            end
+
+            local closest =
+                rayStart + direction * along
+            local miss =
+                point:Distance(closest)
+            local radius =
+                data.isDoor and 52
+                or (data.isControl and 20 or 32)
+
+            if miss <= radius then
+                local score =
+                    miss + along * 0.00002
+
+                if score < bestScore then
+                    bestScore = score
+                    bestName = tostring(name)
+                end
+            end
+        end
+
+        return bestName
+    end
+
+    local function DetachedComponentForButton(
+        train,
+        button
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(button)
+            or not istable(
+                train.MEXDamageDetachedServer
+            )
+        then
+            return nil
+        end
+
+        button = button:gsub("^.+:", "")
+
+        for name, data in pairs(
+            train.MEXDamageDetachedServer
+        ) do
+            for _, id in ipairs(
+                istable(data)
+                    and data.buttons
+                    or {}
+            ) do
+                if tostring(id):gsub(
+                    "^.+:",
+                    ""
+                ) == button
+                then
+                    return tostring(name)
+                end
+            end
+        end
+
+        return nil
+    end
+
     local function RepairBatteryOnly(train)
         if not IsSubwayTrain(train)
             or not istable(train.Battery)
@@ -9614,9 +9882,24 @@ if SERVER then
         end
 
         if string.sub(target, 1, 8) == "control:" then
+            local button =
+                string.sub(target, 9)
+            local detached =
+                DetachedComponentForButton(
+                    train,
+                    button
+                )
+
+            if detached then
+                return MEXD.RepairDetachedComponent(
+                    train,
+                    detached
+                )
+            end
+
             return MEXD.RepairWearControl(
                 train,
-                string.sub(target, 9)
+                button
             )
         elseif string.sub(target, 1, 6) == "light:" then
             return MEXD.RepairWearLight(
@@ -10117,6 +10400,12 @@ if SERVER then
             electricalFailures = electricalFailures,
             zone = zone,
             model = model,
+            localPos = localPos,
+            anchorLocal = anchorLocal,
+            isDoor = isDoor == true,
+            isControl = isControl == true,
+            mins = mins,
+            maxs = maxs,
         }
 
         RebuildDetachedButtonGuard(train)
