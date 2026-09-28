@@ -1354,6 +1354,59 @@ if SERVER then
         end
     end
 
+    local BATTERY_MIN_WORKING_HEALTH = 0.12
+
+    local function GetBatteryHealth(train)
+        if not IsSubwayTrain(train) then return 1 end
+
+        local health = train:GetNW2Float(
+            "MEX.Damage.BatteryHealth",
+            1
+        )
+
+        return math.Clamp(health, 0, 1)
+    end
+
+    local function ApplyBatteryDamage(
+        train,
+        amount,
+        cause
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.Battery)
+        then
+            return false
+        end
+
+        amount = math.max(tonumber(amount) or 0, 0)
+        if amount <= 0 then return false end
+
+        local old = GetBatteryHealth(train)
+        local new = math.Clamp(old - amount, 0, 1)
+
+        train:SetNW2Float(
+            "MEX.Damage.BatteryHealth",
+            new
+        )
+        train:SetNW2String(
+            "MEX.Damage.BatteryLastCause",
+            tostring(cause or "unknown")
+        )
+
+        if new <= BATTERY_MIN_WORKING_HEALTH then
+            train:SetNW2Bool(
+                "MEX.Damage.BatteryFailed",
+                true
+            )
+        end
+
+        return new < old
+    end
+
+    MEXD.GetBatteryHealth = GetBatteryHealth
+    MEXD.ApplyBatteryDamage = ApplyBatteryDamage
+
+
     ---------------------------------------------------------------------------
     -- Water + live electrical equipment
     ---------------------------------------------------------------------------
@@ -6175,59 +6228,8 @@ if SERVER then
     -- Persistent mechanical/electrical wear and crash consequences
     ---------------------------------------------------------------------------
 
-    local BATTERY_MIN_WORKING_HEALTH = 0.12
     local GRKV_WEAR_PER_POSITION = 0.000080
     local LEGACY_RELAY_WEAR_PER_OPERATION = 0.000012
-
-    local function GetBatteryHealth(train)
-        if not IsSubwayTrain(train) then return 1 end
-
-        local health = train:GetNW2Float(
-            "MEX.Damage.BatteryHealth",
-            1
-        )
-
-        return math.Clamp(health, 0, 1)
-    end
-
-    local function ApplyBatteryDamage(
-        train,
-        amount,
-        cause
-    )
-        if not IsSubwayTrain(train)
-            or not istable(train.Battery)
-        then
-            return false
-        end
-
-        amount = math.max(tonumber(amount) or 0, 0)
-        if amount <= 0 then return false end
-
-        local old = GetBatteryHealth(train)
-        local new = math.Clamp(old - amount, 0, 1)
-
-        train:SetNW2Float(
-            "MEX.Damage.BatteryHealth",
-            new
-        )
-        train:SetNW2String(
-            "MEX.Damage.BatteryLastCause",
-            tostring(cause or "unknown")
-        )
-
-        if new <= BATTERY_MIN_WORKING_HEALTH then
-            train:SetNW2Bool(
-                "MEX.Damage.BatteryFailed",
-                true
-            )
-        end
-
-        return new < old
-    end
-
-    MEXD.GetBatteryHealth = GetBatteryHealth
-    MEXD.ApplyBatteryDamage = ApplyBatteryDamage
 
     local function RestoreGRKVWearFailure(train)
         if not IsSubwayTrain(train) then return end
