@@ -511,9 +511,9 @@ Physical/component damage controls local mounting failure and physical breakaway
 Controls:
 
 - **Enable physical damage**
-- **Physical damage intensity** – 0.10 to 3.00, default 1.00
+- **Physical damage realism level** – 0.10 to 3.00, default 1.00
 - **Enable deformation (ALPHA - not recommended)**
-- **Deformation intensity** – 0.10 to 3.00, default 1.00
+- **Deformation realism level** – 0.10 to 3.00, default 1.00
 
 Deformation is dependent on physical damage. It cannot be enabled while physical damage is disabled, and disabling physical damage automatically switches deformation off. Deformation itself can be disabled while physical component breakaway remains enabled.
 
@@ -533,7 +533,7 @@ Backing ConVars:
 Controls electrical/environmental failures:
 
 - **Enable electrical damage**
-- **Electrical damage intensity** – 0.10 to 3.00, default 1.00
+- **Electrical damage realism level** – 0.10 to 3.00, default 1.00
 
 This subsystem includes:
 
@@ -552,7 +552,7 @@ Backing ConVars:
 
 Disabling the electrical subsystem restores its temporary wrappers/failures so it cannot continue changing train electrical systems while disabled.
 
-All Utilities controls are server-wide and editable only by server administrators. `mex_damage_status` reports the current ON/OFF state and intensity of the damage subsystems.
+All Utilities controls are server-wide and editable only by server administrators. For every damage scale, `1.00` is the intended realistic baseline. Values below `1.00` intentionally make the simulation more forgiving/less realistic. Values above `1.00` intentionally exaggerate breakage, deformation or electrical failures and are therefore an over-realistic setting rather than the normal baseline. `mex_damage_status` reports both the numeric level and its `reduced` / `realistic` / `over-realistic` classification.
 
 
 ## Electrical switch failures
@@ -846,13 +846,15 @@ This keeps the simulated protection response on the train's own relay timing rat
 
 ### Third rail and flooded battery collapse
 
-When available, `TR.Main750V` is treated as the authoritative contact-rail voltage. A value of zero means the car is not currently receiving third-rail supply even if a downstream electrical field has not yet updated.
+When available, `TR.Main750V` is used for contact-rail voltage, but physical connection is determined from the TR collector `ContactState1..4` outputs when the train exposes them. If all collector contact states are open, the car is treated as disconnected even when a stale 750 V value survives for another simulation tick. Third-party trains without those contact states fall back to voltage detection.
 
-If the car remains flooded without third-rail supply, a persistent low-voltage flood load accumulates. The battery/80 V network then collapses over several seconds instead of powering the car indefinitely.
+If the car remains flooded without third-rail supply, a persistent low-voltage flood load accumulates. At electrical realism level `1.00`, a severe/full flood normally reaches the blackout threshold in about 9–12 seconds; partial/shallow flooding takes longer. Lower realism levels extend this time and reduce the other water-fault probabilities, while values above `1.00` deliberately accelerate them beyond the baseline.
 
 The collapse state:
 
 - progressively reduces the simulated battery voltage
+- at blackout, clamps the battery supply close to zero
+- forces common `Electric` low-voltage outputs such as `Aux80V`, `Lights80V`, `Battery80V` and `ControlVoltage` to zero on every Electric Think tick
 - shuts down sensitive electronics
 - forces non-manual low-voltage relay systems open after the blackout threshold
 - forces electrical instruments, speed indication and electrical packed indicators dark
@@ -863,6 +865,7 @@ If third-rail supply returns, the simulated collapse can recover gradually, whil
 Network/debug state includes:
 
 - `MEX.Damage.ThirdRailVoltage`
+- `MEX.Damage.ThirdRailConnected`
 - `MEX.Damage.BatteryFloodLevel`
 - `MEX.Damage.LowVoltageBlackout`
 
