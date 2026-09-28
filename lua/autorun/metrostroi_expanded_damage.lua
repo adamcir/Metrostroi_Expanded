@@ -200,6 +200,12 @@ local SPAWN_GRACE_SECONDS = 1.0
 local MIN_CRASH_SPEED_KMH = 6.0
 local MAX_CRASH_SPEED_KMH = 65.0
 
+-- Small dashboard controls are mounted to a comparatively light panel and can
+-- be shaken loose by a nearby carbody impact even when the actual contact
+-- point is on the nose/side skin rather than directly on the button model.
+local CONTROL_SHOCK_RADIUS_MULTIPLIER = 2.25
+local CONTROL_SHOCK_SCORE_MULTIPLIER = 1.15
+
 local function IsSubwayTrain(ent)
     if not IsValid(ent) then return false end
     local className = ent:GetClass()
@@ -5023,13 +5029,24 @@ if SERVER then
     local function FindRecentComponentImpact(
         train,
         anchorLocal,
-        componentRadius
+        componentRadius,
+        impactRadiusMultiplier,
+        scoreMultiplier
     )
         if not IsSubwayTrain(train) or not isvector(anchorLocal) then
             return nil
         end
 
         PruneComponentImpacts(train)
+
+        impactRadiusMultiplier = math.max(
+            tonumber(impactRadiusMultiplier) or 1,
+            1
+        )
+        scoreMultiplier = math.max(
+            tonumber(scoreMultiplier) or 1,
+            0
+        )
 
         local best = nil
         local bestScore = 0
@@ -5042,10 +5059,15 @@ if SERVER then
                 anchorLocal:Distance(impact.localPos)
                     - math.max(componentRadius or 0, 0)
             )
-            if distance > impact.radius then continue end
+            local effectiveImpactRadius =
+                impact.radius * impactRadiusMultiplier
 
-            local falloff = 1 - distance / math.max(impact.radius, 1)
-            local score = falloff * impact.power
+            if distance > effectiveImpactRadius then continue end
+
+            local falloff =
+                1 - distance / math.max(effectiveImpactRadius, 1)
+            local score =
+                falloff * impact.power * scoreMultiplier
 
             if score > bestScore then
                 best = impact
@@ -5256,9 +5278,9 @@ if SERVER then
                         210
                     ),
                     math.Clamp(
-                        1 + math.floor(impactKmh / (physgunImpact and 8 or 12)),
+                        1 + math.floor(impactKmh / (physgunImpact and 8 or 10)),
                         1,
-                        20
+                        24
                     ),
                     physgunImpact and "physgun" or "physics",
                     impactVelocity * 0.70,
@@ -5888,7 +5910,9 @@ if SERVER then
             FindRecentComponentImpact(
                 train,
                 anchorLocal,
-                componentRadius
+                componentRadius,
+                isControl and CONTROL_SHOCK_RADIUS_MULTIPLIER or 1,
+                isControl and CONTROL_SHOCK_SCORE_MULTIPLIER or 1
             )
 
         -- A mounting can fail either from accumulated structural deformation
@@ -5911,7 +5935,7 @@ if SERVER then
         else
             directMinimum =
                 isDoor and 0.20
-                or (isControl and 0.11 or 0.20)
+                or (isControl and 0.055 or 0.20)
         end
 
         local structuralOK =
@@ -10364,13 +10388,16 @@ if CLIENT then
             -- Small cab controls can fail from the local shock even when the
             -- contact point is slightly outside their tiny physical bounds.
             local effectiveRadius = isControl
-                and radius * 1.20
+                and radius * CONTROL_SHOCK_RADIUS_MULTIPLIER
                 or radius
 
             if edgeDistance > effectiveRadius then continue end
 
             local falloff = 1 - edgeDistance / math.max(effectiveRadius, 1)
-            local score = falloff * power
+            local score =
+                falloff
+                * power
+                * (isControl and CONTROL_SHOCK_SCORE_MULTIPLIER or 1)
             local threshold = isGlass
                 and (0.018 + StableFraction(name) * 0.035)
                 or DirectImpactMountThreshold(
