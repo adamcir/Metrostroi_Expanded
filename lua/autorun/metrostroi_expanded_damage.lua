@@ -1600,7 +1600,9 @@ if SERVER then
                 endpos = bogey:LocalToWorld(
                     probe.pos + probe.dir * 10
                 ),
-                mask = -1,
+                -- Do not include CONTENTS_WATER here. A flooded pickup shoe
+                -- must not count the water brush itself as third-rail contact.
+                mask = MASK_SOLID,
                 filter = { train, bogey },
                 mins = Vector(-2, -2, -2),
                 maxs = Vector(2, 2, 2),
@@ -1614,11 +1616,17 @@ if SERVER then
 
             if result.Hit
                 and IsValid(result.Entity)
-                and result.Entity:GetClass()
-                    == "gmod_track_udochka"
-                and result.Entity.Power
+                and not result.Entity:IsPlayer()
             then
-                return true, true
+                if result.Entity:GetClass()
+                    == "gmod_track_udochka"
+                then
+                    if result.Entity.Power then
+                        return true, true
+                    end
+                else
+                    return true, true
+                end
             end
         end
 
