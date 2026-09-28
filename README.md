@@ -43,7 +43,7 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## Damage System
 
-Current damage-system module version: **0.15.0**
+Current damage-system module version: **0.16.0**
 
 Metrostroi Expanded now includes a first simple crash-damage system for all `gmod_subway_*` trains.
 
@@ -502,3 +502,18 @@ The protection model follows the actual systems exposed by each Metrostroi train
 - glitches can continue for a while after leaving the water and naturally become less frequent while the train dries
 - all transient chatter/false-indication wrappers are restored by Train Fixer / `mex_damage_reset`
 - `mex_damage_status` now shows the current water glitch intensity and the relay currently chattering
+
+
+### Damage 0.16.0 – door faults, light wiring shorts, powered speedometer and battery glitches
+
+- wet energized door-control relays can now receive transient false pulses independently of the driver's ButtonEvent
+- classic door circuits such as `KDL`, `KDP`, `VDL`, `VUD/VUD1/VUD2` and modern `DoorLeft`, `DoorRight`, `DoorClose` families can therefore momentarily energize or drop out because of moisture
+- the physical switch does not have to be pressed for the downstream wet relay/contact fault to occur
+- light/lighting packed outputs can now be corrupted by wet wiring, allowing lamps to flicker, extinguish, or flash on even when their normal switch state says otherwise
+- electrical speed indications now require instrument/control power; when the low-voltage cab/instrument supply is dead the displayed `Speed` ratio is forced to zero
+- while wet and powered, the speedometer can jump, fall to zero, briefly indicate too high a value, or flicker before returning to the real speed
+- the Battery system can now suffer short real voltage-sag events; severe wet glitches may temporarily pull battery voltage low enough to make control logic drop out
+- battery-current/voltage indications can still show false values independently of the real battery sag
+- water-fault progression is faster: the initial protection threshold is lower, fault exposure accumulates faster, breaker re-trip checks happen more quickly, and continuing faults escalate sooner
+- wet-light/door/battery glitches continue to scale down with moisture while the train dries
+- `mex_damage_status` now reports door-fault relay, battery voltage factor and whether instrument power is currently ON/OFF
