@@ -514,15 +514,16 @@ The protection model follows the actual systems exposed by each Metrostroi train
 - ARS/ALS/BARS and other sensitive electronics can also go offline as actual wet electronic modules
 - significant live flooding trips all exposed automatic circuit breakers through their normal Metrostroi trip/open path; the water scan/re-trip cadence is 0.05 s, matching the generic Metrostroi relay opening time
 - true third-rail supply is taken from `TR.Main750V` when available
-- third-rail connection now uses the TR collector `ContactState1..4` values when available instead of trusting voltage alone; a disconnected collector therefore starts the flood battery-collapse path even if a stale voltage value remains for a simulation tick
+- third-rail connection now physically probes the pickup-shoe positions (`PantLPos` / `PantRPos`) against solid rail geometry, so trains on maps where Metrostroi normally supplies 750 V everywhere can still be detected as actually off the third rail; water brushes are explicitly excluded from this contact probe
 - when the flooded car is no longer physically connected to the third rail, leakage/short-circuit load progressively collapses the battery/low-voltage supply; at realism level `1.00`, severe/full flooding typically reaches blackout in roughly 9–12 seconds, while shallower flooding takes longer
-- after the low-voltage blackout threshold is reached, the Battery voltage is clamped near zero, `Electric.Aux80V`, `Lights80V`, `Battery80V` and compatible low-voltage outputs are forced to zero, non-manual electrical relays and sensitive electronics are forced offline, and electrical gauges/indicators go dark; mechanical/manual switch positions are left unchanged
+- after the low-voltage blackout threshold is reached, the Battery voltage is forced to zero every water scan, `Electric.Aux80V`, `Lights80V`, `Battery80V` and compatible low-voltage outputs are forced to zero, non-manual electrical relays and sensitive electronics are forced offline, and electrical gauges/indicators go dark; mechanical/manual switch positions are left unchanged
 - light/lighting packed outputs can be corrupted by wet wiring, allowing lamps to flicker, extinguish, or flash on even when their normal switch state says otherwise
 - electrical speed indications require instrument/control power; when the low-voltage cab/instrument supply is dead the displayed speed ratio is forced to zero
 - while wet and still powered, the speedometer can jump, fall to zero, briefly indicate a wrong value, or flicker
 - the Battery system can still suffer short transient voltage-sag events in addition to the progressive no-third-rail flood collapse
 - wet-light/relay/battery glitches continue to scale down with moisture while the train dries
 - `mex_damage_status` reports third-rail voltage, battery flood level, blackout state, door-fault relay and other water/electrical diagnostics
+- water-fault and collision sounds now use world-positioned 3D playback at the actual fault/impact point, with Source distance attenuation so nearby players hear them clearly and distant players hear them progressively less
 
 ### Damage 0.17.0 – physical damage, deformation and electrical damage
 
