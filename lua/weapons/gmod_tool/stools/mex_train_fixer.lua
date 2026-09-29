@@ -523,9 +523,9 @@ local function TargetDescription(trace, ply)
     if isvector(rayStart)
         and isvector(rayDirection)
     then
-        -- On the server we also know the original mount position of parts that
-        -- were torn away. Prefer that exact damaged component before falling
-        -- back to the still-existing ButtonMap/structure underneath it.
+        -- Detached doors/controls may no longer have a visible prop under the
+        -- crosshair. On the server, prefer the original mounting point so one
+        -- click repairs exactly the missing physical component.
         if SERVER
             and istable(MetrostroiExpandedDamage)
             and isfunction(
