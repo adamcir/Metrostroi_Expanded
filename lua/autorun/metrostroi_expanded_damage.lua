@@ -1786,6 +1786,13 @@ if SERVER then
                 and (tonumber(voltage) or 0) >= 100
         end
 
+        -- A fallback ContactState/Main750V value is not enough when the whole
+        -- wagon is on its side. Some train scripts retain their last contact
+        -- state after a derailment, which otherwise invents a live third rail.
+        if train:GetUp():Dot(Vector(0, 0, 1)) <= 0.45 then
+            return false
+        end
+
         local tr = istable(train.TR) and train.TR or nil
         if tr then
             local states = {
@@ -6076,6 +6083,19 @@ if SERVER then
         if not IsSubwayTrain(train) then return end
 
         if not MEXD.IsElectricalDamageEnabled() then
+            -- Water can still damage bearings/wheels mechanically even when
+            -- the optional electrical-damage simulation is disabled.
+            local physicalWetness =
+                SampleTrainWater(train)
+
+            MEXD.DamageWaterRunningGear(
+                train,
+                dT,
+                physicalWetness,
+                physicalWetness,
+                false
+            )
+
             train:SetNW2Float("MEX.Damage.WaterWetness", 0)
             train:SetNW2Float("MEX.Damage.WaterVoltage", 0)
             train:SetNW2Float("MEX.Damage.WaterCurrent", 0)
@@ -6090,6 +6110,11 @@ if SERVER then
             train.MEXDamageThirdRailFloodSeconds = 0
             train.MEXDamageWaterIngress = 0
             train.MEXDamageNextThirdRailBridge = nil
+            train.MEXDamageNextWaterPermanentFailure = nil
+            train.MEXDamageImpactArcUntil = nil
+            train.MEXDamageImpactArcPositions = {}
+            train.MEXDamageImpactArcSeverity = 0
+            train.MEXDamageNextImpactArc = nil
             train:SetNW2Float(
                 "MEX.Damage.ThirdRailFloodSeconds",
                 0
