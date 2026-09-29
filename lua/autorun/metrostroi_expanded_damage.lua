@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.4"
+MEXD.Version = "0.18.5"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -4309,9 +4309,53 @@ if SERVER then
             + pos * (tonumber(panel.scale) or 1)
     end
 
+    function MEXD.GetWaterIngressThreshold(key)
+        local hash = tonumber(
+            util.CRC(tostring(key or "water"))
+        ) or 1
+
+        -- Every component gets a stable but different ingress threshold.
+        -- Lower values represent equipment that gets wet early; values near
+        -- one represent well sheltered cabinets/lamp housings that only become
+        -- affected after prolonged flooding.
+        return 0.04
+            + ((hash % 1000) / 999) * 0.94
+    end
+
+    function MEXD.IsWaterComponentReached(
+        train,
+        key,
+        worldPos,
+        ingress
+    )
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        if isvector(worldPos)
+            and IsPointInConductiveWater(worldPos)
+        then
+            return true
+        end
+
+        ingress = math.Clamp(
+            tonumber(ingress)
+                or train:GetNW2Float(
+                    "MEX.Damage.WaterIngress",
+                    0
+                ),
+            0,
+            1
+        )
+
+        return ingress
+            >= MEXD.GetWaterIngressThreshold(key)
+    end
+
     function MEXD.PickWaterArcSourcePosition(
         train,
-        fallback
+        fallback,
+        ingress
     )
         if not IsSubwayTrain(train) then
             return fallback
@@ -4327,19 +4371,20 @@ if SERVER then
         then
             local positions = {}
 
-            -- All authored Metrostroi lamps: headlights, marker lights,
-            -- cab/saloon lamps and other train.Lights entries.
-            for _, light in pairs(train.Lights or {}) do
+            -- All authored Metrostroi lamps can eventually get wet:
+            -- headlights, markers, cab/saloon lamps and any custom light.
+            for index, light in pairs(train.Lights or {}) do
                 if istable(light)
                     and isvector(light[2])
                 then
-                    positions[#positions + 1] =
-                        train:LocalToWorld(light[2])
+                    positions[#positions + 1] = {
+                        key = "light:" .. tostring(index),
+                        pos = train:LocalToWorld(light[2]),
+                    }
                 end
             end
 
-            -- ButtonMap also contains indicator/control-panel lamp positions
-            -- that are not necessarily present in train.Lights.
+            -- Panel lamps/indicators often exist only as ButtonMap points.
             for panelName, panel in pairs(
                 train.ButtonMap or {}
             ) do
@@ -4350,7 +4395,7 @@ if SERVER then
                     continue
                 end
 
-                for _, button in pairs(panel.buttons) do
+                for buttonIndex, button in pairs(panel.buttons) do
                     local localPos =
                         MEXD.WaterButtonCenterLocal(
                             panel,
@@ -4358,14 +4403,24 @@ if SERVER then
                         )
 
                     if isvector(localPos) then
-                        positions[#positions + 1] =
-                            train:LocalToWorld(localPos)
+                        positions[#positions + 1] = {
+                            key =
+                                "panel:"
+                                .. tostring(panelName)
+                                .. ":"
+                                .. tostring(
+                                    istable(button)
+                                    and button.ID
+                                    or buttonIndex
+                                ),
+                            pos = train:LocalToWorld(localPos),
+                        }
                     end
                 end
             end
 
-            -- Generic relay systems have no model/world point. Give every
-            -- relay a stable internal cabinet/underframe location.
+            -- Generic relays do not expose a model position, so each relay
+            -- gets a stable internal cabinet/underframe point.
             for systemName, system in pairs(
                 train.Systems or {}
             ) do
@@ -4377,7 +4432,12 @@ if SERVER then
                         )
 
                     if isvector(pos) then
-                        positions[#positions + 1] = pos
+                        positions[#positions + 1] = {
+                            key =
+                                "relay:"
+                                .. tostring(systemName),
+                            pos = pos,
+                        }
                     end
                 end
             end
@@ -4387,18 +4447,373 @@ if SERVER then
                 now + 4
         end
 
-        local sources =
-            train.MEXDamageWaterArcSources
+        ingress = math.Clamp(
+            tonumber(ingress)
+                or train:GetNW2Float(
+                    "MEX.Damage.WaterIngress",
+                    0
+                ),
+            0,
+            1
+        )
 
-        if istable(sources)
-            and #sources > 0
-        then
-            return sources[
-                math.random(1, #sources)
+        local reachable = {}
+
+        for _, source in ipairs(
+            train.MEXDamageWaterArcSources or {}
+        ) do
+            -- Compatibility with a cache built by an older hot-loaded
+            -- version: old entries were bare vectors.
+            if isvector(source) then
+                reachable[#reachable + 1] = source
+            elseif istable(source)
+                and isvector(source.pos)
+                and MEXD.IsWaterComponentReached(
+                    train,
+                    source.key,
+                    source.pos,
+                    ingress
+                )
+            then
+                reachable[#reachable + 1] = source.pos
+            end
+        end
+
+        if #reachable > 0 then
+            return reachable[
+                math.random(1, #reachable)
             ]
         end
 
         return fallback
+    end
+
+    function MEXD.StartThirdRailWaterBridgeFault(
+        train,
+        intensity,
+        ingress,
+        worldPos
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.Systems)
+            or not train:GetNW2Bool(
+                "MEX.Damage.ThirdRailConnected",
+                false
+            )
+            or train:GetNW2Float(
+                "MEX.Damage.ThirdRailVoltage",
+                0
+            ) < 200
+            or not MEXD.IsHighVoltageConnected(train)
+        then
+            return false
+        end
+
+        train.MEXDamageRelayChatter =
+            train.MEXDamageRelayChatter or {}
+
+        local candidates = {}
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system)
+                or MEXD.IsVisiblePanelOperatorSystem(
+                    train,
+                    systemName,
+                    system
+                )
+                or IsCircuitBreakerSystem(
+                    systemName,
+                    system
+                )
+                or IsFuseSystemName(systemName)
+                or train.MEXDamageRelayChatter[systemName]
+            then
+                continue
+            end
+
+            local failure =
+                train.MEXDamageElectricalFailureSystems
+                and train.MEXDamageElectricalFailureSystems[
+                    systemName
+                ]
+                or nil
+
+            -- Water can bridge around a tripped breaker or a relay that was
+            -- itself water-failed, but it cannot resurrect physically torn,
+            -- worn-out or fuse-destroyed hardware.
+            if istable(failure)
+                and istable(failure.causes)
+                and (
+                    failure.causes.detached
+                    or failure.causes.wear
+                    or failure.causes.fuse
+                )
+            then
+                continue
+            end
+
+            local pos =
+                MEXD.WaterRelayWorldPosition(
+                    train,
+                    systemName
+                )
+
+            if not MEXD.IsWaterComponentReached(
+                train,
+                "relay:" .. systemName,
+                pos,
+                ingress
+            ) then
+                continue
+            end
+
+            local trigger =
+                istable(failure)
+                and failure.originalTriggerInput
+                or system.TriggerInput
+
+            if isfunction(trigger) then
+                candidates[#candidates + 1] = {
+                    name = systemName,
+                    system = system,
+                    trigger = trigger,
+                    pos = pos,
+                }
+            end
+        end
+
+        if #candidates <= 0 then
+            return false
+        end
+
+        local item =
+            candidates[math.random(1, #candidates)]
+        local originalTarget =
+            tonumber(item.system.TargetValue)
+        local originalValue =
+            tonumber(item.system.Value)
+        local current =
+            originalTarget ~= nil
+                and originalTarget
+                or originalValue
+                or 0
+        local glitchValue =
+            current > 0.5 and 0 or 1
+
+        train.MEXDamageRelayChatter[item.name] = {
+            trigger = item.trigger,
+            originalTarget = originalTarget,
+            originalValue = originalValue,
+            restoreAt =
+                CurTime()
+                + math.Rand(
+                    0.025,
+                    0.10 + intensity * 0.22
+                ),
+            thirdRailWaterBridge = true,
+        }
+
+        -- Use the pre-failure input when a water-failed relay is selected.
+        -- This models a conductive water path feeding the coil/contact from
+        -- another still-live conductor despite an individual breaker trip.
+        pcall(
+            item.trigger,
+            item.system,
+            "Set",
+            glitchValue
+        )
+
+        train:SetNW2String(
+            "MEX.Damage.ChatteringRelay",
+            item.name
+        )
+
+        local voltage, current =
+            GetTrainElectricalWaterState(train)
+        voltage = math.max(
+            voltage,
+            train:GetNW2Float(
+                "MEX.Damage.ThirdRailVoltage",
+                0
+            )
+        )
+        current = math.max(current, 120)
+
+        EmitWaterElectricalArc(
+            train,
+            item.pos or worldPos,
+            voltage,
+            current,
+            true
+        )
+
+        PlayLocalizedDamageSound(
+            train,
+            item.pos or worldPos,
+            WATER_RELAY_CHATTER_SOUNDS[
+                math.random(
+                    1,
+                    #WATER_RELAY_CHATTER_SOUNDS
+                )
+            ],
+            58 + math.floor(intensity * 10),
+            math.random(84, 116),
+            0.55 + intensity * 0.30
+        )
+
+        return true
+    end
+
+    function MEXD.PulseThirdRailFloodedLight(
+        train,
+        intensity,
+        ingress,
+        worldPos
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.Lights)
+            or not isfunction(train.SetLightPower)
+            or not train:GetNW2Bool(
+                "MEX.Damage.ThirdRailConnected",
+                false
+            )
+            or train:GetNW2Float(
+                "MEX.Damage.ThirdRailVoltage",
+                0
+            ) < 200
+            or not MEXD.IsHighVoltageConnected(train)
+        then
+            return false
+        end
+
+        local candidates = {}
+
+        for index, light in pairs(train.Lights) do
+            if not istable(light)
+                or not isvector(light[2])
+                or (
+                    train.MEXDamageWearFailedLights
+                    and train.MEXDamageWearFailedLights[index]
+                )
+            then
+                continue
+            end
+
+            local pos =
+                train:LocalToWorld(light[2])
+
+            if MEXD.IsWaterComponentReached(
+                train,
+                "light:" .. tostring(index),
+                pos,
+                ingress
+            ) then
+                candidates[#candidates + 1] = {
+                    index = index,
+                    pos = pos,
+                }
+            end
+        end
+
+        if #candidates <= 0 then
+            return false
+        end
+
+        local item =
+            candidates[math.random(1, #candidates)]
+        local state =
+            train.MEXDamageWearLightState
+            and train.MEXDamageWearLightState[
+                item.index
+            ]
+            or nil
+        local oldOn =
+            istable(state)
+            and state.on == true
+            or false
+        local oldBrightness =
+            istable(state)
+            and tonumber(state.brightness)
+            or 1
+
+        -- The water bridge may illuminate a lamp whose normal protected
+        -- circuit is off, or extinguish/flicker one that is on.
+        local pulseOn =
+            math.Rand(0, 1)
+                < (0.58 + intensity * 0.30)
+        local pulseBrightness =
+            pulseOn
+            and math.Rand(
+                0.15,
+                0.75 + intensity * 1.25
+            )
+            or 0
+
+        local direct =
+            train.MEXDamageWearOriginalSetLightPower
+
+        if isfunction(direct) then
+            direct(
+                train,
+                item.index,
+                pulseOn,
+                pulseBrightness
+            )
+        else
+            train:SetLightPower(
+                item.index,
+                pulseOn,
+                pulseBrightness
+            )
+        end
+
+        timer.Simple(
+            math.Rand(0.035, 0.18 + intensity * 0.16),
+            function()
+                if not IsValid(train) then
+                    return
+                end
+
+                local restore =
+                    train.MEXDamageWearOriginalSetLightPower
+
+                if isfunction(restore) then
+                    restore(
+                        train,
+                        item.index,
+                        oldOn,
+                        oldBrightness
+                    )
+                elseif isfunction(train.SetLightPower) then
+                    train:SetLightPower(
+                        item.index,
+                        oldOn,
+                        oldBrightness
+                    )
+                end
+            end
+        )
+
+        local voltage, current =
+            GetTrainElectricalWaterState(train)
+
+        EmitWaterElectricalArc(
+            train,
+            item.pos or worldPos,
+            math.max(
+                voltage,
+                train:GetNW2Float(
+                    "MEX.Damage.ThirdRailVoltage",
+                    0
+                )
+            ),
+            math.max(current, 90),
+            true
+        )
+
+        return true
     end
 
     local function StartWaterDoorRelayFault(
@@ -5145,6 +5560,17 @@ if SERVER then
             train:SetNW2Bool("MEX.Damage.ThirdRailConnected", false)
             train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
             train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
+            train.MEXDamageThirdRailFloodSeconds = 0
+            train.MEXDamageWaterIngress = 0
+            train.MEXDamageNextThirdRailBridge = nil
+            train:SetNW2Float(
+                "MEX.Damage.ThirdRailFloodSeconds",
+                0
+            )
+            train:SetNW2Float(
+                "MEX.Damage.WaterIngress",
+                0
+            )
             train:SetNW2Float(
                 "MEX.Damage.WaterGlitchIntensity",
                 0
@@ -5190,6 +5616,70 @@ if SERVER then
             ),
             0,
             1
+        )
+
+        -- A train that remains physically connected to the third rail can
+        -- stay dangerous after individual breakers trip. As immersion time
+        -- grows, water penetrates progressively better-protected relay
+        -- cabinets and lamp housings and can bridge between otherwise
+        -- independent conductors. Opening the main HV switch still kills this
+        -- source immediately.
+        local thirdRailBridgeLive =
+            thirdRailConnected
+            and thirdRailVoltage >= 200
+            and MEXD.IsHighVoltageConnected(train)
+
+        local floodSeconds =
+            math.max(
+                tonumber(
+                    train.MEXDamageThirdRailFloodSeconds
+                ) or 0,
+                0
+            )
+
+        if thirdRailBridgeLive
+            and electricalWetness > 0.015
+        then
+            floodSeconds =
+                floodSeconds
+                + dT
+                    * Lerp(
+                        electricalWetness,
+                        0.30,
+                        1.65
+                    )
+        elseif wetness <= 0.015 then
+            -- Ingress drains/drys much more slowly than it accumulated.
+            floodSeconds =
+                math.max(
+                    0,
+                    floodSeconds - dT * 0.035
+                )
+        end
+
+        train.MEXDamageThirdRailFloodSeconds =
+            floodSeconds
+
+        local ingress = math.Clamp(
+            math.max(
+                1 - math.exp(
+                    -floodSeconds / 22
+                ),
+                surfaceMoisture * 0.48,
+                deepMoisture * 0.88
+            ),
+            0,
+            1
+        )
+
+        train.MEXDamageWaterIngress = ingress
+        train:SetNW2Float(
+            "MEX.Damage.ThirdRailFloodSeconds",
+            math.min(floodSeconds, 3600)
+        )
+        train:SetNW2Float(
+            "MEX.Damage.WaterIngress",
+            ingress
         )
 
         local voltage, current, hv, lv =
@@ -5368,6 +5858,87 @@ if SERVER then
             )
         end
 
+        -- Independent third-rail water bridges keep producing intermittent
+        -- faults even after ordinary branch breakers have opened. Protection
+        -- still trips normally; it simply cannot guarantee that conductive
+        -- water will not connect a different live conductor to a wet load.
+        if thirdRailBridgeLive
+            and electricalWetness > 0.015
+            and ingress > 0.025
+        then
+            local now = CurTime()
+            local nextBridge =
+                train.MEXDamageNextThirdRailBridge
+                or 0
+
+            if now >= nextBridge then
+                local bridgeIntensity =
+                    math.Clamp(
+                        ingress * 0.72
+                            + electricalWetness * 0.38,
+                        0,
+                        1
+                    )
+
+                train.MEXDamageNextThirdRailBridge =
+                    now
+                    + Lerp(
+                        bridgeIntensity,
+                        1.10,
+                        0.075
+                    )
+                    * math.Rand(0.65, 1.30)
+
+                local didSomething = false
+
+                if math.Rand(0, 1)
+                    < 0.18 + bridgeIntensity * 0.72
+                then
+                    didSomething =
+                        MEXD.StartThirdRailWaterBridgeFault(
+                            train,
+                            bridgeIntensity,
+                            ingress,
+                            faultSparkPos
+                        ) or didSomething
+                end
+
+                if math.Rand(0, 1)
+                    < 0.14 + bridgeIntensity * 0.68
+                then
+                    didSomething =
+                        MEXD.PulseThirdRailFloodedLight(
+                            train,
+                            bridgeIntensity,
+                            ingress,
+                            faultSparkPos
+                        ) or didSomething
+                end
+
+                if not didSomething
+                    and math.Rand(0, 1)
+                        < 0.22 + bridgeIntensity * 0.55
+                then
+                    EmitWaterElectricalArc(
+                        train,
+                        MEXD.PickWaterArcSourcePosition(
+                            train,
+                            faultSparkPos,
+                            ingress
+                        ),
+                        math.max(
+                            voltage,
+                            thirdRailVoltage
+                        ),
+                        math.max(current, 100),
+                        true
+                    )
+                end
+            end
+        elseif not thirdRailBridgeLive then
+            train.MEXDamageNextThirdRailBridge = nil
+        end
+
         if electricalWetness > 0.02 and powered then
             local now = CurTime()
             local nextArc =
@@ -5390,7 +5961,8 @@ if SERVER then
                         train,
                         MEXD.PickWaterArcSourcePosition(
                             train,
-                            faultSparkPos
+                            faultSparkPos,
+                            ingress
                         ),
                         voltage,
                         current,
@@ -8921,6 +9493,9 @@ if SERVER then
         train.MEXDamageNextRelayChatter = nil
         train.MEXDamageNextDoorWaterFault = nil
         train.MEXDamageNextBatteryGlitch = nil
+        train.MEXDamageNextThirdRailBridge = nil
+        train.MEXDamageThirdRailFloodSeconds = 0
+        train.MEXDamageWaterIngress = 0
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
         train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
@@ -8937,6 +9512,8 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
         train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
         train:SetNW2Float("MEX.Damage.DrySeconds", 0)
+        train:SetNW2Float("MEX.Damage.ThirdRailFloodSeconds", 0)
+        train:SetNW2Float("MEX.Damage.WaterIngress", 0)
         train:SetNW2String("MEX.Damage.LastProtection", "")
 
         hook.Run("MetrostroiExpandedDamageReset", train)
@@ -8970,6 +9547,9 @@ if SERVER then
         train.MEXDamageNextRelayChatter = nil
         train.MEXDamageNextDoorWaterFault = nil
         train.MEXDamageNextBatteryGlitch = nil
+        train.MEXDamageNextThirdRailBridge = nil
+        train.MEXDamageThirdRailFloodSeconds = 0
+        train.MEXDamageWaterIngress = 0
 
         train:SetNW2Float("MEX.Damage.electrical", 0)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
@@ -8989,6 +9569,8 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.WaterMoisture", 0)
         train:SetNW2Float("MEX.Damage.DeepMoisture", 0)
         train:SetNW2Float("MEX.Damage.DrySeconds", 0)
+        train:SetNW2Float("MEX.Damage.ThirdRailFloodSeconds", 0)
+        train:SetNW2Float("MEX.Damage.WaterIngress", 0)
         train:SetNW2String("MEX.Damage.LastProtection", "")
 
         for index in pairs(
