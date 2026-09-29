@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.3"
+MEXD.Version = "0.18.4"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1433,7 +1433,7 @@ if SERVER then
     MEXD.GetBatteryHealth = GetBatteryHealth
     MEXD.ApplyBatteryDamage = ApplyBatteryDamage
 
-    function MEXD._BatteryCanSupplyLowVoltage(train)
+    function MEXD.IsBatteryElectricallyAlive(train)
         if not IsSubwayTrain(train)
             or not istable(train.Battery)
         then
@@ -1467,9 +1467,6 @@ if SERVER then
             tonumber(train.Battery.Voltage) or 0
         ) >= 18
     end
-
-    MEXD.IsBatteryElectricallyAlive =
-        MEXD._BatteryCanSupplyLowVoltage
 
 
     ---------------------------------------------------------------------------
@@ -1809,7 +1806,7 @@ if SERVER then
         return (tonumber(voltage) or 0) >= 200
     end
 
-    function MEXD._IsTrainHighVoltageConnected(train)
+    function MEXD.IsHighVoltageConnected(train)
         if not IsSubwayTrain(train) then
             return false
         end
@@ -1839,13 +1836,10 @@ if SERVER then
             end
         end
 
-        -- If this train family does not expose a known main HV operator, keep
-        -- compatibility and infer the state from its normal electrical fields.
+        -- Third-party trains may not expose a recognisable main switch.
+        -- Preserve their original behaviour instead of disabling all HV.
         return not known
     end
-
-    MEXD.IsHighVoltageConnected =
-        MEXD._IsTrainHighVoltageConnected
 
     local function GetTrainElectricalWaterState(train)
         local electric = istable(train.Electric)
@@ -1867,10 +1861,7 @@ if SERVER then
             })
         )
 
-        -- TR.Main750V describes contact-rail availability, not necessarily a
-        -- closed main circuit. An open GV/BV means the train's internal HV
-        -- equipment is de-energized even while the shoes sit on a live rail.
-        if not MEXD._IsTrainHighVoltageConnected(train) then
+        if not MEXD.IsHighVoltageConnected(train) then
             hv = 0
         end
 
@@ -1885,15 +1876,12 @@ if SERVER then
             battery and battery.Voltage
         )
 
-        local batteryAvailable =
-            MEXD._BatteryCanSupplyLowVoltage(train)
-
-        -- Electric.* low-voltage fields can retain a stale value for a Think
-        -- frame after a destroyed battery has actually gone dead. A live HV
-        -- supply may still feed an auxiliary converter; without HV there is no
-        -- real low-voltage source and therefore nothing that can arc.
-        if not batteryAvailable then
+        -- Electric.* can keep a stale 80 V value for a frame after the
+        -- battery has failed. With no live battery and no internal HV source,
+        -- there is no source that can keep a flooded circuit arcing.
+        if not MEXD.IsBatteryElectricallyAlive(train) then
             batteryVoltage = 0
+
             if hv < 200 then
                 lv = 0
             end
@@ -2029,12 +2017,10 @@ if SERVER then
                 "MEX.Damage.ThirdRailVoltage",
                 0
             ) >= 200
-            and MEXD._IsTrainHighVoltageConnected(train)
+            and MEXD.IsHighVoltageConnected(train)
 
-        -- Moisture or a stored damage state cannot create energy. Arcing needs
-        -- a genuinely live third rail or a still-working connected battery.
         if not thirdRailLive
-            and not MEXD._BatteryCanSupplyLowVoltage(train)
+            and not MEXD.IsBatteryElectricallyAlive(train)
         then
             return
         end
@@ -2675,7 +2661,7 @@ if SERVER then
         )
     end
 
-    function MEXD._NormalizeVisibleOperatorName(value)
+    function MEXD.NormalizeVisibleOperatorName(value)
         local normalized = string.lower(
             tostring(value or "")
         ):gsub("[^%w]", "")
@@ -2708,7 +2694,7 @@ if SERVER then
         return normalized
     end
 
-    function MEXD._IsVisiblePanelOperatorSystem(
+    function MEXD.IsVisiblePanelOperatorSystem(
         train,
         systemName,
         system
@@ -2727,7 +2713,7 @@ if SERVER then
         end
 
         local target =
-            MEXD._NormalizeVisibleOperatorName(systemName)
+            MEXD.NormalizeVisibleOperatorName(systemName)
 
         for panelName, panel in pairs(train.ButtonMap) do
             if panelName == "BaseClass"
@@ -2749,7 +2735,7 @@ if SERVER then
 
                 id = id:gsub("^.+:", "")
                 local base =
-                    MEXD._NormalizeVisibleOperatorName(id)
+                    MEXD.NormalizeVisibleOperatorName(id)
 
                 if train[id] == system
                     or train[base] == system
@@ -2764,56 +2750,6 @@ if SERVER then
         end
 
         return false
-    end
-
-    function MEXD._RestoreWaterFailedVisibleOperators(train)
-        if not IsSubwayTrain(train)
-            or not istable(
-                train.MEXDamageElectricalFailureSystems
-            )
-        then
-            return
-        end
-
-        local restore = {}
-
-        for systemName, data in pairs(
-            train.MEXDamageElectricalFailureSystems
-        ) do
-            local causes =
-                istable(data)
-                and data.causes
-                or nil
-
-            if not istable(causes)
-                or not causes.water
-                or causes.detached
-                or causes.wear
-                or causes.fuse
-            then
-                continue
-            end
-
-            local system = train[systemName]
-            if istable(system)
-                and MEXD._IsVisiblePanelOperatorSystem(
-                    train,
-                    tostring(systemName),
-                    system
-                )
-            then
-                restore[#restore + 1] =
-                    tostring(systemName)
-            end
-        end
-
-        for _, systemName in ipairs(restore) do
-            RestoreSingleElectricalFailure(
-                train,
-                systemName,
-                true
-            )
-        end
     end
 
     local SENSITIVE_WATER_ELECTRONICS = {
@@ -2871,7 +2807,7 @@ if SERVER then
                 continue
             end
 
-            if MEXD._IsVisiblePanelOperatorSystem(
+            if MEXD.IsVisiblePanelOperatorSystem(
                 train,
                 systemName,
                 system
@@ -2912,9 +2848,10 @@ if SERVER then
                 continue
             end
 
-            -- Any visible panel operator remains mechanically movable even
-            -- with a dead battery. Only the circuit behind it may fail.
-            if MEXD._IsVisiblePanelOperatorSystem(
+            -- Important: never water-fail a visible physical operator.
+            -- It can still be toggled with a dead battery; the downstream
+            -- lamp/relay/circuit simply has no useful electrical output.
+            if MEXD.IsVisiblePanelOperatorSystem(
                 train,
                 systemName,
                 system
@@ -3231,7 +3168,7 @@ if SERVER then
             -- again, producing a few seconds of surface arcing before the
             -- battery collapses for a second time.
             if not thirdRailConnected
-                and MEXD._BatteryCanSupplyLowVoltage(train)
+                and MEXD.IsBatteryElectricallyAlive(train)
                 and train:GetNW2Bool(
                     "MEX.Damage.LowVoltageBlackout",
                     false
@@ -3999,7 +3936,7 @@ if SERVER then
             systemName = tostring(systemName)
 
             if not IsRelayLikeElectricalSystem(system)
-                or MEXD._IsVisiblePanelOperatorSystem(
+                or MEXD.IsVisiblePanelOperatorSystem(
                     train,
                     systemName,
                     system
@@ -4291,7 +4228,7 @@ if SERVER then
             -- They must remain in the position selected by the player; water
             -- only bridges downstream relays/solenoids.
             if tostring(system.relay_type or "") == "Switch"
-                or MEXD._IsVisiblePanelOperatorSystem(
+                or MEXD.IsVisiblePanelOperatorSystem(
                     train,
                     tostring(systemName),
                     system
@@ -4317,7 +4254,7 @@ if SERVER then
         return candidates
     end
 
-    function MEXD._WaterRelayWorldPosition(
+    function MEXD.WaterRelayWorldPosition(
         train,
         systemName
     )
@@ -4333,12 +4270,11 @@ if SERVER then
         ) or 1
 
         local fx = (hash % 997) / 996
-        local fy = (math.floor(hash / 997) % 991) / 990
-        local fz = (math.floor(hash / 988027) % 983) / 982
+        local fy =
+            (math.floor(hash / 997) % 991) / 990
+        local fz =
+            (math.floor(hash / 988027) % 983) / 982
 
-        -- Generic relay systems do not publish a physical model position.
-        -- Give every relay a stable cabinet/underframe point instead of
-        -- making every short circuit spark from the center of the wagon.
         return train:LocalToWorld(Vector(
             mins.x + span.x * (0.08 + fx * 0.84),
             mins.y + span.y * (0.18 + fy * 0.64),
@@ -4346,7 +4282,7 @@ if SERVER then
         ))
     end
 
-    function MEXD._WaterButtonCenterLocal(
+    function MEXD.WaterButtonCenterLocal(
         panel,
         button
     )
@@ -4373,69 +4309,7 @@ if SERVER then
             + pos * (tonumber(panel.scale) or 1)
     end
 
-    function MEXD._BuildWaterArcSourcePositions(train)
-        local positions = {}
-
-        -- Every Metrostroi light entry is a possible wet short: headlights,
-        -- marker lights, cab lamps, saloon lamps and other authored lamps.
-        for _, light in pairs(train.Lights or {}) do
-            if istable(light)
-                and isvector(light[2])
-            then
-                positions[#positions + 1] =
-                    train:LocalToWorld(light[2])
-            end
-        end
-
-        -- Many dashboard indicator lamps are not in train.Lights at all. Their
-        -- ButtonMap mount points give us the physical panel positions, so all
-        -- panel lamps/indicators can also become arc sources.
-        for panelName, panel in pairs(
-            train.ButtonMap or {}
-        ) do
-            if panelName == "BaseClass"
-                or not istable(panel)
-                or not istable(panel.buttons)
-            then
-                continue
-            end
-
-            for _, button in pairs(panel.buttons) do
-                local localPos =
-                    MEXD._WaterButtonCenterLocal(
-                        panel,
-                        button
-                    )
-
-                if isvector(localPos) then
-                    positions[#positions + 1] =
-                        train:LocalToWorld(localPos)
-                end
-            end
-        end
-
-        -- Every relay/contactor may short. Since generic systems have no world
-        -- position, use their deterministic cabinet mounting point.
-        for systemName, system in pairs(
-            train.Systems or {}
-        ) do
-            if IsRelayLikeElectricalSystem(system) then
-                local pos =
-                    MEXD._WaterRelayWorldPosition(
-                        train,
-                        systemName
-                    )
-
-                if isvector(pos) then
-                    positions[#positions + 1] = pos
-                end
-            end
-        end
-
-        return positions
-    end
-
-    function MEXD._PickWaterArcSourcePosition(
+    function MEXD.PickWaterArcSourcePosition(
         train,
         fallback
     )
@@ -4451,8 +4325,64 @@ if SERVER then
                 or 0
             ) <= now
         then
-            train.MEXDamageWaterArcSources =
-                MEXD._BuildWaterArcSourcePositions(train)
+            local positions = {}
+
+            -- All authored Metrostroi lamps: headlights, marker lights,
+            -- cab/saloon lamps and other train.Lights entries.
+            for _, light in pairs(train.Lights or {}) do
+                if istable(light)
+                    and isvector(light[2])
+                then
+                    positions[#positions + 1] =
+                        train:LocalToWorld(light[2])
+                end
+            end
+
+            -- ButtonMap also contains indicator/control-panel lamp positions
+            -- that are not necessarily present in train.Lights.
+            for panelName, panel in pairs(
+                train.ButtonMap or {}
+            ) do
+                if panelName == "BaseClass"
+                    or not istable(panel)
+                    or not istable(panel.buttons)
+                then
+                    continue
+                end
+
+                for _, button in pairs(panel.buttons) do
+                    local localPos =
+                        MEXD.WaterButtonCenterLocal(
+                            panel,
+                            button
+                        )
+
+                    if isvector(localPos) then
+                        positions[#positions + 1] =
+                            train:LocalToWorld(localPos)
+                    end
+                end
+            end
+
+            -- Generic relay systems have no model/world point. Give every
+            -- relay a stable internal cabinet/underframe location.
+            for systemName, system in pairs(
+                train.Systems or {}
+            ) do
+                if IsRelayLikeElectricalSystem(system) then
+                    local pos =
+                        MEXD.WaterRelayWorldPosition(
+                            train,
+                            systemName
+                        )
+
+                    if isvector(pos) then
+                        positions[#positions + 1] = pos
+                    end
+                end
+            end
+
+            train.MEXDamageWaterArcSources = positions
             train.MEXDamageWaterArcSourcesExpire =
                 now + 4
         end
@@ -4468,9 +4398,7 @@ if SERVER then
             ]
         end
 
-        return isvector(fallback)
-            and fallback
-            or train:WorldSpaceCenter()
+        return fallback
     end
 
     local function StartWaterDoorRelayFault(
@@ -4542,32 +4470,23 @@ if SERVER then
             item.name
         )
 
-        local relayArcPos =
-            MEXD._WaterRelayWorldPosition(
-                train,
-                item.name
-            ) or worldPos
+        local arcVoltage, arcCurrent =
+            GetTrainElectricalWaterState(train)
 
         EmitWaterElectricalArc(
             train,
-            relayArcPos,
-            train:GetNW2Float(
-                "MEX.Damage.WaterVoltage",
-                0
-            ),
-            train:GetNW2Float(
-                "MEX.Damage.WaterCurrent",
-                0
-            ),
-            train:GetNW2Float(
-                "MEX.Damage.WaterVoltage",
-                0
-            ) >= 200
+            MEXD.WaterRelayWorldPosition(
+                train,
+                item.name
+            ) or worldPos,
+            arcVoltage,
+            arcCurrent,
+            arcVoltage >= 200
         )
 
         PlayLocalizedDamageSound(
             train,
-            relayArcPos,
+            worldPos,
             WATER_RELAY_CHATTER_SOUNDS[
                 math.random(
                     1,
@@ -4617,7 +4536,7 @@ if SERVER then
                 continue
             end
 
-            if MEXD._IsVisiblePanelOperatorSystem(
+            if MEXD.IsVisiblePanelOperatorSystem(
                 train,
                 systemName,
                 system
@@ -4831,32 +4750,23 @@ if SERVER then
             item.name
         )
 
-        local relayArcPos =
-            MEXD._WaterRelayWorldPosition(
-                train,
-                item.name
-            ) or worldPos
+        local arcVoltage, arcCurrent =
+            GetTrainElectricalWaterState(train)
 
         EmitWaterElectricalArc(
             train,
-            relayArcPos,
-            train:GetNW2Float(
-                "MEX.Damage.WaterVoltage",
-                0
-            ),
-            train:GetNW2Float(
-                "MEX.Damage.WaterCurrent",
-                0
-            ),
-            train:GetNW2Float(
-                "MEX.Damage.WaterVoltage",
-                0
-            ) >= 200
+            MEXD.WaterRelayWorldPosition(
+                train,
+                item.name
+            ) or worldPos,
+            arcVoltage,
+            arcCurrent,
+            arcVoltage >= 200
         )
 
         PlayLocalizedDamageSound(
             train,
-            relayArcPos,
+            worldPos,
             WATER_RELAY_CHATTER_SOUNDS[
                 math.random(
                     1,
@@ -5374,11 +5284,6 @@ if SERVER then
             hazard
         )
 
-        -- Older damage state or a previous wet short may have wrapped a real
-        -- panel switch as an electrical failure. Keep the physical operator
-        -- movable even when the battery and the circuit behind it are dead.
-        MEXD._RestoreWaterFailedVisibleOperators(train)
-
         RecoverDriedWaterFailures(
             train,
             surfaceMoisture,
@@ -5483,7 +5388,7 @@ if SERVER then
                 then
                     EmitWaterElectricalArc(
                         train,
-                        MEXD._PickWaterArcSourcePosition(
+                        MEXD.PickWaterArcSourcePosition(
                             train,
                             faultSparkPos
                         ),
@@ -9589,18 +9494,20 @@ if SERVER then
         maxDistance
     )
         if not IsSubwayTrain(train)
+            or not istable(train.MEXDamageDetachedServer)
             or not isvector(rayStart)
             or not isvector(rayDirection)
-            or rayDirection:LengthSqr() <= 0.000001
-            or not istable(
-                train.MEXDamageDetachedServer
-            )
         then
             return nil
         end
 
         local direction =
             rayDirection:GetNormalized()
+
+        if direction:LengthSqr() <= 0.000001 then
+            return nil
+        end
+
         local bestName
         local bestScore = math.huge
 
@@ -9612,6 +9519,7 @@ if SERVER then
             end
 
             local point
+
             if isvector(data.anchorLocal) then
                 point =
                     train:LocalToWorld(
@@ -9658,42 +9566,6 @@ if SERVER then
         end
 
         return bestName
-    end
-
-    function MEXD._DetachedComponentForButton(
-        train,
-        button
-    )
-        if not IsSubwayTrain(train)
-            or not isstring(button)
-            or not istable(
-                train.MEXDamageDetachedServer
-            )
-        then
-            return nil
-        end
-
-        button = button:gsub("^.+:", "")
-
-        for name, data in pairs(
-            train.MEXDamageDetachedServer
-        ) do
-            for _, id in ipairs(
-                istable(data)
-                    and data.buttons
-                    or {}
-            ) do
-                if tostring(id):gsub(
-                    "^.+:",
-                    ""
-                ) == button
-                then
-                    return tostring(name)
-                end
-            end
-        end
-
-        return nil
     end
 
     local function RepairBatteryOnly(train)
@@ -10190,17 +10062,28 @@ if SERVER then
         if string.sub(target, 1, 8) == "control:" then
             local button =
                 string.sub(target, 9)
-            local detached =
-                MEXD._DetachedComponentForButton(
-                    train,
-                    button
-                )
 
-            if detached then
-                return MEXD.RepairDetachedComponent(
-                    train,
-                    detached
-                )
+            if istable(train.MEXDamageDetachedServer) then
+                for name, data in pairs(
+                    train.MEXDamageDetachedServer
+                ) do
+                    for _, id in ipairs(
+                        istable(data)
+                            and data.buttons
+                            or {}
+                    ) do
+                        if tostring(id):gsub(
+                            "^.+:",
+                            ""
+                        ) == button
+                        then
+                            return MEXD.RepairDetachedComponent(
+                                train,
+                                tostring(name)
+                            )
+                        end
+                    end
+                end
             end
 
             return MEXD.RepairWearControl(
@@ -10921,20 +10804,20 @@ if SERVER then
         MEXD.ApplyDamage(ent, zone, amount, pos, normal, source)
     end)
 
-    MEXD._nextWaterElectricalScan = 0
-    MEXD._lastWaterElectricalScan = CurTime()
+    local nextWaterElectricalScan = 0
+    local lastWaterElectricalScan = CurTime()
 
     hook.Add("Think", "MEX.Damage.WaterElectrical", function()
         local now = CurTime()
-        if now < MEXD._nextWaterElectricalScan then return end
+        if now < nextWaterElectricalScan then return end
 
         local dT = math.Clamp(
-            now - MEXD._lastWaterElectricalScan,
+            now - lastWaterElectricalScan,
             0.01,
             0.35
         )
-        MEXD._lastWaterElectricalScan = now
-        MEXD._nextWaterElectricalScan = now + WATER_SCAN_INTERVAL
+        lastWaterElectricalScan = now
+        nextWaterElectricalScan = now + WATER_SCAN_INTERVAL
 
         for _, train in ipairs(ents.GetAll()) do
             if IsSubwayTrain(train) then
@@ -10945,24 +10828,24 @@ if SERVER then
         end
     end)
 
-    MEXD._nextWearScan = 0
-    MEXD._lastWearScan = CurTime()
+    local nextWearScan = 0
+    local lastWearScan = CurTime()
 
     hook.Add(
         "Think",
         "MEX.Damage.PersistentWear",
         function()
             local now = CurTime()
-            if now < MEXD._nextWearScan then return end
+            if now < nextWearScan then return end
 
             local dT = math.Clamp(
-                now - MEXD._lastWearScan,
+                now - lastWearScan,
                 0.05,
                 0.50
             )
 
-            MEXD._lastWearScan = now
-            MEXD._nextWearScan = now + 0.20
+            lastWearScan = now
+            nextWearScan = now + 0.20
 
             for _, train in ipairs(ents.GetAll()) do
                 if IsSubwayTrain(train) then
@@ -10976,11 +10859,11 @@ if SERVER then
         end
     )
 
-    MEXD._nextVelocityScan = 0
+    local nextVelocityScan = 0
 
     hook.Add("Think", "MEX.Damage.VelocityCrashDetection", function()
-        if CurTime() < MEXD._nextVelocityScan then return end
-        MEXD._nextVelocityScan = CurTime() + 0.05
+        if CurTime() < nextVelocityScan then return end
+        nextVelocityScan = CurTime() + 0.05
 
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
