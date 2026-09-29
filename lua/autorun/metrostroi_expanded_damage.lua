@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.5"
+MEXD.Version = "0.18.6"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1727,9 +1727,18 @@ if SERVER then
                 maxs = Vector(2, 2, 2),
             })
 
-            -- This deliberately mirrors Metrostroi's own CheckContact geometry
-            -- without its side effects (player shocks, connector welding).
-            if result.HitWorld then
+            -- Generic world/prop contact is trustworthy only while the bogey
+            -- is reasonably upright. When a wagon lies on its side the shoe
+            -- probe rotates into the floor/side wall; treating that brush hit
+            -- as a third rail was the reason a dead, overturned flooded train
+            -- could keep sparking. Explicit powered track connectors remain
+            -- authoritative regardless of orientation.
+            local upright =
+                bogey:GetUp():Dot(Vector(0, 0, 1))
+
+            if result.HitWorld
+                and upright > 0.45
+            then
                 return true, true
             end
 
@@ -1743,7 +1752,7 @@ if SERVER then
                     if result.Entity.Power then
                         return true, true
                     end
-                else
+                elseif upright > 0.45 then
                     return true, true
                 end
             end
@@ -4816,6 +4825,524 @@ if SERVER then
         return true
     end
 
+    function MEXD.SeizeWaterRelay(
+        train,
+        ingress,
+        worldPos,
+        sourceLive
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.Systems)
+        then
+            return false
+        end
+
+        local candidates = {}
+
+        for systemName, system in pairs(train.Systems) do
+            systemName = tostring(systemName)
+
+            if not IsRelayLikeElectricalSystem(system)
+                or MEXD.IsVisiblePanelOperatorSystem(
+                    train,
+                    systemName,
+                    system
+                )
+                or IsCircuitBreakerSystem(
+                    systemName,
+                    system
+                )
+                or IsFuseSystemName(systemName)
+            then
+                continue
+            end
+
+            local existing =
+                train.MEXDamageElectricalFailureSystems
+                and train.MEXDamageElectricalFailureSystems[
+                    systemName
+                ]
+                or nil
+
+            if istable(existing)
+                and existing.permanent == true
+            then
+                continue
+            end
+
+            local pos =
+                MEXD.WaterRelayWorldPosition(
+                    train,
+                    systemName
+                )
+
+            if MEXD.IsWaterComponentReached(
+                train,
+                "relay:" .. systemName,
+                pos,
+                ingress
+            ) then
+                candidates[#candidates + 1] = {
+                    name = systemName,
+                    pos = pos,
+                }
+            end
+        end
+
+        if #candidates <= 0 then
+            return false
+        end
+
+        local item =
+            candidates[math.random(1, #candidates)]
+
+        if not FailElectricalSystemOpen(
+            train,
+            item.name,
+            {
+                cause = "water",
+                temporary = false,
+            }
+        ) then
+            return false
+        end
+
+        train.MEXDamageWearFailedSystems =
+            train.MEXDamageWearFailedSystems or {}
+        train.MEXDamageWearFailedSystems[
+            item.name
+        ] = true
+
+        train:SetNW2Int(
+            "MEX.Damage.FailedRelayCount",
+            table.Count(
+                train.MEXDamageWearFailedSystems
+            )
+        )
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            "Water-seized relay: " .. item.name
+        )
+
+        if sourceLive then
+            local voltage, current =
+                GetTrainElectricalWaterState(train)
+
+            EmitWaterElectricalArc(
+                train,
+                item.pos or worldPos,
+                voltage,
+                math.max(current, 45),
+                voltage >= 200
+            )
+        end
+
+        PlayLocalizedDamageSound(
+            train,
+            item.pos or worldPos,
+            "ambient/machines/slicer1.wav",
+            52,
+            math.random(88, 108),
+            0.45
+        )
+
+        return true
+    end
+
+    function MEXD.FailWaterLamp(
+        train,
+        ingress,
+        worldPos,
+        sourceLive
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.Lights)
+        then
+            return false
+        end
+
+        train.MEXDamageWearFailedLights =
+            train.MEXDamageWearFailedLights or {}
+
+        local candidates = {}
+
+        for index, light in pairs(train.Lights) do
+            if istable(light)
+                and isvector(light[2])
+                and not train.MEXDamageWearFailedLights[
+                    index
+                ]
+            then
+                local pos =
+                    train:LocalToWorld(light[2])
+
+                if MEXD.IsWaterComponentReached(
+                    train,
+                    "light:" .. tostring(index),
+                    pos,
+                    ingress
+                ) then
+                    candidates[#candidates + 1] = {
+                        index = index,
+                        pos = pos,
+                    }
+                end
+            end
+        end
+
+        if #candidates <= 0 then
+            return false
+        end
+
+        local item =
+            candidates[math.random(1, #candidates)]
+
+        train.MEXDamageWearFailedLights[
+            item.index
+        ] = true
+        train:SetNW2Bool(
+            "MEX.Damage.WearLight."
+                .. tostring(item.index),
+            true
+        )
+        train:SetNW2Int(
+            "MEX.Damage.FailedLightCount",
+            table.Count(
+                train.MEXDamageWearFailedLights
+            )
+        )
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            "Water-damaged light #"
+                .. tostring(item.index)
+        )
+
+        local direct =
+            train.MEXDamageWearOriginalSetLightPower
+
+        if isfunction(direct) then
+            direct(
+                train,
+                item.index,
+                false,
+                0
+            )
+        elseif isfunction(train.SetLightPower) then
+            train:SetLightPower(
+                item.index,
+                false,
+                0
+            )
+        end
+
+        if sourceLive then
+            local voltage, current =
+                GetTrainElectricalWaterState(train)
+
+            EmitWaterElectricalArc(
+                train,
+                item.pos or worldPos,
+                voltage,
+                math.max(current, 30),
+                voltage >= 200
+            )
+        end
+
+        return true
+    end
+
+    function MEXD.DamageWaterRunningGear(
+        train,
+        dT,
+        wetness,
+        ingress,
+        thirdRailLive
+    )
+        if not IsSubwayTrain(train)
+            or not MEXD.IsPhysicalDamageEnabled()
+        then
+            return
+        end
+
+        local function damageBogey(
+            bogey,
+            fieldName,
+            nwName
+        )
+            if not IsValid(bogey) then
+                return
+            end
+
+            local mins = bogey:OBBMins()
+            local lower =
+                bogey:LocalToWorld(Vector(
+                    0,
+                    0,
+                    isvector(mins)
+                        and mins.z + 2
+                        or -8
+                ))
+
+            local directlyWet =
+                IsPointInConductiveWater(
+                    bogey:WorldSpaceCenter()
+                )
+                or IsPointInConductiveWater(lower)
+
+            if not directlyWet
+                and wetness < 0.48
+            then
+                return
+            end
+
+            local old =
+                math.Clamp(
+                    tonumber(train[fieldName]) or 0,
+                    0,
+                    1
+                )
+
+            local rate =
+                dT
+                * math.max(wetness, 0.25)
+                * (
+                    0.00065
+                    + ingress * 0.0038
+                )
+                * (
+                    thirdRailLive
+                    and 1.22
+                    or 1
+                )
+                * MEXD.GetPhysicalDamageScale()
+
+            local new =
+                math.Clamp(old + rate, 0, 1)
+
+            train[fieldName] = new
+            train:SetNW2Float(
+                nwName,
+                new
+            )
+            bogey:SetNW2Float(
+                "MEX.Damage.WheelWaterDamage",
+                new
+            )
+
+            local oldStage =
+                old >= 0.82 and 3
+                or old >= 0.58 and 2
+                or old >= 0.28 and 1
+                or 0
+            local newStage =
+                new >= 0.82 and 3
+                or new >= 0.58 and 2
+                or new >= 0.28 and 1
+                or 0
+
+            if newStage > oldStage then
+                PlayLocalizedDamageSound(
+                    train,
+                    bogey:WorldSpaceCenter(),
+                    newStage >= 3
+                        and "physics/metal/metal_box_break2.wav"
+                        or "physics/metal/metal_box_impact_hard2.wav",
+                    58 + newStage * 5,
+                    math.random(86, 105),
+                    0.55 + newStage * 0.10
+                )
+            end
+        end
+
+        damageBogey(
+            train.FrontBogey,
+            "MEXDamageFrontBogeyWaterDamage",
+            "MEX.Damage.FrontBogeyWaterDamage"
+        )
+        damageBogey(
+            train.RearBogey,
+            "MEXDamageRearBogeyWaterDamage",
+            "MEX.Damage.RearBogeyWaterDamage"
+        )
+    end
+
+    function MEXD.EnforceWaterRunningGearDamage(train)
+        if not IsSubwayTrain(train)
+            or not MEXD.IsPhysicalDamageEnabled()
+        then
+            return
+        end
+
+        local function enforce(bogey, damage)
+            if not IsValid(bogey) then
+                return
+            end
+
+            damage = math.Clamp(
+                tonumber(damage) or 0,
+                0,
+                1
+            )
+
+            if damage <= 0.16 then
+                return
+            end
+
+            local phys =
+                bogey:GetPhysicsObject()
+
+            if IsValid(phys) then
+                local velocity =
+                    phys:GetVelocity()
+                local drag =
+                    math.Clamp(
+                        (damage - 0.16) * 0.0075,
+                        0,
+                        0.0065
+                    )
+
+                phys:AddVelocity(
+                    -velocity * drag
+                )
+            end
+
+            if damage >= 0.72 then
+                bogey.MotorPower = 0
+            end
+        end
+
+        enforce(
+            train.FrontBogey,
+            train.MEXDamageFrontBogeyWaterDamage
+        )
+        enforce(
+            train.RearBogey,
+            train.MEXDamageRearBogeyWaterDamage
+        )
+    end
+
+    function MEXD.RepairWaterBogey(
+        train,
+        front
+    )
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        local fieldName =
+            front
+            and "MEXDamageFrontBogeyWaterDamage"
+            or "MEXDamageRearBogeyWaterDamage"
+        local nwName =
+            front
+            and "MEX.Damage.FrontBogeyWaterDamage"
+            or "MEX.Damage.RearBogeyWaterDamage"
+        local bogey =
+            front
+            and train.FrontBogey
+            or train.RearBogey
+
+        if (tonumber(train[fieldName]) or 0) <= 0 then
+            return false
+        end
+
+        train[fieldName] = 0
+        train:SetNW2Float(nwName, 0)
+
+        if IsValid(bogey) then
+            bogey:SetNW2Float(
+                "MEX.Damage.WheelWaterDamage",
+                0
+            )
+        end
+
+        return true
+    end
+
+    function MEXD.UpdateWaterLongTermFailures(
+        train,
+        dT,
+        wetness,
+        ingress,
+        thirdRailLive,
+        worldPos
+    )
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        MEXD.DamageWaterRunningGear(
+            train,
+            dT,
+            wetness,
+            ingress,
+            thirdRailLive
+        )
+
+        if not MEXD.IsElectricalDamageEnabled()
+            or wetness <= 0.02
+            or ingress <= 0.035
+        then
+            return
+        end
+
+        local now = CurTime()
+
+        if (
+            train.MEXDamageNextWaterPermanentFailure
+            or 0
+        ) > now
+        then
+            return
+        end
+
+        local intensity =
+            math.Clamp(
+                wetness * 0.45
+                    + ingress * 0.72
+                    + (
+                        thirdRailLive
+                        and 0.20
+                        or 0
+                    ),
+                0,
+                1
+            )
+
+        train.MEXDamageNextWaterPermanentFailure =
+            now
+            + Lerp(
+                intensity,
+                7.5,
+                1.15
+            )
+            * math.Rand(0.72, 1.35)
+
+        if ingress > 0.12
+            and math.Rand(0, 1)
+                < 0.08 + intensity * 0.48
+        then
+            MEXD.SeizeWaterRelay(
+                train,
+                ingress,
+                worldPos,
+                thirdRailLive
+            )
+        end
+
+        if ingress > 0.15
+            and math.Rand(0, 1)
+                < 0.06 + intensity * 0.42
+        then
+            MEXD.FailWaterLamp(
+                train,
+                ingress,
+                worldPos,
+                thirdRailLive
+            )
+        end
+    end
+
     local function StartWaterDoorRelayFault(
         train,
         intensity,
@@ -5744,6 +6271,15 @@ if SERVER then
         train:SetNW2Float(
             "MEX.Damage.WaterCurrent",
             current
+        )
+
+        MEXD.UpdateWaterLongTermFailures(
+            train,
+            dT,
+            wetness,
+            ingress,
+            thirdRailBridgeLive,
+            faultSparkPos
         )
 
         local powered = voltage >= 18 and current > 0.01
@@ -9030,6 +9566,502 @@ if SERVER then
         end
     end
 
+    function MEXD.EmitImpactElectricalArc(
+        train,
+        worldPos,
+        severity
+    )
+        if not IsSubwayTrain(train)
+            or not MEXD.IsElectricalDamageEnabled()
+        then
+            return false
+        end
+
+        local voltage, current, hv, lv =
+            GetTrainElectricalWaterState(train)
+
+        if voltage < 18
+            or (
+                hv < 200
+                and lv < 18
+                and not MEXD.IsBatteryElectricallyAlive(train)
+            )
+        then
+            return false
+        end
+
+        worldPos =
+            isvector(worldPos)
+            and worldPos
+            or train:WorldSpaceCenter()
+        severity = math.Clamp(
+            tonumber(severity) or 0.5,
+            0,
+            1
+        )
+
+        local effect = EffectData()
+        effect:SetOrigin(worldPos)
+        effect:SetNormal(
+            VectorRand():GetNormalized()
+        )
+        effect:SetMagnitude(
+            1.2 + severity * 4.0
+        )
+        effect:SetScale(
+            0.7 + severity * 2.2
+        )
+        effect:SetRadius(
+            10 + severity * 42
+        )
+        util.Effect(
+            "Sparks",
+            effect,
+            true,
+            true
+        )
+
+        PlayLocalizedDamageSound(
+            train,
+            worldPos,
+            WATER_ARC_SOUNDS[
+                math.random(
+                    1,
+                    #WATER_ARC_SOUNDS
+                )
+            ],
+            64 + math.floor(severity * 14),
+            math.random(88, 116),
+            0.48 + severity * 0.45
+        )
+
+        return true
+    end
+
+    function MEXD.QueueImpactElectricalArcing(
+        train,
+        worldPos,
+        severity
+    )
+        if not IsSubwayTrain(train)
+            or not isvector(worldPos)
+        then
+            return
+        end
+
+        severity = math.Clamp(
+            tonumber(severity) or 0,
+            0,
+            1
+        )
+
+        train.MEXDamageImpactArcPositions =
+            train.MEXDamageImpactArcPositions or {}
+
+        if #train.MEXDamageImpactArcPositions >= 8 then
+            table.remove(
+                train.MEXDamageImpactArcPositions,
+                1
+            )
+        end
+
+        train.MEXDamageImpactArcPositions[
+            #train.MEXDamageImpactArcPositions + 1
+        ] = worldPos
+
+        train.MEXDamageImpactArcSeverity =
+            math.max(
+                tonumber(
+                    train.MEXDamageImpactArcSeverity
+                ) or 0,
+                severity
+            )
+        train.MEXDamageImpactArcUntil =
+            math.max(
+                tonumber(
+                    train.MEXDamageImpactArcUntil
+                ) or 0,
+                CurTime()
+                    + Lerp(
+                        severity,
+                        0.35,
+                        4.5
+                    )
+            )
+    end
+
+    function MEXD.UpdateImpactElectricalArcing(train)
+        if not IsSubwayTrain(train)
+            or not MEXD.IsElectricalDamageEnabled()
+        then
+            return
+        end
+
+        local now = CurTime()
+        local untilTime =
+            tonumber(
+                train.MEXDamageImpactArcUntil
+            ) or 0
+
+        if untilTime <= now then
+            train.MEXDamageImpactArcUntil = nil
+            train.MEXDamageImpactArcPositions = {}
+            train.MEXDamageImpactArcSeverity = 0
+            return
+        end
+
+        if (
+            train.MEXDamageNextImpactArc
+            or 0
+        ) > now
+        then
+            return
+        end
+
+        local voltage, current, hv, lv =
+            GetTrainElectricalWaterState(train)
+
+        if voltage < 18
+            or (
+                hv < 200
+                and lv < 18
+                and not MEXD.IsBatteryElectricallyAlive(train)
+            )
+        then
+            return
+        end
+
+        local severity =
+            math.Clamp(
+                tonumber(
+                    train.MEXDamageImpactArcSeverity
+                ) or 0.35,
+                0,
+                1
+            )
+
+        train.MEXDamageNextImpactArc =
+            now
+            + Lerp(
+                severity,
+                0.36,
+                0.075
+            )
+            * math.Rand(0.70, 1.35)
+
+        local positions =
+            train.MEXDamageImpactArcPositions
+            or {}
+        local pos =
+            #positions > 0
+            and positions[
+                math.random(1, #positions)
+            ]
+            or train:WorldSpaceCenter()
+
+        MEXD.EmitImpactElectricalArc(
+            train,
+            pos,
+            severity
+        )
+    end
+
+    function MEXD.ApplyImpactElectricalDamage(
+        train,
+        deltaKmh,
+        severity,
+        hitPos
+    )
+        if not IsSubwayTrain(train)
+            or not MEXD.IsElectricalDamageEnabled()
+        then
+            return
+        end
+
+        deltaKmh =
+            math.max(
+                tonumber(deltaKmh) or 0,
+                0
+            )
+
+        if deltaKmh < 18 then
+            return
+        end
+
+        severity = math.Clamp(
+            tonumber(severity) or 0,
+            0,
+            1
+        )
+
+        local intensity =
+            math.Clamp(
+                (deltaKmh - 18) / 82
+                    + severity * 0.34,
+                0,
+                1
+            )
+
+        local damagedSomething = false
+
+        if istable(train.Systems)
+            and math.Rand(0, 1)
+                < 0.14 + intensity * 0.70
+        then
+            local candidates = {}
+
+            for systemName, system in pairs(
+                train.Systems
+            ) do
+                systemName = tostring(systemName)
+
+                if IsRelayLikeElectricalSystem(system)
+                    and not MEXD.IsVisiblePanelOperatorSystem(
+                        train,
+                        systemName,
+                        system
+                    )
+                    and not IsCircuitBreakerSystem(
+                        systemName,
+                        system
+                    )
+                    and not IsFuseSystemName(systemName)
+                then
+                    local failure =
+                        train.MEXDamageElectricalFailureSystems
+                        and train.MEXDamageElectricalFailureSystems[
+                            systemName
+                        ]
+                        or nil
+
+                    if not istable(failure)
+                        or failure.permanent ~= true
+                    then
+                        candidates[
+                            #candidates + 1
+                        ] = systemName
+                    end
+                end
+            end
+
+            local attempts =
+                math.Clamp(
+                    1
+                        + math.floor(
+                            intensity * 3
+                        ),
+                    1,
+                    4
+                )
+
+            for _ = 1, attempts do
+                if #candidates <= 0 then
+                    break
+                end
+
+                local pick =
+                    math.random(
+                        1,
+                        #candidates
+                    )
+                local systemName =
+                    table.remove(
+                        candidates,
+                        pick
+                    )
+
+                if math.Rand(0, 1)
+                    <= 0.35 + intensity * 0.50
+                    and FailElectricalSystemOpen(
+                        train,
+                        systemName,
+                        {
+                            cause = "impact",
+                            temporary = false,
+                        }
+                    )
+                then
+                    train.MEXDamageWearFailedSystems =
+                        train.MEXDamageWearFailedSystems
+                        or {}
+                    train.MEXDamageWearFailedSystems[
+                        systemName
+                    ] = true
+
+                    train:SetNW2Int(
+                        "MEX.Damage.FailedRelayCount",
+                        table.Count(
+                            train.MEXDamageWearFailedSystems
+                        )
+                    )
+                    train:SetNW2String(
+                        "MEX.Damage.WearFailure",
+                        "Impact-damaged relay: "
+                            .. systemName
+                    )
+
+                    local relayPos =
+                        MEXD.WaterRelayWorldPosition(
+                            train,
+                            systemName
+                        )
+
+                    if isvector(relayPos) then
+                        MEXD.QueueImpactElectricalArcing(
+                            train,
+                            relayPos,
+                            intensity
+                        )
+                    end
+
+                    damagedSomething = true
+                end
+            end
+        end
+
+        if istable(train.Lights)
+            and math.Rand(0, 1)
+                < 0.10 + intensity * 0.62
+        then
+            train.MEXDamageWearFailedLights =
+                train.MEXDamageWearFailedLights
+                or {}
+
+            local candidates = {}
+
+            for index, light in pairs(
+                train.Lights
+            ) do
+                if istable(light)
+                    and isvector(light[2])
+                    and not train.MEXDamageWearFailedLights[
+                        index
+                    ]
+                then
+                    candidates[
+                        #candidates + 1
+                    ] = index
+                end
+            end
+
+            local count =
+                math.Clamp(
+                    1
+                        + math.floor(
+                            intensity * 2
+                        ),
+                    1,
+                    3
+                )
+
+            for _ = 1, count do
+                if #candidates <= 0 then
+                    break
+                end
+
+                local pick =
+                    math.random(
+                        1,
+                        #candidates
+                    )
+                local index =
+                    table.remove(
+                        candidates,
+                        pick
+                    )
+
+                if math.Rand(0, 1)
+                    <= 0.42 + intensity * 0.46
+                then
+                    train.MEXDamageWearFailedLights[
+                        index
+                    ] = true
+                    train:SetNW2Bool(
+                        "MEX.Damage.WearLight."
+                            .. tostring(index),
+                        true
+                    )
+
+                    local direct =
+                        train.MEXDamageWearOriginalSetLightPower
+
+                    if isfunction(direct) then
+                        direct(
+                            train,
+                            index,
+                            false,
+                            0
+                        )
+                    elseif isfunction(
+                        train.SetLightPower
+                    ) then
+                        train:SetLightPower(
+                            index,
+                            false,
+                            0
+                        )
+                    end
+
+                    local light =
+                        train.Lights[index]
+
+                    if istable(light)
+                        and isvector(light[2])
+                    then
+                        MEXD.QueueImpactElectricalArcing(
+                            train,
+                            train:LocalToWorld(
+                                light[2]
+                            ),
+                            intensity
+                        )
+                    end
+
+                    damagedSomething = true
+                end
+            end
+
+            train:SetNW2Int(
+                "MEX.Damage.FailedLightCount",
+                table.Count(
+                    train.MEXDamageWearFailedLights
+                )
+            )
+        end
+
+        if damagedSomething
+            or math.Rand(0, 1)
+                < 0.20 + intensity * 0.45
+        then
+            MEXD.QueueImpactElectricalArcing(
+                train,
+                isvector(hitPos)
+                    and hitPos
+                    or train:WorldSpaceCenter(),
+                intensity
+            )
+            MEXD.EmitImpactElectricalArc(
+                train,
+                hitPos,
+                intensity
+            )
+        end
+
+        local electrical =
+            train:GetNW2Float(
+                "MEX.Damage.electrical",
+                0
+            )
+
+        train:SetNW2Float(
+            "MEX.Damage.electrical",
+            math.max(
+                electrical,
+                intensity * 0.52
+            )
+        )
+    end
+
     local function ApplySevereCrashConsequences(
         train,
         zone,
@@ -9048,6 +10080,13 @@ if SERVER then
         )
 
         local realism = MEXD.GetPhysicalDamageScale()
+
+        MEXD.ApplyImpactElectricalDamage(
+            train,
+            deltaKmh,
+            severity,
+            hitPos
+        )
 
         if deltaKmh >= 28 then
             local batteryDamage =
@@ -9419,6 +10458,28 @@ if SERVER then
         train:SetNW2Bool("MEX.Damage.RearEquipment", false)
         train:SetNW2Bool("MEX.Damage.FrontBogeyDetached", false)
         train:SetNW2Bool("MEX.Damage.RearBogeyDetached", false)
+        train.MEXDamageFrontBogeyWaterDamage = 0
+        train.MEXDamageRearBogeyWaterDamage = 0
+        train:SetNW2Float(
+            "MEX.Damage.FrontBogeyWaterDamage",
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.RearBogeyWaterDamage",
+            0
+        )
+        if IsValid(train.FrontBogey) then
+            train.FrontBogey:SetNW2Float(
+                "MEX.Damage.WheelWaterDamage",
+                0
+            )
+        end
+        if IsValid(train.RearBogey) then
+            train.RearBogey:SetNW2Float(
+                "MEX.Damage.WheelWaterDamage",
+                0
+            )
+        end
         train:SetNW2Bool("MEX.Damage.FrontCouplerDetached", false)
         train:SetNW2Bool("MEX.Damage.RearCouplerDetached", false)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
@@ -9494,8 +10555,13 @@ if SERVER then
         train.MEXDamageNextDoorWaterFault = nil
         train.MEXDamageNextBatteryGlitch = nil
         train.MEXDamageNextThirdRailBridge = nil
+        train.MEXDamageNextWaterPermanentFailure = nil
         train.MEXDamageThirdRailFloodSeconds = 0
         train.MEXDamageWaterIngress = 0
+        train.MEXDamageImpactArcUntil = nil
+        train.MEXDamageImpactArcPositions = {}
+        train.MEXDamageImpactArcSeverity = 0
+        train.MEXDamageNextImpactArc = nil
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
         train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
@@ -9548,8 +10614,13 @@ if SERVER then
         train.MEXDamageNextDoorWaterFault = nil
         train.MEXDamageNextBatteryGlitch = nil
         train.MEXDamageNextThirdRailBridge = nil
+        train.MEXDamageNextWaterPermanentFailure = nil
         train.MEXDamageThirdRailFloodSeconds = 0
         train.MEXDamageWaterIngress = 0
+        train.MEXDamageImpactArcUntil = nil
+        train.MEXDamageImpactArcPositions = {}
+        train.MEXDamageImpactArcSeverity = 0
+        train.MEXDamageNextImpactArc = nil
 
         train:SetNW2Float("MEX.Damage.electrical", 0)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
@@ -10730,28 +11801,36 @@ if SERVER then
         elseif target == "grkv" then
             return RepairGRKVOnly(train)
         elseif target == "front_bogey" then
-            if not train:GetNW2Bool(
+            if train:GetNW2Bool(
                 "MEX.Damage.FrontBogeyDetached",
                 false
             ) then
-                return false
+                return ReattachTrainRunningGear(
+                    train,
+                    train.FrontBogey,
+                    target
+                )
             end
-            return ReattachTrainRunningGear(
+
+            return MEXD.RepairWaterBogey(
                 train,
-                train.FrontBogey,
-                target
+                true
             )
         elseif target == "rear_bogey" then
-            if not train:GetNW2Bool(
+            if train:GetNW2Bool(
                 "MEX.Damage.RearBogeyDetached",
                 false
             ) then
-                return false
+                return ReattachTrainRunningGear(
+                    train,
+                    train.RearBogey,
+                    target
+                )
             end
-            return ReattachTrainRunningGear(
+
+            return MEXD.RepairWaterBogey(
                 train,
-                train.RearBogey,
-                target
+                false
             )
         elseif target == "front_coupler" then
             if not train:GetNW2Bool(
@@ -11405,6 +12484,7 @@ if SERVER then
             if IsSubwayTrain(train) then
                 InitializeTrainDamage(train)
                 EnforceElectricalFailures(train)
+                MEXD.UpdateImpactElectricalArcing(train)
                 UpdateWaterElectricalDamage(train, dT)
             end
         end
@@ -11435,6 +12515,9 @@ if SERVER then
                     UpdateMechanicalElectricalWear(
                         train,
                         dT
+                    )
+                    MEXD.EnforceWaterRunningGearDamage(
+                        train
                     )
                 end
             end
