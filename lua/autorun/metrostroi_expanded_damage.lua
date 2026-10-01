@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.9"
+MEXD.Version = "0.19.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -2327,24 +2327,79 @@ if SERVER then
                 and train.Systems.IGLA_PCBK
             )
 
-        if istable(igla)
-            and isfunction(igla.CState)
+        local fireValue =
+            alarmActive
+            and math.Clamp(
+                700
+                    + (
+                        tonumber(intensity)
+                        or 0.5
+                    ) * 299,
+                700,
+                999
+            )
+            or false
+
+        if istable(igla) then
+            igla.States =
+                istable(igla.States)
+                and igla.States
+                or {}
+            igla.States.PTROverheat =
+                fireValue
+
+            if isfunction(igla.CState) then
+                pcall(
+                    igla.CState,
+                    igla,
+                    "PTROverheat",
+                    fireValue
+                )
+            end
+
+            -- CState only transmits when its cached value changes. A fire can
+            -- begin while CBKI is still booting, so resend explicitly on every
+            -- alarm refresh; once CBKI reaches State 2 it will always receive
+            -- the fire message.
+            if isfunction(igla.CANWrite) then
+                pcall(
+                    igla.CANWrite,
+                    igla,
+                    "PTROverheat",
+                    fireValue
+                )
+            elseif isfunction(train.CANWrite) then
+                pcall(
+                    train.CANWrite,
+                    train,
+                    "IGLA_PCBK",
+                    train:GetWagonNumber(),
+                    "IGLA_CBKI",
+                    nil,
+                    "PTROverheat",
+                    fireValue
+                )
+            end
+        end
+
+        local cbki =
+            train.IGLA_CBKI
+            or (
+                istable(train.Systems)
+                and train.Systems.IGLA_CBKI
+            )
+
+        if istable(cbki)
+            and isfunction(cbki.CError)
+            and tonumber(cbki.State)
+            and tonumber(cbki.State) >= 2
         then
             pcall(
-                igla.CState,
-                igla,
+                cbki.CError,
+                cbki,
+                train:GetWagonNumber(),
                 "PTROverheat",
                 alarmActive
-                    and math.Clamp(
-                        700
-                            + (
-                                tonumber(intensity)
-                                or 0.5
-                            ) * 299,
-                        700,
-                        999
-                    )
-                    or false
             )
         end
 
@@ -10173,6 +10228,14 @@ if SERVER then
             "MEX.Damage.OvergrowthLevel",
             0
         )
+        train:SetNW2Float(
+            "MEX.Damage.CorrosionLevel",
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.InteriorDecay",
+            0
+        )
         train:SetNW2Bool(
             "MEX.Damage.NeglectAccumulating",
             false
@@ -10342,6 +10405,204 @@ if SERVER then
         return false
     end
 
+    function MEXD.FailCorrodedControl(
+        train
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.ButtonMap)
+        then
+            return false
+        end
+
+        EnsureButtonEventGuard(train)
+
+        local candidates = {}
+        local seenKeys = {}
+        local total = 0
+
+        for panelName, panel in pairs(
+            train.ButtonMap
+        ) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                local id =
+                    istable(button)
+                    and button.ID
+                    or nil
+
+                if not isstring(id)
+                    or id == ""
+                then
+                    continue
+                end
+
+                id = id:gsub("^.+:", "")
+                local key =
+                    ControlWearKey(id)
+
+                if not seenKeys[key] then
+                    seenKeys[key] = true
+                    total = total + 1
+                end
+
+                if train.MEXDamageFailedControls
+                    and train.MEXDamageFailedControls[
+                        key
+                    ]
+                then
+                    continue
+                end
+
+                candidates[#candidates + 1] = {
+                    id = id,
+                    key = key,
+                }
+            end
+        end
+
+        local failed =
+            table.Count(
+                train.MEXDamageFailedControls
+                or {}
+            )
+        local maximum =
+            math.max(
+                1,
+                math.floor(
+                    total * 0.20
+                )
+            )
+
+        if failed >= maximum
+            or #candidates <= 0
+        then
+            return false
+        end
+
+        local item =
+            candidates[
+                math.random(
+                    1,
+                    #candidates
+                )
+            ]
+
+        RegisterWearControlButton(
+            train,
+            item.key,
+            item.id
+        )
+        BlockWearControl(
+            train,
+            item.key
+        )
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            "Corroded control: "
+                .. item.id
+        )
+
+        return true
+    end
+
+    function MEXD.FailCorrodedIndicator(
+        train
+    )
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        EnsureIndicatorWearGuard(train)
+
+        local candidates = {}
+        local total = 0
+
+        for index in pairs(
+            train.MEXDamageIndicatorState
+            or {}
+        ) do
+            total = total + 1
+
+            if not (
+                train.MEXDamageFailedIndicators
+                and train.MEXDamageFailedIndicators[
+                    index
+                ]
+            ) then
+                candidates[
+                    #candidates + 1
+                ] = index
+            end
+        end
+
+        local failed =
+            table.Count(
+                train.MEXDamageFailedIndicators
+                or {}
+            )
+        local maximum =
+            math.max(
+                1,
+                math.floor(
+                    total * 0.28
+                )
+            )
+
+        if total <= 0
+            or failed >= maximum
+            or #candidates <= 0
+        then
+            return false
+        end
+
+        local index =
+            candidates[
+                math.random(
+                    1,
+                    #candidates
+                )
+            ]
+
+        train.MEXDamageFailedIndicators =
+            train.MEXDamageFailedIndicators
+            or {}
+        train.MEXDamageFailedIndicators[
+            index
+        ] = true
+
+        train:SetNW2Bool(
+            "MEX.Damage.WearIndicator."
+                .. tostring(index),
+            true
+        )
+        train:SetNW2Int(
+            "MEX.Damage.FailedIndicatorCount",
+            table.Count(
+                train.MEXDamageFailedIndicators
+            )
+        )
+        train:SetNW2String(
+            "MEX.Damage.WearFailure",
+            "Corroded indicator #"
+                .. tostring(index)
+        )
+
+        if train.MEXDamageWearOriginalSetPackedBool then
+            train:MEXDamageWearOriginalSetPackedBool(
+                index,
+                false
+            )
+        end
+
+        return true
+    end
+
     function MEXD.UpdateNeglectWear(
         train,
         dT
@@ -10507,6 +10768,22 @@ if SERVER then
             "MEX.Damage.OvergrowthLevel",
             growth
         )
+        train:SetNW2Float(
+            "MEX.Damage.CorrosionLevel",
+            math.Clamp(
+                (level - 0.18) / 0.82,
+                0,
+                1
+            )
+        )
+        train:SetNW2Float(
+            "MEX.Damage.InteriorDecay",
+            math.Clamp(
+                (level - 0.34) / 0.66,
+                0,
+                1
+            )
+        )
 
         if level < 0.16
             or not MEXD.IsElectricalDamageEnabled()
@@ -10559,6 +10836,26 @@ if SERVER then
                     0.52
                 ),
                 train:WorldSpaceCenter()
+            )
+        end
+
+        if weatheringActive
+            and level > 0.40
+            and math.Rand(0, 1)
+                < 0.035 + level * 0.085
+        then
+            MEXD.FailCorrodedControl(
+                train
+            )
+        end
+
+        if weatheringActive
+            and level > 0.48
+            and math.Rand(0, 1)
+                < 0.030 + level * 0.075
+        then
+            MEXD.FailCorrodedIndicator(
+                train
             )
         end
 
@@ -10642,11 +10939,22 @@ if SERVER then
         end
 
         if weatheringActive
-            and level > 0.66
+            and level > 0.50
             and istable(train.Lights)
+            and table.Count(
+                train.MEXDamageWearFailedLights
+                or {}
+            ) < math.max(
+                1,
+                math.floor(
+                    table.Count(
+                        train.Lights
+                    ) * 0.30
+                )
+            )
             and math.Rand(0, 1)
-                < 0.025
-                    + level * 0.075
+                < 0.030
+                    + level * 0.085
                     * MEXD.GetNeglectScale()
         then
             train.MEXDamageWearFailedLights =
