@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.8"
+MEXD.Version = "0.18.9"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -105,6 +105,18 @@ if SERVER then
         "Long-term neglect/weathering simulation speed and severity",
         0.1,
         3.0
+    )
+
+    MEXD.NeglectForceRainConVar = CreateConVar(
+        "mex_damage_neglect_force_rain",
+        "0",
+        bit.bor(
+            FCVAR_CHEAT,
+            FCVAR_REPLICATED
+        ),
+        "Debug only: treat open-sky wagons as rain-exposed",
+        0,
+        1
     )
 end
 
@@ -2184,6 +2196,240 @@ if SERVER then
         return nil
     end
 
+    function MEXD.AddTrainFireNode(
+        train,
+        localPos,
+        intensity
+    )
+        if not IsSubwayTrain(train)
+            or not isvector(localPos)
+        then
+            return nil
+        end
+
+        train.MEXDamageFireNodes =
+            train.MEXDamageFireNodes or {}
+
+        for _, node in ipairs(
+            train.MEXDamageFireNodes
+        ) do
+            if istable(node)
+                and isvector(node.localPos)
+                and node.localPos:Distance(localPos) < 55
+            then
+                return node
+            end
+        end
+
+        local worldPos =
+            train:LocalToWorld(localPos)
+        local fire = ents.Create("env_fire")
+
+        if IsValid(fire) then
+            fire:SetPos(worldPos)
+            fire:SetKeyValue(
+                "health",
+                tostring(
+                    math.floor(
+                        18
+                            + math.Clamp(
+                                tonumber(intensity)
+                                    or 0.4,
+                                0,
+                                1
+                            ) * 55
+                    )
+                )
+            )
+            fire:SetKeyValue(
+                "firesize",
+                tostring(
+                    math.floor(
+                        38
+                            + math.Clamp(
+                                tonumber(intensity)
+                                    or 0.4,
+                                0,
+                                1
+                            ) * 88
+                    )
+                )
+            )
+            fire:SetKeyValue("fireattack", "2")
+            fire:SetKeyValue("damagescale", "1.0")
+            fire:SetKeyValue("spawnflags", "132")
+            fire:Spawn()
+            fire:Activate()
+            fire:SetParent(train)
+            fire:Fire("StartFire", "", 0)
+        end
+
+        local node = {
+            localPos = localPos,
+            entity = fire,
+        }
+
+        train.MEXDamageFireNodes[
+            #train.MEXDamageFireNodes + 1
+        ] = node
+
+        if not IsValid(
+            train.MEXDamageFireEntity
+        ) and IsValid(fire)
+        then
+            train.MEXDamageFireEntity = fire
+        end
+
+        train:SetNW2Int(
+            "MEX.Damage.FireNodeCount",
+            #train.MEXDamageFireNodes
+        )
+
+        return node
+    end
+
+    function MEXD.SetTrainFireAlarm(
+        train,
+        active,
+        firePos,
+        intensity
+    )
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        local alarmPowered =
+            MEXD.IsBatteryElectricallyAlive(train)
+            or IsTrainInstrumentationPowered(train)
+
+        local alarmActive =
+            active == true
+            and alarmPowered
+
+        train:SetNW2Bool(
+            "MEX.Damage.ASOTPAlarm",
+            alarmActive
+        )
+
+        if isvector(firePos) then
+            train:SetNW2Vector(
+                "MEX.Damage.FireAlarmPosition",
+                train:WorldToLocal(firePos)
+            )
+        end
+
+        -- Metrostroi's ASOTP IGLA wagon controller reports the
+        -- PTROverheat state as a fire message on the CBKI display.
+        local igla =
+            train.IGLA_PCBK
+            or (
+                istable(train.Systems)
+                and train.Systems.IGLA_PCBK
+            )
+
+        if istable(igla)
+            and isfunction(igla.CState)
+        then
+            pcall(
+                igla.CState,
+                igla,
+                "PTROverheat",
+                alarmActive
+                    and math.Clamp(
+                        700
+                            + (
+                                tonumber(intensity)
+                                or 0.5
+                            ) * 299,
+                        700,
+                        999
+                    )
+                    or false
+            )
+        end
+
+        -- Compatibility path for third-party ASOTP/fire-alarm systems that
+        -- explicitly expose a suitable TriggerInput.
+        for systemName, system in pairs(
+            train.Systems or {}
+        ) do
+            local lower =
+                string.lower(
+                    tostring(systemName or "")
+                )
+            local looksLikeAlarm =
+                string.find(
+                    lower,
+                    "asotp",
+                    1,
+                    true
+                )
+                or string.find(
+                    lower,
+                    "igla",
+                    1,
+                    true
+                )
+                or string.find(
+                    lower,
+                    "firealarm",
+                    1,
+                    true
+                )
+                or string.find(
+                    lower,
+                    "fire_alarm",
+                    1,
+                    true
+                )
+
+            if not looksLikeAlarm
+                or system == igla
+                or not istable(system)
+                or not isfunction(
+                    system.TriggerInput
+                )
+            then
+                continue
+            end
+
+            local sent = false
+            for _, inputName in ipairs({
+                "Fire",
+                "Alarm",
+                "Smoke",
+                "Signal",
+            }) do
+                if istable(system.IsInput)
+                    and system.IsInput[inputName]
+                then
+                    pcall(
+                        system.TriggerInput,
+                        system,
+                        inputName,
+                        alarmActive and 1 or 0
+                    )
+                    sent = true
+                    break
+                end
+            end
+
+            if not sent
+                and (
+                    lower == "asotp"
+                    or lower == "igla"
+                )
+            then
+                pcall(
+                    system.TriggerInput,
+                    system,
+                    "Fire",
+                    alarmActive and 1 or 0
+                )
+            end
+        end
+    end
+
     function MEXD.TryStartTrainFire(
         train,
         worldPos,
@@ -2266,40 +2512,23 @@ if SERVER then
             tostring(cause or "electrical")
         )
 
-        local fire = ents.Create("env_fire")
+        train.MEXDamageFireNodes = {}
+        train.MEXDamageNextFireSpread =
+            CurTime()
+                + math.Rand(2.5, 5.5)
 
-        if IsValid(fire) then
-            fire:SetPos(worldPos)
-            fire:SetKeyValue(
-                "health",
-                tostring(
-                    math.floor(
-                        18
-                            + train.MEXDamageFireIntensity
-                                * 55
-                    )
-                )
-            )
-            fire:SetKeyValue(
-                "firesize",
-                tostring(
-                    math.floor(
-                        42
-                            + train.MEXDamageFireIntensity
-                                * 92
-                    )
-                )
-            )
-            fire:SetKeyValue("fireattack", "2")
-            fire:SetKeyValue("damagescale", "1.0")
-            fire:SetKeyValue("spawnflags", "132")
-            fire:Spawn()
-            fire:Activate()
-            fire:SetParent(train)
-            fire:Fire("StartFire", "", 0)
+        MEXD.AddTrainFireNode(
+            train,
+            train.MEXDamageFireLocal,
+            train.MEXDamageFireIntensity
+        )
 
-            train.MEXDamageFireEntity = fire
-        end
+        MEXD.SetTrainFireAlarm(
+            train,
+            true,
+            worldPos,
+            train.MEXDamageFireIntensity
+        )
 
         PlayLocalizedDamageSound(
             train,
@@ -2318,17 +2547,39 @@ if SERVER then
             return
         end
 
+        for _, node in ipairs(
+            train.MEXDamageFireNodes or {}
+        ) do
+            if istable(node)
+                and IsValid(node.entity)
+            then
+                node.entity:Remove()
+            end
+        end
+
         if IsValid(train.MEXDamageFireEntity) then
             train.MEXDamageFireEntity:Remove()
         end
 
+        MEXD.SetTrainFireAlarm(
+            train,
+            false
+        )
+
+        train.MEXDamageFireNodes = {}
         train.MEXDamageFireEntity = nil
         train.MEXDamageFireLocal = nil
         train.MEXDamageFireIntensity = 0
         train.MEXDamageFireStartedAt = nil
         train.MEXDamageFireUntil = nil
         train.MEXDamageNextFireDamage = nil
+        train.MEXDamageNextFireSpread = nil
+        train.MEXDamageNextFireAlarmUpdate = nil
 
+        train:SetNW2Int(
+            "MEX.Damage.FireNodeCount",
+            0
+        )
         train:SetNW2Bool(
             "MEX.Damage.FireActive",
             false
@@ -2365,12 +2616,46 @@ if SERVER then
                 0,
                 1
             )
+        local fireNodes =
+            train.MEXDamageFireNodes or {}
+        local selectedNode =
+            #fireNodes > 0
+            and fireNodes[
+                math.random(
+                    1,
+                    #fireNodes
+                )
+            ]
+            or nil
         local firePos =
-            isvector(train.MEXDamageFireLocal)
+            istable(selectedNode)
+            and isvector(selectedNode.localPos)
             and train:LocalToWorld(
-                train.MEXDamageFireLocal
+                selectedNode.localPos
             )
-            or train:WorldSpaceCenter()
+            or (
+                isvector(train.MEXDamageFireLocal)
+                and train:LocalToWorld(
+                    train.MEXDamageFireLocal
+                )
+                or train:WorldSpaceCenter()
+            )
+
+        if (
+            train.MEXDamageNextFireAlarmUpdate
+            or 0
+        ) <= now
+        then
+            train.MEXDamageNextFireAlarmUpdate =
+                now + 0.35
+
+            MEXD.SetTrainFireAlarm(
+                train,
+                true,
+                firePos,
+                intensity
+            )
+        end
 
         local wetness =
             train:GetNW2Float(
@@ -2423,6 +2708,100 @@ if SERVER then
             "MEX.Damage.FireIntensity",
             intensity
         )
+
+        if wetness < 0.48
+            and intensity >= 0.30
+            and (
+                train.MEXDamageNextFireSpread
+                or 0
+            ) <= now
+        then
+            train.MEXDamageNextFireSpread =
+                now
+                + Lerp(
+                    intensity,
+                    6.5,
+                    1.8
+                )
+                * math.Rand(0.78, 1.28)
+
+            local maxNodes =
+                math.Clamp(
+                    1
+                        + math.floor(
+                            intensity * 6
+                        ),
+                    1,
+                    7
+                )
+
+            if #fireNodes < maxNodes
+                and math.Rand(0, 1)
+                    < 0.20 + intensity * 0.58
+            then
+                local mins = train:OBBMins()
+                local maxs = train:OBBMaxs()
+                local sourceLocal =
+                    istable(selectedNode)
+                    and isvector(
+                        selectedNode.localPos
+                    )
+                    and selectedNode.localPos
+                    or train.MEXDamageFireLocal
+                    or (mins + maxs) * 0.5
+                local direction =
+                    math.Rand(0, 1) < 0.5
+                    and -1
+                    or 1
+                local nextLocal = Vector(
+                    math.Clamp(
+                        sourceLocal.x
+                            + direction
+                                * math.Rand(
+                                    70,
+                                    185
+                                ),
+                        mins.x + 18,
+                        maxs.x - 18
+                    ),
+                    math.Clamp(
+                        sourceLocal.y
+                            + math.Rand(
+                                -34,
+                                34
+                            ),
+                        mins.y + 12,
+                        maxs.y - 12
+                    ),
+                    math.Clamp(
+                        sourceLocal.z
+                            + math.Rand(
+                                -16,
+                                42
+                            ),
+                        mins.z + 12,
+                        maxs.z - 12
+                    )
+                )
+
+                MEXD.AddTrainFireNode(
+                    train,
+                    nextLocal,
+                    intensity
+                )
+
+                train.MEXDamageFireUntil =
+                    math.max(
+                        train.MEXDamageFireUntil
+                            or now,
+                        now
+                            + math.Rand(
+                                12,
+                                28
+                            )
+                    )
+            end
+        end
 
         if intensity <= 0.03 then
             MEXD.StopTrainFire(train)
@@ -9839,6 +10218,122 @@ if SERVER then
             == true
     end
 
+    function MEXD.IsTrainInRain(train)
+        if not IsSubwayTrain(train)
+            or not MEXD.IsTrainWeatherExposed(
+                train
+            )
+        then
+            return false
+        end
+
+        local forced =
+            GetConVar(
+                "mex_damage_neglect_force_rain"
+            )
+
+        if forced and forced:GetBool() then
+            return true
+        end
+
+        -- StormFox 2 compatibility.
+        if istable(StormFox2)
+            and istable(StormFox2.DownFall)
+            and isfunction(
+                StormFox2.DownFall.GetAmount
+            )
+        then
+            local ok, amount =
+                pcall(
+                    StormFox2.DownFall.GetAmount
+                )
+
+            if ok
+                and tonumber(amount)
+            then
+                return tonumber(amount) > 0.02
+            end
+        end
+
+        -- StormFox 1 compatibility.
+        if istable(StormFox)
+            and isfunction(
+                StormFox.GetNetworkData
+            )
+        then
+            local ok, amount =
+                pcall(
+                    StormFox.GetNetworkData,
+                    "RainAmount",
+                    0
+                )
+
+            if ok
+                and tonumber(amount)
+            then
+                return tonumber(amount) > 0.02
+            end
+        end
+
+        -- Source maps commonly use func_precipitation. Only count an active
+        -- precipitation volume that actually contains the wagon.
+        for _, precipitation in ipairs(
+            ents.FindByClass(
+                "func_precipitation"
+            )
+        ) do
+            if not IsValid(precipitation) then
+                continue
+            end
+
+            local disabled = false
+
+            if isfunction(
+                precipitation.GetInternalVariable
+            ) then
+                local ok, value =
+                    pcall(
+                        precipitation.GetInternalVariable,
+                        precipitation,
+                        "m_bDisabled"
+                    )
+
+                if ok and value ~= nil then
+                    disabled =
+                        tonumber(value) == 1
+                        or value == true
+                end
+            end
+
+            if disabled then
+                continue
+            end
+
+            local localPos =
+                precipitation:WorldToLocal(
+                    train:WorldSpaceCenter()
+                )
+            local mins =
+                precipitation:OBBMins()
+            local maxs =
+                precipitation:OBBMaxs()
+
+            if isvector(mins)
+                and isvector(maxs)
+                and localPos.x >= mins.x
+                and localPos.x <= maxs.x
+                and localPos.y >= mins.y
+                and localPos.y <= maxs.y
+                and localPos.z >= mins.z
+                and localPos.z <= maxs.z
+            then
+                return true
+            end
+        end
+
+        return false
+    end
+
     function MEXD.UpdateNeglectWear(
         train,
         dT
@@ -9875,16 +10370,33 @@ if SERVER then
                 )
             )
 
-        local active =
-            speedKmh > 2.0
-            or occupied
-            or electricallyAwake
+        local freelyAbandoned =
+            speedKmh < 0.50
+            and not occupied
+            and not electricallyAwake
+            and not IsTrainPhysgunManipulated(
+                train
+            )
+        local exposed =
+            MEXD.IsTrainWeatherExposed(train)
+        local raining =
+            exposed
+            and MEXD.IsTrainInRain(train)
+        local weatheringActive =
+            freelyAbandoned
+            and exposed
+            and raining
 
-        if active then
-            train.MEXDamageNeglectIdleSeconds = 0
-            train.MEXDamageNeglectLastActive =
-                CurTime()
-        else
+        train:SetNW2Bool(
+            "MEX.Damage.NeglectAccumulating",
+            weatheringActive
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.RainExposed",
+            raining
+        )
+
+        if weatheringActive then
             train.MEXDamageNeglectIdleSeconds =
                 math.max(
                     0,
@@ -9894,16 +10406,12 @@ if SERVER then
                 )
                 + dT
 
-            local weatherFactor =
-                MEXD.IsTrainWeatherExposed(train)
-                and 1
-                or 0.36
             local scale =
                 MEXD.GetNeglectScale()
 
-            -- Gameplay uses compressed calendar time so long-term storage can
-            -- actually be observed: at 1.00, roughly one real minute of
-            -- continuous abandonment represents one simulated day.
+            -- Neglect/overgrowth is intentionally strict: it accumulates only
+            -- on an unused, almost motionless wagon exposed to real rain and
+            -- open sky. Covered storage or a dry outdoor day does not grow it.
             train.MEXDamageNeglectExposure =
                 math.Clamp(
                     (
@@ -9913,11 +10421,45 @@ if SERVER then
                     )
                     + dT
                         / (60 * 45)
-                        * scale
-                        * weatherFactor,
+                        * scale,
                     0,
                     1
                 )
+
+            local currentLevel =
+                math.Clamp(
+                    tonumber(
+                        train.MEXDamageNeglectExposure
+                    ) or 0,
+                    0,
+                    1
+                )
+
+            -- Long wet storage also ages the battery chemically and through
+            -- corrosion. It can therefore be completely dead by the time a
+            -- heavily overgrown wagon is recovered.
+            if currentLevel > 0.20
+                and istable(train.Battery)
+            then
+                MEXD.ApplyBatteryDamage(
+                    train,
+                    dT
+                        * (
+                            0.00008
+                            + currentLevel
+                                * 0.00038
+                        )
+                        * scale,
+                    "neglect"
+                )
+            end
+        else
+            train.MEXDamageNeglectIdleSeconds = 0
+
+            if not freelyAbandoned then
+                train.MEXDamageNeglectLastActive =
+                    CurTime()
+            end
         end
 
         local level =
@@ -9928,16 +10470,9 @@ if SERVER then
                 0,
                 1
             )
-        local weather =
-            MEXD.IsTrainWeatherExposed(train)
         local dirt =
             math.Clamp(
-                level
-                    * (
-                        weather
-                        and 1.08
-                        or 0.72
-                    )
+                level * 1.08
                     + train:GetNW2Float(
                         "MEX.Damage.ScuffLevel",
                         0
@@ -9946,13 +10481,11 @@ if SERVER then
                 1
             )
         local growth =
-            weather
-            and math.Clamp(
+            math.Clamp(
                 (level - 0.42) / 0.58,
                 0,
                 1
             )
-            or 0
 
         train:SetNW2Float(
             "MEX.Damage.NeglectLevel",
@@ -9993,8 +10526,13 @@ if SERVER then
 
         local voltage, current =
             GetTrainElectricalWaterState(train)
+        local batteryAlive =
+            MEXD.IsBatteryElectricallyAlive(
+                train
+            )
         local powered =
-            voltage >= 18
+            batteryAlive
+            and voltage >= 18
             and current > 0.01
 
         -- Oxidized/dirty contacts first become intermittent. Using the train
@@ -10016,7 +10554,8 @@ if SERVER then
             )
         end
 
-        if level > 0.54
+        if weatheringActive
+            and level > 0.54
             and istable(train.Systems)
             and math.Rand(0, 1)
                 < 0.035
@@ -10094,7 +10633,8 @@ if SERVER then
             end
         end
 
-        if level > 0.66
+        if weatheringActive
+            and level > 0.66
             and istable(train.Lights)
             and math.Rand(0, 1)
                 < 0.025
@@ -14365,10 +14905,15 @@ if CLIENT then
                 )
 
                 panel:Help(
+                    "Neglect accumulates only while the wagon is freely "
+                    .. "standing almost motionless, unused, unpowered, under "
+                    .. "open sky and actually exposed to rain. Covered or dry "
+                    .. "outdoor storage does not create overgrowth."
+                )
+                panel:Help(
                     "For gameplay this uses compressed calendar time. At "
-                    .. "1.00, about one real minute of continuous abandonment "
-                    .. "represents one simulated day. Covered stock ages much "
-                    .. "more slowly than stock exposed to the sky."
+                    .. "1.00, about one real minute of valid rainy abandonment "
+                    .. "represents one simulated day."
                 )
                 panel:Help(
                     "Using or powering the train stops additional abandonment "
