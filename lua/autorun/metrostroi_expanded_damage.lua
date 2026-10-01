@@ -12759,11 +12759,6 @@ if SERVER then
                 maxs.y - width * 0.10,
                 mins.z + height * 0.16
             ),
-            grkv = Vector(
-                center.x + length * 0.12,
-                mins.y + width * 0.10,
-                mins.z + height * 0.16
-            ),
             electrical = Vector(
                 center.x,
                 mins.y + width * 0.12,
@@ -12808,24 +12803,15 @@ if SERVER then
 
         local batteryDistance =
             localPos:Distance(anchors.battery)
-        local grkvDistance =
-            localPos:Distance(anchors.grkv)
         local electricalDistance =
             localPos:Distance(anchors.electrical)
 
         local serviceRadius = 115
 
         if batteryDistance <= serviceRadius
-            and batteryDistance <= grkvDistance
             and batteryDistance <= electricalDistance
         then
             return "battery"
-        end
-
-        if grkvDistance <= serviceRadius
-            and grkvDistance <= electricalDistance
-        then
-            return "grkv"
         end
 
         if electricalDistance <= serviceRadius then
