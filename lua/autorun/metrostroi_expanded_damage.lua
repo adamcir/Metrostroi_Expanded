@@ -10173,6 +10173,14 @@ if SERVER then
             "MEX.Damage.OvergrowthLevel",
             0
         )
+        train:SetNW2Bool(
+            "MEX.Damage.NeglectAccumulating",
+            false
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.RainExposed",
+            false
+        )
     end
 
     function MEXD.IsTrainWeatherExposed(train)
