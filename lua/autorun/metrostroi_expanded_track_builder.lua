@@ -10,13 +10,12 @@ MEXTrackBuilder = MEXTrackBuilder or {}
 local Builder = MEXTrackBuilder
 
 local TRACK_CLASS = "mex_track_segment"
-local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad1024_plain.mdl"
+local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad16.mdl"
 
+-- Curved MEX track is built from Metrostroi's short 16-SU tile.
+-- Long 1024/4096 models cannot bend and caused the huge rail "fan".
 local VALID_TRACK_MODELS = {
-    ["models/metrostroi/tracks/railroad1024_plain.mdl"] = true,
-    ["models/metrostroi/tracks/railroad1024.mdl"] = true,
-    ["models/metrostroi/tracks/railroad1024_depot.mdl"] = true,
-    ["models/metrostroi/tracks/railroad1024_station.mdl"] = true,
+    ["models/metrostroi/tracks/railroad16.mdl"] = true,
 }
 
 local function SafeTrackModel(model)
@@ -75,7 +74,20 @@ function TrackEntity:Initialize()
     local leftY = gauge * 0.5
     local rightY = -gauge * 0.5
 
+    -- Continuous solid sleeper bed + both rails. This makes the generated
+    -- track solid for Sandbox/player physics instead of colliding only on two
+    -- very thin rail strips.
+    local sleeperHalf = math.max(
+        self:GetNW2Float("MEXSleeperLength", 128),
+        gauge + 16
+    ) * 0.5
+    local bedTop = math.max(sleeperHeight, 2)
+
     local convexes = {
+        BoxConvex(
+            Vector(-halfLength, -sleeperHalf, 0),
+            Vector(halfLength, sleeperHalf, bedTop)
+        ),
         BoxConvex(
             Vector(-halfLength, leftY - halfRail, railBottom),
             Vector(halfLength, leftY + halfRail, railTop)
@@ -99,6 +111,21 @@ end
 if CLIENT then
     local fallbackRailMaterial = Material("metrostroi/metro_railroad_001")
     local fallbackSleeperMaterial = Material("models/props_c17/furniturefabric003a")
+
+    local function RemoveModelPieces(self)
+        if not istable(self.MEXModelPieces) then
+            self.MEXModelPieces = {}
+            return
+        end
+
+        for _, piece in ipairs(self.MEXModelPieces) do
+            if IsValid(piece) then
+                piece:Remove()
+            end
+        end
+
+        self.MEXModelPieces = {}
+    end
 
     local function DrawFallbackTrack(self, length, gauge, railWidth, railHeight, sleeperSpacing, sleeperLength, sleeperWidth, sleeperHeight)
         local halfLength = length * 0.5
@@ -153,57 +180,96 @@ if CLIENT then
         )
     end
 
-    local function DrawMetrostroiModelClipped(self, length)
-        local model = self:GetModel()
-        if not isstring(model) or not string.StartWith(model, "models/metrostroi/tracks/") then
-            return false
+    local function NewTrackPiece(model)
+        local piece = ClientsideModel(model, RENDERGROUP_OPAQUE)
+        if IsValid(piece) then
+            piece:SetNoDraw(true)
+            piece:SetParent(nil)
         end
+        return piece
+    end
+
+    local function EnsureModelPieces(self, model, count)
+        self.MEXModelPieces = self.MEXModelPieces or {}
+
+        for i = 1, count do
+            local piece = self.MEXModelPieces[i]
+            if not IsValid(piece) or piece:GetModel() ~= model then
+                if IsValid(piece) then
+                    piece:Remove()
+                end
+                self.MEXModelPieces[i] = NewTrackPiece(model)
+            end
+        end
+
+        for i = #self.MEXModelPieces, count + 1, -1 do
+            local piece = self.MEXModelPieces[i]
+            if IsValid(piece) then
+                piece:Remove()
+            end
+            self.MEXModelPieces[i] = nil
+        end
+    end
+
+    local function DrawMetrostroiTiles(self, length, model)
         if not util.IsValidModel(model) then
+            RemoveModelPieces(self)
             return false
         end
 
-        local mins = self:OBBMins()
-        local maxs = self:OBBMaxs()
-        local modelLength = maxs.x - mins.x
+        EnsureModelPieces(self, model, 1)
+        local probe = self.MEXModelPieces and self.MEXModelPieces[1]
+        if not IsValid(probe) then return false end
 
-        if modelLength < 64 then
-            return false
+        local mins = probe:OBBMins()
+        local maxs = probe:OBBMaxs()
+        local size = maxs - mins
+
+        -- railroad16 may be authored along local X or local Y. Pick the
+        -- horizontal axis whose model extent is closest to the known 16-SU
+        -- tile length instead of assuming the largest OBB axis is forward.
+        local axisIsX = math.abs(size.x - 16) <= math.abs(size.y - 16)
+        local tileLength = math.max(axisIsX and size.x or size.y, 4)
+
+        -- Full-size Metrostroi tiles are repeated. Their spacing is at most
+        -- their real length, so adjacent pieces may overlap slightly but can
+        -- never leave a visible gap.
+        local count = math.Clamp(math.ceil(length / tileLength), 1, 96)
+        EnsureModelPieces(self, model, count)
+
+        local step = length / count
+        local firstX = -length * 0.5 + step * 0.5
+        local localCorrection = axisIsX and Angle(0, 0, 0) or Angle(0, -90, 0)
+        local pieceAng = self:LocalToWorldAngles(localCorrection)
+
+        for i = 1, count do
+            local piece = self.MEXModelPieces[i]
+            if IsValid(piece) then
+                local pmins = piece:OBBMins()
+                local pmaxs = piece:OBBMaxs()
+                local center = (pmins + pmaxs) * 0.5
+
+                -- Anchor the model by the center of its bottom face so models
+                -- with a non-centered origin still sit on the spline plane.
+                local anchor = Vector(center.x, center.y, pmins.z)
+                anchor:Rotate(pieceAng)
+
+                local x = firstX + (i - 1) * step
+                local target = self:LocalToWorld(Vector(x, 0, 0))
+
+                piece:SetRenderOrigin(target - anchor)
+                piece:SetRenderAngles(pieceAng)
+                piece:DrawModel()
+                piece:SetRenderOrigin(nil)
+                piece:SetRenderAngles(nil)
+            end
         end
-
-        local center = (mins + maxs) * 0.5
-        local anchor = Vector(center.x, center.y, mins.z)
-        local ang = self:GetAngles()
-        local forward = ang:Forward()
-        local right = ang:Right()
-        local up = ang:Up()
-        local drawOrigin = self:GetPos()
-            - forward * anchor.x
-            - right * anchor.y
-            - up * anchor.z
-
-        local halfLength = length * 0.5
-        local oldClipping = render.EnableClipping(true)
-
-        render.PushCustomClipPlane(
-            forward,
-            forward:Dot(self:GetPos() - forward * halfLength)
-        )
-        render.PushCustomClipPlane(
-            -forward,
-            (-forward):Dot(self:GetPos() + forward * halfLength)
-        )
-
-        self:SetRenderOrigin(drawOrigin)
-        self:SetRenderAngles(ang)
-        self:DrawModel()
-        self:SetRenderOrigin(nil)
-        self:SetRenderAngles(nil)
-
-        render.PopCustomClipPlane()
-        render.PopCustomClipPlane()
-        render.EnableClipping(oldClipping)
 
         return true
+    end
+
+    function TrackEntity:OnRemove()
+        RemoveModelPieces(self)
     end
 
     function TrackEntity:Draw()
@@ -215,20 +281,22 @@ if CLIENT then
         local sleeperLength = math.max(self:GetNW2Float("MEXSleeperLength", 128), gauge + 16)
         local sleeperWidth = math.max(self:GetNW2Float("MEXSleeperWidth", 10), 2)
         local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
+        local model = SafeTrackModel(self:GetNW2String("MEXTrackModel", DEFAULT_TRACK_MODEL))
 
         if self.SetRenderBounds then
             self:SetRenderBounds(
-                Vector(-length * 0.5 - 24, -sleeperLength * 0.5 - 24, -16),
-                Vector(length * 0.5 + 24, sleeperLength * 0.5 + 24, sleeperHeight + railHeight + 32)
+                Vector(-length * 0.5 - 32, -sleeperLength * 0.5 - 32, -16),
+                Vector(length * 0.5 + 32, sleeperLength * 0.5 + 32, sleeperHeight + railHeight + 32)
             )
         end
 
         if self:GetNW2Bool("MEXUseTrackModel", true)
-            and DrawMetrostroiModelClipped(self, length)
+            and DrawMetrostroiTiles(self, length, model)
         then
             return
         end
 
+        RemoveModelPieces(self)
         DrawFallbackTrack(
             self,
             length,
@@ -350,8 +418,8 @@ local function CopySettings(settings)
         sleeper_width = math.Clamp(tonumber(settings.sleeper_width) or 10, 2, 64),
         sleeper_height = math.Clamp(tonumber(settings.sleeper_height) or 5, 1, 32),
         smooth = settings.smooth ~= false and tonumber(settings.smooth or 1) ~= 0,
-        curve_tension = math.Clamp(tonumber(settings.curve_tension) or 0.55, 0.05, 1.0),
-        segment_length = math.Clamp(tonumber(settings.segment_length) or 192, 48, 512),
+        curve_tension = math.Clamp(tonumber(settings.curve_tension) or 0.45, 0.05, 0.85),
+        segment_length = math.Clamp(tonumber(settings.segment_length) or 48, 16, 256),
         use_track_model = settings.use_track_model ~= false and tonumber(settings.use_track_model or 1) ~= 0,
         track_model = SafeTrackModel(settings.track_model),
     }

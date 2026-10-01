@@ -19,10 +19,10 @@ TOOL.ClientConVar = {
     snap_distance = "24",
     network = "1",
     smooth = "1",
-    curve_tension = "0.55",
-    segment_length = "192",
+    curve_tension = "0.45",
+    segment_length = "48",
     use_track_model = "1",
-    track_model = "models/metrostroi/tracks/railroad1024_plain.mdl",
+    track_model = "models/metrostroi/tracks/railroad16.mdl",
 }
 
 if CLIENT then
@@ -41,8 +41,8 @@ local function ReadSettings(tool)
         sleeper_width = tool:GetClientNumber("sleeper_width", 10),
         sleeper_height = tool:GetClientNumber("sleeper_height", 5),
         smooth = tool:GetClientNumber("smooth", 1),
-        curve_tension = tool:GetClientNumber("curve_tension", 0.55),
-        segment_length = tool:GetClientNumber("segment_length", 192),
+        curve_tension = tool:GetClientNumber("curve_tension", 0.45),
+        segment_length = tool:GetClientNumber("segment_length", 48),
         use_track_model = tool:GetClientNumber("use_track_model", 1),
         track_model = tool:GetClientInfo("track_model"),
     }
@@ -126,17 +126,12 @@ function TOOL.BuildCPanel(panel)
     panel:Help("Reload elsewhere: cancel the unfinished route.")
 
     panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
-    panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.1, 1.0, 2)
-    panel:NumSlider("Smooth piece length", "mex_track_builder_segment_length", 64, 512, 0)
-    panel:Help("Smaller piece length = smoother bends. 128-256 is recommended.")
+    panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.1, 0.85, 2)
+    panel:NumSlider("Smooth piece length", "mex_track_builder_segment_length", 16, 256, 0)
+    panel:Help("Smaller = smoother curve. Default 48 SU; use 24-32 for tight bends.")
 
     panel:CheckBox("Use Metrostroi track model", "mex_track_builder_use_track_model")
-
-    local modelBox = panel:ComboBox("Metrostroi track style", "mex_track_builder_track_model")
-    modelBox:AddChoice("Plain track", "models/metrostroi/tracks/railroad1024_plain.mdl")
-    modelBox:AddChoice("Standard track", "models/metrostroi/tracks/railroad1024.mdl")
-    modelBox:AddChoice("Depot track", "models/metrostroi/tracks/railroad1024_depot.mdl")
-    modelBox:AddChoice("Station track", "models/metrostroi/tracks/railroad1024_station.mdl")
+    panel:Help("Smooth track uses the real Metrostroi railroad16.mdl tile. Long 1024-SU models are intentionally not used on curves.")
 
     panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 40, 120, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
@@ -150,7 +145,7 @@ function TOOL.BuildCPanel(panel)
     panel:NumSlider("Endpoint snap distance", "mex_track_builder_snap_distance", 2, 96, 0)
     panel:CheckBox("Add route to Metrostroi rail network", "mex_track_builder_network")
 
-    panel:Help("The Metrostroi model is clipped to each smooth piece instead of being stretched, so rail and sleeper proportions stay normal.")
+    panel:Help("railroad16.mdl is repeated along the spline, so track pieces keep their normal proportions without the long-model fan effect.")
     panel:Help("If a selected Metrostroi model is missing, the tool falls back to procedural rails using Metrostroi materials.")
     panel:Help("The default gauge 80 SU is close to 1520 mm in Metrostroi scale.")
 
