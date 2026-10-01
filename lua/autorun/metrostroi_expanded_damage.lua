@@ -21184,6 +21184,16 @@ if CLIENT then
                         "MEX.Damage.ScuffLevel",
                         0
                     )
+                local corrosion =
+                    train:GetNW2Float(
+                        "MEX.Damage.CorrosionLevel",
+                        0
+                    )
+                local interiorDecay =
+                    train:GetNW2Float(
+                        "MEX.Damage.InteriorDecay",
+                        0
+                    )
 
                 applyWeathering(
                     train,
@@ -21195,19 +21205,75 @@ if CLIENT then
                 for name, prop in pairs(
                     train.ClientEnts or {}
                 ) do
-                    if IsValid(prop)
-                        and ModelLooksStructural(
-                            tostring(name),
-                            string.lower(
-                                prop:GetModel() or ""
-                            )
+                    if not IsValid(prop) then
+                        continue
+                    end
+
+                    local propName =
+                        string.lower(
+                            tostring(name or "")
                         )
-                    then
+                    local propModel =
+                        string.lower(
+                            prop:GetModel() or ""
+                        )
+
+                    if ModelLooksStructural(
+                        propName,
+                        propModel
+                    ) then
                         applyWeathering(
                             prop,
                             dirt,
                             growth,
                             scuff
+                        )
+                        continue
+                    end
+
+                    if ModelLooksGlass(
+                        propName,
+                        propModel
+                    ) then
+                        continue
+                    end
+
+                    local text =
+                        propName
+                        .. " "
+                        .. propModel
+                    local interiorLike =
+                        string.find(text, "seat", 1, true)
+                        or string.find(text, "salon", 1, true)
+                        or string.find(text, "interior", 1, true)
+                        or string.find(text, "panel", 1, true)
+                        or string.find(text, "wall", 1, true)
+                        or string.find(text, "ceiling", 1, true)
+                        or string.find(text, "floor", 1, true)
+                        or string.find(text, "handrail", 1, true)
+                        or string.find(text, "handle", 1, true)
+                        or string.find(text, "pole", 1, true)
+                        or string.find(text, "lamp", 1, true)
+                        or string.find(text, "light", 1, true)
+                        or string.find(text, "cab", 1, true)
+
+                    if interiorLike then
+                        applyWeathering(
+                            prop,
+                            math.Clamp(
+                                dirt * 0.38
+                                    + corrosion * 0.20
+                                    + interiorDecay * 0.24,
+                                0,
+                                0.62
+                            ),
+                            0,
+                            math.Clamp(
+                                scuff * 0.35
+                                    + interiorDecay * 0.16,
+                                0,
+                                0.45
+                            )
                         )
                     end
                 end
@@ -21227,6 +21293,89 @@ if CLIENT then
             )
     end
 
+    MEXD.CorrosionOverlayMaterial =
+        Material(
+            "decals/rusty"
+        )
+
+    if MEXD.CorrosionOverlayMaterial:IsError() then
+        MEXD.CorrosionOverlayMaterial =
+            Material(
+                "decals/rust"
+            )
+    end
+
+    if MEXD.CorrosionOverlayMaterial:IsError() then
+        MEXD.CorrosionOverlayMaterial =
+            Material(
+                "models/props_wasteland/metal_tram001a"
+            )
+    end
+
+    function MEXD.GrowthPatchNearOpening(
+        train,
+        localPos
+    )
+        if not IsSubwayTrain(train)
+            or not isvector(localPos)
+        then
+            return false
+        end
+
+        for name, prop in pairs(
+            train.ClientEnts or {}
+        ) do
+            if not IsValid(prop) then
+                continue
+            end
+
+            local text =
+                string.lower(
+                    tostring(name or "")
+                    .. " "
+                    .. tostring(
+                        prop:GetModel() or ""
+                    )
+                )
+
+            if not string.find(
+                text,
+                "door",
+                1,
+                true
+            ) and not string.find(
+                text,
+                "window",
+                1,
+                true
+            ) and not string.find(
+                text,
+                "glass",
+                1,
+                true
+            ) then
+                continue
+            end
+
+            local center =
+                train:WorldToLocal(
+                    prop:WorldSpaceCenter()
+                )
+
+            if math.abs(
+                center.x - localPos.x
+            ) <= 44
+                and math.abs(
+                    center.z - localPos.z
+                ) <= 72
+            then
+                return true
+            end
+        end
+
+        return false
+    end
+
     function MEXD.BuildGrowthOverlayPatches(
         train
     )
@@ -21238,13 +21387,24 @@ if CLIENT then
         local maxs = train:OBBMaxs()
         local span = maxs - mins
         local seed =
-            "MEXGrowth:"
+            "MEXWeather:"
             .. tostring(train:EntIndex())
             .. ":"
             .. tostring(train:GetModel() or "")
         local patches = {}
 
-        for index = 1, 84 do
+        for index = 1, 118 do
+            local kindRoll =
+                util.SharedRandom(
+                    seed .. ":kind",
+                    0,
+                    1,
+                    index
+                )
+            local kind =
+                kindRoll < 0.42
+                and "growth"
+                or "rust"
             local surfaceRoll =
                 util.SharedRandom(
                     seed .. ":surface",
@@ -21252,121 +21412,212 @@ if CLIENT then
                     1,
                     index
                 )
+            local side =
+                util.SharedRandom(
+                    seed .. ":side",
+                    0,
+                    1,
+                    index
+                ) < 0.5
+                and -1
+                or 1
             local x =
                 Lerp(
                     util.SharedRandom(
                         seed .. ":x",
-                        0.04,
-                        0.96,
+                        0.035,
+                        0.965,
                         index
                     ),
                     mins.x,
                     maxs.x
                 )
-            local y =
-                Lerp(
-                    util.SharedRandom(
-                        seed .. ":y",
-                        0.06,
-                        0.94,
-                        index
-                    ),
-                    mins.y,
-                    maxs.y
-                )
-            local z =
-                Lerp(
-                    util.SharedRandom(
-                        seed .. ":z",
-                        0.20,
-                        0.94,
-                        index
-                    ),
-                    mins.z,
-                    maxs.z
-                )
             local pos
             local normal
+            local width
+            local height
 
-            if surfaceRoll < 0.54 then
+            if kind == "growth"
+                and surfaceRoll < 0.66
+            then
+                -- Moss/ivy mostly starts on horizontal roof surfaces where
+                -- water and organic debris can remain.
                 pos = Vector(
                     x,
-                    y,
+                    Lerp(
+                        util.SharedRandom(
+                            seed .. ":roof-y",
+                            0.10,
+                            0.90,
+                            index
+                        ),
+                        mins.y,
+                        maxs.y
+                    ),
                     maxs.z
                 )
                 normal = Vector(0, 0, 1)
-            elseif surfaceRoll < 0.73 then
-                pos = Vector(
-                    x,
-                    mins.y,
-                    z
-                )
-                normal = Vector(0, -1, 0)
-            elseif surfaceRoll < 0.92 then
-                pos = Vector(
-                    x,
-                    maxs.y,
-                    z
-                )
-                normal = Vector(0, 1, 0)
-            else
-                local front =
+                width =
                     util.SharedRandom(
-                        seed .. ":end",
+                        seed .. ":gw",
+                        14,
+                        math.max(
+                            24,
+                            math.min(
+                                42,
+                                span.y * 0.22
+                            )
+                        ),
+                        index
+                    )
+                height =
+                    util.SharedRandom(
+                        seed .. ":gh",
+                        8,
+                        24,
+                        index
+                    )
+            elseif kind == "rust"
+                and surfaceRoll < 0.20
+            then
+                pos = Vector(
+                    x,
+                    Lerp(
+                        util.SharedRandom(
+                            seed .. ":rust-roof-y",
+                            0.06,
+                            0.94,
+                            index
+                        ),
+                        mins.y,
+                        maxs.y
+                    ),
+                    maxs.z
+                )
+                normal = Vector(0, 0, 1)
+                width =
+                    util.SharedRandom(
+                        seed .. ":rw",
+                        8,
+                        26,
+                        index
+                    )
+                height =
+                    util.SharedRandom(
+                        seed .. ":rh",
+                        5,
+                        15,
+                        index
+                    )
+            else
+                -- Side corrosion/vegetation is kept to the lower skirt or the
+                -- narrow roof seam. It deliberately avoids the middle window
+                -- band that caused the old floating leaves through windows.
+                local upperSeam =
+                    util.SharedRandom(
+                        seed .. ":seam",
                         0,
                         1,
                         index
-                    ) > 0.5
+                    ) < (
+                        kind == "rust"
+                        and 0.34
+                        or 0.16
+                    )
+                local zFraction =
+                    upperSeam
+                    and util.SharedRandom(
+                        seed .. ":upper-z",
+                        0.82,
+                        0.94,
+                        index
+                    )
+                    or util.SharedRandom(
+                        seed .. ":lower-z",
+                        0.08,
+                        kind == "growth"
+                            and 0.24
+                            or 0.31,
+                        index
+                    )
 
                 pos = Vector(
-                    front
-                        and maxs.x
-                        or mins.x,
-                    y,
-                    z
+                    x,
+                    side < 0
+                        and mins.y
+                        or maxs.y,
+                    Lerp(
+                        zFraction,
+                        mins.z,
+                        maxs.z
+                    )
                 )
                 normal = Vector(
-                    front and 1 or -1,
                     0,
+                    side,
                     0
                 )
+
+                if MEXD.GrowthPatchNearOpening(
+                    train,
+                    pos
+                ) then
+                    continue
+                end
+
+                if kind == "growth" then
+                    width =
+                        util.SharedRandom(
+                            seed .. ":side-gw",
+                            10,
+                            28,
+                            index
+                        )
+                    height =
+                        util.SharedRandom(
+                            seed .. ":side-gh",
+                            6,
+                            17,
+                            index
+                        )
+                else
+                    width =
+                        util.SharedRandom(
+                            seed .. ":side-rw",
+                            7,
+                            24,
+                            index
+                        )
+                    height =
+                        util.SharedRandom(
+                            seed .. ":side-rh",
+                            5,
+                            14,
+                            index
+                        )
+                end
             end
 
             patches[#patches + 1] = {
+                kind = kind,
                 pos = pos,
                 normal = normal,
-                width =
-                    util.SharedRandom(
-                        seed .. ":w",
-                        math.max(
-                            22,
-                            span.y * 0.08
-                        ),
-                        math.max(
-                            46,
-                            span.y * 0.32
-                        ),
-                        index
-                    ),
-                height =
-                    util.SharedRandom(
-                        seed .. ":h",
-                        18,
-                        62,
-                        index
-                    ),
+                width = width,
+                height = height,
                 rotation =
                     util.SharedRandom(
-                        seed .. ":r",
-                        0,
-                        360,
+                        seed .. ":rot",
+                        -35,
+                        35,
                         index
                     ),
                 threshold =
                     util.SharedRandom(
                         seed .. ":threshold",
-                        0.03,
-                        0.98,
+                        kind == "growth"
+                            and 0.08
+                            or 0.10,
+                        0.96,
                         index
                     ),
             }
@@ -21390,16 +21641,24 @@ if CLIENT then
                 "MEX.Damage.OvergrowthLevel",
                 0
             )
+        local corrosion =
+            train:GetNW2Float(
+                "MEX.Damage.CorrosionLevel",
+                0
+            )
 
-        if growth <= 0.02 then
+        if growth <= 0.02
+            and corrosion <= 0.02
+        then
             return
         end
 
         local eye = EyePos()
+
         if isvector(eye)
             and eye:DistToSqr(
                 train:WorldSpaceCenter()
-            ) > 6000 * 6000
+            ) > 5200 * 5200
         then
             return
         end
@@ -21417,46 +21676,36 @@ if CLIENT then
                 )
         end
 
-        if not istable(patches)
-            or #patches <= 0
-        then
-            return
-        end
-
-        render.SetMaterial(
-            MEXD.GrowthOverlayMaterial
-        )
-
-        for _, patch in ipairs(patches) do
+        for _, patch in ipairs(
+            patches or {}
+        ) do
             if not istable(patch)
-                or growth
-                    < (
-                        tonumber(
-                            patch.threshold
-                        ) or 1
-                    )
+                or not isvector(patch.pos)
+                or not isvector(patch.normal)
             then
                 continue
             end
 
-            local localPos = patch.pos
-            local localNormal =
-                patch.normal
+            local level =
+                patch.kind == "rust"
+                and corrosion
+                or growth
+            local threshold =
+                tonumber(patch.threshold)
+                or 1
 
-            if not isvector(localPos)
-                or not isvector(localNormal)
-            then
+            if level < threshold then
                 continue
             end
 
             local worldPos =
                 train:LocalToWorld(
-                    localPos
+                    patch.pos
                 )
             local worldNormal =
                 train:LocalToWorld(
-                    localPos
-                        + localNormal
+                    patch.pos
+                        + patch.normal
                 )
                 - worldPos
 
@@ -21471,32 +21720,47 @@ if CLIENT then
             local maturity =
                 math.Clamp(
                     (
-                        growth
-                        - (
-                            tonumber(
-                                patch.threshold
-                            ) or 0
-                        )
-                    ) / 0.35,
+                        level - threshold
+                    ) / 0.34,
                     0,
                     1
                 )
 
+            if patch.kind == "rust" then
+                render.SetMaterial(
+                    MEXD.CorrosionOverlayMaterial
+                )
+            else
+                render.SetMaterial(
+                    MEXD.GrowthOverlayMaterial
+                )
+            end
+
             render.DrawQuadEasy(
                 worldPos
-                    + worldNormal * 0.9,
+                    + worldNormal * 0.20,
                 worldNormal,
-                tonumber(patch.width) or 40,
-                tonumber(patch.height) or 32,
-                Color(
-                    178,
-                    210,
-                    150,
-                    math.floor(
-                        75
-                            + maturity * 130
+                tonumber(patch.width) or 18,
+                tonumber(patch.height) or 11,
+                patch.kind == "rust"
+                    and Color(
+                        124,
+                        77,
+                        46,
+                        math.floor(
+                            38
+                                + maturity * 76
+                        )
                     )
-                ),
+                    or Color(
+                        128,
+                        158,
+                        92,
+                        math.floor(
+                            48
+                                + maturity * 112
+                        )
+                    ),
                 tonumber(patch.rotation) or 0
             )
         end
