@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.6"
+MEXD.Version = "0.18.7"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -638,6 +638,17 @@ if SERVER then
                 or button
 
             if blocked(self, normalized) then
+                if state
+                    and isfunction(
+                        MEXD.OnDamagedControlActuated
+                    )
+                then
+                    MEXD.OnDamagedControlActuated(
+                        self,
+                        normalized
+                    )
+                end
+
                 return false
             end
 
@@ -666,6 +677,15 @@ if SERVER then
                     or button
 
                 if blocked(self, normalized) then
+                    if isfunction(
+                        MEXD.OnDamagedControlActuated
+                    ) then
+                        MEXD.OnDamagedControlActuated(
+                            self,
+                            normalized
+                        )
+                    end
+
                     return true
                 end
 
@@ -2078,6 +2098,469 @@ if SERVER then
             severe and 80 or 70,
             math.random(severe and 82 or 94, severe and 102 or 116),
             math.Clamp(0.45 + voltage / 1200, 0.45, 1)
+        )
+    end
+
+    function MEXD.FindControlWorldPosition(
+        train,
+        buttonID
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(buttonID)
+            or not istable(train.ButtonMap)
+        then
+            return nil
+        end
+
+        buttonID = buttonID:gsub("^.+:", "")
+
+        for panelName, panel in pairs(train.ButtonMap) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            for _, button in pairs(panel.buttons) do
+                if istable(button)
+                    and isstring(button.ID)
+                    and button.ID:gsub("^.+:", "")
+                        == buttonID
+                then
+                    local localPos =
+                        isfunction(
+                            MEXD.WaterButtonCenterLocal
+                        )
+                        and MEXD.WaterButtonCenterLocal(
+                            panel,
+                            button
+                        )
+                        or nil
+
+                    if isvector(localPos) then
+                        return train:LocalToWorld(
+                            localPos
+                        )
+                    end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    function MEXD.TryStartTrainFire(
+        train,
+        worldPos,
+        risk,
+        cause
+    )
+        if not IsSubwayTrain(train)
+            or train:GetNW2Bool(
+                "MEX.Damage.FireActive",
+                false
+            )
+        then
+            return false
+        end
+
+        risk = math.Clamp(
+            tonumber(risk) or 0,
+            0,
+            0.95
+        )
+
+        if risk <= 0
+            or math.Rand(0, 1) > risk
+        then
+            return false
+        end
+
+        local voltage, current, hv, lv =
+            GetTrainElectricalWaterState(train)
+
+        -- No magical combustion: an electrical fire normally needs a live
+        -- source. Very severe mechanical events may still ignite damaged
+        -- material, represented by very high caller risk.
+        if voltage < 18
+            and hv < 200
+            and lv < 18
+            and risk < 0.78
+        then
+            return false
+        end
+
+        worldPos =
+            isvector(worldPos)
+            and worldPos
+            or train:WorldSpaceCenter()
+
+        train.MEXDamageFireLocal =
+            train:WorldToLocal(worldPos)
+        train.MEXDamageFireIntensity =
+            math.Clamp(
+                0.28
+                    + risk * 0.72
+                    + math.Clamp(
+                        current / 900,
+                        0,
+                        0.22
+                    ),
+                0.22,
+                1
+            )
+        train.MEXDamageFireStartedAt = CurTime()
+        train.MEXDamageFireUntil =
+            CurTime()
+                + Lerp(
+                    train.MEXDamageFireIntensity,
+                    24,
+                    78
+                )
+
+        train:SetNW2Bool(
+            "MEX.Damage.FireActive",
+            true
+        )
+        train:SetNW2Float(
+            "MEX.Damage.FireIntensity",
+            train.MEXDamageFireIntensity
+        )
+        train:SetNW2String(
+            "MEX.Damage.FireCause",
+            tostring(cause or "electrical")
+        )
+
+        local fire = ents.Create("env_fire")
+
+        if IsValid(fire) then
+            fire:SetPos(worldPos)
+            fire:SetKeyValue(
+                "health",
+                tostring(
+                    math.floor(
+                        18
+                            + train.MEXDamageFireIntensity
+                                * 55
+                    )
+                )
+            )
+            fire:SetKeyValue(
+                "firesize",
+                tostring(
+                    math.floor(
+                        42
+                            + train.MEXDamageFireIntensity
+                                * 92
+                    )
+                )
+            )
+            fire:SetKeyValue("fireattack", "2")
+            fire:SetKeyValue("damagescale", "1.0")
+            fire:SetKeyValue("spawnflags", "132")
+            fire:Spawn()
+            fire:Activate()
+            fire:SetParent(train)
+            fire:Fire("StartFire", "", 0)
+
+            train.MEXDamageFireEntity = fire
+        end
+
+        PlayLocalizedDamageSound(
+            train,
+            worldPos,
+            "ambient/fire/ignite.wav",
+            70,
+            math.random(94, 106),
+            0.9
+        )
+
+        return true
+    end
+
+    function MEXD.StopTrainFire(train)
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        if IsValid(train.MEXDamageFireEntity) then
+            train.MEXDamageFireEntity:Remove()
+        end
+
+        train.MEXDamageFireEntity = nil
+        train.MEXDamageFireLocal = nil
+        train.MEXDamageFireIntensity = 0
+        train.MEXDamageFireStartedAt = nil
+        train.MEXDamageFireUntil = nil
+        train.MEXDamageNextFireDamage = nil
+
+        train:SetNW2Bool(
+            "MEX.Damage.FireActive",
+            false
+        )
+        train:SetNW2Float(
+            "MEX.Damage.FireIntensity",
+            0
+        )
+        train:SetNW2String(
+            "MEX.Damage.FireCause",
+            ""
+        )
+    end
+
+    function MEXD.UpdateTrainFire(
+        train,
+        dT
+    )
+        if not IsSubwayTrain(train)
+            or not train:GetNW2Bool(
+                "MEX.Damage.FireActive",
+                false
+            )
+        then
+            return
+        end
+
+        local now = CurTime()
+        local intensity =
+            math.Clamp(
+                tonumber(
+                    train.MEXDamageFireIntensity
+                ) or 0.35,
+                0,
+                1
+            )
+        local firePos =
+            isvector(train.MEXDamageFireLocal)
+            and train:LocalToWorld(
+                train.MEXDamageFireLocal
+            )
+            or train:WorldSpaceCenter()
+
+        local wetness =
+            train:GetNW2Float(
+                "MEX.Damage.WaterWetness",
+                0
+            )
+
+        if wetness >= 0.60 then
+            intensity =
+                math.max(
+                    0,
+                    intensity
+                        - dT
+                            * (
+                                0.20
+                                + wetness * 0.45
+                            )
+                )
+        elseif now
+            < (
+                train.MEXDamageFireUntil
+                or now
+            )
+        then
+            intensity =
+                math.Clamp(
+                    intensity
+                        + dT
+                            * 0.004
+                            * (
+                                1
+                                + train:GetNW2Float(
+                                    "MEX.Damage.electrical",
+                                    0
+                                )
+                            ),
+                    0,
+                    1
+                )
+        else
+            intensity =
+                math.max(
+                    0,
+                    intensity - dT * 0.045
+                )
+        end
+
+        train.MEXDamageFireIntensity = intensity
+        train:SetNW2Float(
+            "MEX.Damage.FireIntensity",
+            intensity
+        )
+
+        if intensity <= 0.03 then
+            MEXD.StopTrainFire(train)
+            return
+        end
+
+        if (
+            train.MEXDamageNextFireDamage
+            or 0
+        ) > now
+        then
+            return
+        end
+
+        train.MEXDamageNextFireDamage =
+            now
+            + Lerp(
+                intensity,
+                1.4,
+                0.35
+            )
+
+        local zone =
+            isfunction(ClassifyFromWorldPosition)
+            and ClassifyFromWorldPosition(
+                train,
+                firePos
+            )
+            or "floor"
+
+        if ZONES[zone]
+            and MEXD.IsPhysicalDamageEnabled()
+        then
+            MEXD.ApplyDamage(
+                train,
+                zone,
+                0.0015
+                    + intensity * 0.006,
+                firePos,
+                ZoneOutwardNormal(
+                    train,
+                    zone
+                ),
+                "fire"
+            )
+        end
+
+        local electrical =
+            train:GetNW2Float(
+                "MEX.Damage.electrical",
+                0
+            )
+
+        train:SetNW2Float(
+            "MEX.Damage.electrical",
+            math.Clamp(
+                electrical
+                    + intensity * 0.006,
+                0,
+                1
+            )
+        )
+
+        if istable(train.Battery)
+            and intensity > 0.35
+        then
+            MEXD.ApplyBatteryDamage(
+                train,
+                intensity * 0.0018,
+                "fire"
+            )
+        end
+
+        if intensity > 0.32
+            and math.Rand(0, 1)
+                < 0.08 + intensity * 0.20
+            and isfunction(MEXD.SeizeWaterRelay)
+        then
+            MEXD.SeizeWaterRelay(
+                train,
+                1,
+                firePos,
+                false
+            )
+        end
+
+        if intensity > 0.28
+            and math.Rand(0, 1)
+                < 0.08 + intensity * 0.18
+            and isfunction(MEXD.FailWaterLamp)
+        then
+            MEXD.FailWaterLamp(
+                train,
+                1,
+                firePos,
+                false
+            )
+        end
+    end
+
+    function MEXD.OnDamagedControlActuated(
+        train,
+        buttonID
+    )
+        if not IsSubwayTrain(train)
+            or not MEXD.IsElectricalDamageEnabled()
+        then
+            return
+        end
+
+        local voltage, current, hv, lv =
+            GetTrainElectricalWaterState(train)
+
+        if voltage < 18
+            or (
+                hv < 200
+                and lv < 18
+                and not MEXD.IsBatteryElectricallyAlive(train)
+            )
+        then
+            return
+        end
+
+        local pos =
+            MEXD.FindControlWorldPosition(
+                train,
+                tostring(buttonID or "")
+            )
+            or train:WorldSpaceCenter()
+
+        if isfunction(MEXD.EmitImpactElectricalArc) then
+            MEXD.EmitImpactElectricalArc(
+                train,
+                pos,
+                math.Clamp(
+                    0.24
+                        + train:GetNW2Float(
+                            "MEX.Damage.electrical",
+                            0
+                        ) * 0.52,
+                    0.2,
+                    0.82
+                )
+            )
+        else
+            EmitWaterElectricalArc(
+                train,
+                pos,
+                voltage,
+                math.max(current, 15),
+                hv >= 200
+            )
+        end
+
+        MEXD.TryStartTrainFire(
+            train,
+            pos,
+            math.Clamp(
+                0.008
+                    + train:GetNW2Float(
+                        "MEX.Damage.electrical",
+                        0
+                    ) * 0.025
+                    + math.Clamp(
+                        current / 1000,
+                        0,
+                        0.018
+                    ),
+                0,
+                0.055
+            ),
+            "damaged control arcing"
         )
     end
 
@@ -5346,6 +5829,26 @@ if SERVER then
                 ingress,
                 worldPos,
                 thirdRailLive
+            )
+        end
+
+        if thirdRailLive
+            and ingress > 0.44
+            and intensity > 0.58
+        then
+            MEXD.TryStartTrainFire(
+                train,
+                worldPos,
+                math.Clamp(
+                    0.004
+                        + (
+                            ingress - 0.44
+                        ) * 0.030
+                        + intensity * 0.012,
+                    0,
+                    0.035
+                ),
+                "flooded live electrical equipment"
             )
         end
     end
@@ -9239,6 +9742,75 @@ if SERVER then
                 * realism
                 * (seated and 0.88 or 1.18)
 
+            if isvector(hitPos) then
+                local playerLocal =
+                    train:WorldToLocal(
+                        ply:WorldSpaceCenter()
+                    )
+                local impactLocal =
+                    train:WorldToLocal(
+                        hitPos
+                    )
+                local mins = train:OBBMins()
+                local maxs = train:OBBMaxs()
+                local size = maxs - mins
+
+                local dx =
+                    math.abs(
+                        playerLocal.x
+                            - impactLocal.x
+                    )
+                    / math.max(
+                        math.abs(size.x),
+                        1
+                    )
+                local dy =
+                    math.abs(
+                        playerLocal.y
+                            - impactLocal.y
+                    )
+                    / math.max(
+                        math.abs(size.y),
+                        1
+                    )
+                local dz =
+                    math.abs(
+                        playerLocal.z
+                            - impactLocal.z
+                    )
+                    / math.max(
+                        math.abs(size.z),
+                        1
+                    )
+                local localDistance =
+                    math.sqrt(
+                        dx * dx
+                            + dy * dy * 0.72
+                            + dz * dz * 0.42
+                    )
+                local proximity =
+                    1
+                    - math.Clamp(
+                        localDistance / 0.92,
+                        0,
+                        1
+                    )
+
+                damage =
+                    damage
+                    * (
+                        0.42
+                        + proximity * 1.10
+                    )
+
+                if not seated
+                    and proximity > 0.62
+                    and deltaKmh >= 48
+                then
+                    damage = damage * 1.16
+                end
+            end
+
             if deltaKmh >= 105 then
                 damage = math.max(damage, 220)
             elseif deltaKmh >= 80 and not seated then
@@ -10085,6 +10657,27 @@ if SERVER then
                 intensity * 0.52
             )
         )
+
+        if intensity >= 0.56 then
+            MEXD.TryStartTrainFire(
+                train,
+                isvector(hitPos)
+                    and hitPos
+                    or train:WorldSpaceCenter(),
+                math.Clamp(
+                    (intensity - 0.50)
+                        * 0.16
+                        + (
+                            damagedSomething
+                            and 0.018
+                            or 0
+                        ),
+                    0,
+                    0.11
+                ),
+                "impact-damaged wiring"
+            )
+        end
     end
 
     local function ApplySevereCrashConsequences(
@@ -10468,6 +11061,8 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.overall", 0)
         train:SetNW2Float("MEX.StructuralHealth", 1)
         train:SetNW2Float("MEX.Damage.LastImpactKmh", 0)
+        train:SetNW2Float("MEX.Damage.ScuffLevel", 0)
+        MEXD.StopTrainFire(train)
         train:SetNW2Float("MEX.Damage.BlastStrength", 0)
         train:SetNW2Float("MEX.Damage.BlastRadius", 0)
         train:SetNW2Vector("MEX.Damage.BlastLocal", vector_origin)
@@ -10809,8 +11404,44 @@ if SERVER then
             util.Decal(
                 "Impact.Metal",
                 worldPos + normal * 12,
-                worldPos - normal * 12,
-                train
+                worldPos - normal * 12
+            )
+
+            if amount >= 0.42 then
+                local tangent = VectorRand()
+                tangent =
+                    tangent
+                    - normal
+                        * tangent:Dot(normal)
+
+                if tangent:LengthSqr() > 0.001 then
+                    tangent:Normalize()
+
+                    util.Decal(
+                        "Impact.Metal",
+                        worldPos
+                            + tangent
+                                * math.Rand(3, 11)
+                            + normal * 10,
+                        worldPos
+                            + tangent
+                                * math.Rand(3, 11)
+                            - normal * 14
+                    )
+                end
+            end
+
+            train:SetNW2Float(
+                "MEX.Damage.ScuffLevel",
+                math.Clamp(
+                    train:GetNW2Float(
+                        "MEX.Damage.ScuffLevel",
+                        0
+                    )
+                        + amount * 0.055,
+                    0,
+                    1
+                )
             )
         end
     end
@@ -12510,6 +13141,7 @@ if SERVER then
                 InitializeTrainDamage(train)
                 EnforceElectricalFailures(train)
                 MEXD.UpdateImpactElectricalArcing(train)
+                MEXD.UpdateTrainFire(train, dT)
                 UpdateWaterElectricalDamage(train, dT)
             end
         end
