@@ -21122,9 +21122,9 @@ if CLIENT then
                 local darken =
                     math.Clamp(
                         1
-                            - dirt * 0.22
-                            - scuff * 0.08,
-                        0.58,
+                            - dirt * 0.14
+                            - scuff * 0.05,
+                        0.72,
                         1
                     )
                 local moss =
@@ -21141,22 +21141,22 @@ if CLIENT then
                     math.Clamp(
                         base.r
                             * darken
-                            * (1 - moss * 0.035),
+                            * (1 - moss * 0.010),
                         0,
                         255
                     ),
                     math.Clamp(
                         base.g
                             * darken
-                            * (1 - moss * 0.015)
-                            + 4 * moss,
+                            * (1 - moss * 0.004)
+                            + 1.5 * moss,
                         0,
                         255
                     ),
                     math.Clamp(
                         base.b
                             * darken
-                            * (1 - moss * 0.055),
+                            * (1 - moss * 0.015),
                         0,
                         255
                     ),
@@ -21281,35 +21281,115 @@ if CLIENT then
         end
     )
 
+    -- Weathering is drawn procedurally instead of stamping stock foliage/rust
+    -- materials onto the wagon.  The old approach could expose opaque/black
+    -- parts of Source materials and produced obvious square cards.  This
+    -- neutral, vertex-coloured material gives us predictable alpha and lets
+    -- the silhouette come from many small irregular chips/blades instead.
+    MEXD.WeatherOverlayMaterial =
+        CreateMaterial(
+            "mex_damage_weather_overlay_v4",
+            "UnlitGeneric",
+            {
+                ["$basetexture"] = "vgui/white",
+                ["$vertexcolor"] = "1",
+                ["$vertexalpha"] = "1",
+                ["$translucent"] = "1",
+                ["$nocull"] = "1",
+            }
+        )
+
+    if not MEXD.WeatherOverlayMaterial
+        or MEXD.WeatherOverlayMaterial:IsError()
+    then
+        MEXD.WeatherOverlayMaterial =
+            Material("models/debug/debugwhite")
+    end
+
+    -- Keep the legacy fields available for any external code that referenced
+    -- them, but do not use the old ivy/rust decal materials anymore.
     MEXD.GrowthOverlayMaterial =
-        Material(
-            "models/props_foliage/ivy01"
-        )
-
-    if MEXD.GrowthOverlayMaterial:IsError() then
-        MEXD.GrowthOverlayMaterial =
-            Material(
-                "nature/grassfloor001a"
-            )
-    end
-
+        MEXD.WeatherOverlayMaterial
     MEXD.CorrosionOverlayMaterial =
-        Material(
-            "decals/rusty"
-        )
+        MEXD.WeatherOverlayMaterial
 
-    if MEXD.CorrosionOverlayMaterial:IsError() then
-        MEXD.CorrosionOverlayMaterial =
-            Material(
-                "decals/rust"
-            )
+    local WEATHER_OVERLAY_VERSION = 4
+
+    local WEATHER_COLORS = {
+        moss = {
+            Color(62, 76, 39, 118),
+            Color(77, 91, 45, 126),
+            Color(94, 99, 52, 112),
+            Color(78, 68, 42, 94),
+        },
+        grass = {
+            Color(66, 82, 38, 220),
+            Color(82, 101, 44, 226),
+            Color(99, 110, 51, 216),
+            Color(118, 105, 58, 204),
+            Color(86, 77, 42, 206),
+        },
+        rust = {
+            Color(72, 39, 26, 156),
+            Color(91, 46, 27, 166),
+            Color(113, 57, 29, 158),
+            Color(137, 70, 34, 142),
+            Color(84, 52, 36, 146),
+        },
+        dirt = {
+            Color(52, 49, 42, 76),
+            Color(67, 60, 48, 88),
+            Color(79, 67, 50, 76),
+        },
+        bare = {
+            Color(155, 157, 151, 126),
+            Color(177, 174, 163, 112),
+            Color(126, 130, 128, 116),
+        },
+    }
+
+    local function WeatherPatchRandom(
+        patch,
+        suffix,
+        minimum,
+        maximum,
+        index
+    )
+        return util.SharedRandom(
+            tostring(patch.seed or "MEXWeather")
+                .. ":"
+                .. tostring(suffix or "r"),
+            minimum,
+            maximum,
+            tonumber(index) or 0
+        )
     end
 
-    if MEXD.CorrosionOverlayMaterial:IsError() then
-        MEXD.CorrosionOverlayMaterial =
-            Material(
-                "models/props_wasteland/metal_tram001a"
+    local function WeatherColor(
+        palette,
+        index,
+        maturity,
+        alphaScale
+    )
+        local source =
+            palette[
+                ((index - 1) % #palette) + 1
+            ]
+        local opacity =
+            math.Clamp(
+                (source.a or 255)
+                    * (0.40 + maturity * 0.60)
+                    * (alphaScale or 1),
+                0,
+                255
             )
+
+        return Color(
+            source.r,
+            source.g,
+            source.b,
+            math.floor(opacity)
+        )
     end
 
     function MEXD.GrowthPatchNearOpening(
@@ -21364,16 +21444,714 @@ if CLIENT then
 
             if math.abs(
                 center.x - localPos.x
-            ) <= 44
+            ) <= 42
                 and math.abs(
                     center.z - localPos.z
-                ) <= 72
+                ) <= 66
             then
                 return true
             end
         end
 
         return false
+    end
+
+    local function GetWeatherPatchWorldBasis(
+        train,
+        patch
+    )
+        if not IsValid(train)
+            or not istable(patch)
+            or not isvector(patch.pos)
+            or not isvector(patch.normal)
+        then
+            return nil
+        end
+
+        local normal = Vector(
+            patch.normal.x,
+            patch.normal.y,
+            patch.normal.z
+        )
+
+        if normal:LengthSqr() <= 0.0001 then
+            return nil
+        end
+
+        normal:Normalize()
+
+        local tangentU
+        local tangentV
+
+        if math.abs(normal.z) > 0.65 then
+            -- Roof/floor: longitudinal x and transverse y.
+            tangentU = Vector(1, 0, 0)
+            tangentV = Vector(0, 1, 0)
+        elseif math.abs(normal.y) > 0.65 then
+            -- Wagon side: longitudinal x and vertical z.
+            tangentU = Vector(1, 0, 0)
+            tangentV = Vector(0, 0, 1)
+        else
+            -- Cab/rear face: transverse y and vertical z.
+            tangentU = Vector(0, 1, 0)
+            tangentV = Vector(0, 0, 1)
+        end
+
+        local worldPos =
+            train:LocalToWorld(
+                patch.pos
+            )
+        local worldNormal =
+            train:LocalToWorld(
+                patch.pos + normal
+            ) - worldPos
+        local worldU =
+            train:LocalToWorld(
+                patch.pos + tangentU
+            ) - worldPos
+        local worldV =
+            train:LocalToWorld(
+                patch.pos + tangentV
+            ) - worldPos
+
+        if worldNormal:LengthSqr() <= 0.0001
+            or worldU:LengthSqr() <= 0.0001
+            or worldV:LengthSqr() <= 0.0001
+        then
+            return nil
+        end
+
+        worldNormal:Normalize()
+        worldU:Normalize()
+        worldV:Normalize()
+
+        return worldPos, worldNormal, worldU, worldV
+    end
+
+    local function DrawWeatherSurfaceRect(
+        worldPos,
+        worldNormal,
+        worldU,
+        worldV,
+        offsetU,
+        offsetV,
+        width,
+        height,
+        rotation,
+        color,
+        normalOffset
+    )
+        local angle =
+            math.rad(rotation or 0)
+        local ca =
+            math.cos(angle)
+        local sa =
+            math.sin(angle)
+        local rotatedU =
+            worldU * ca
+            + worldV * sa
+        local rotatedV =
+            worldV * ca
+            - worldU * sa
+        local center =
+            worldPos
+            + worldU * (offsetU or 0)
+            + worldV * (offsetV or 0)
+            + worldNormal * (normalOffset or 0.18)
+        local halfU =
+            rotatedU
+            * math.max(width or 1, 0.05)
+            * 0.5
+        local halfV =
+            rotatedV
+            * math.max(height or 1, 0.05)
+            * 0.5
+
+        render.DrawQuad(
+            center - halfU - halfV,
+            center + halfU - halfV,
+            center + halfU + halfV,
+            center - halfU + halfV,
+            color
+        )
+    end
+
+    local function DrawWeatherCluster(
+        train,
+        patch,
+        maturity,
+        palette,
+        baseCount,
+        alphaScale,
+        elongated
+    )
+        local worldPos,
+            worldNormal,
+            worldU,
+            worldV =
+            GetWeatherPatchWorldBasis(
+                train,
+                patch
+            )
+
+        if not worldPos then
+            return
+        end
+
+        render.SetMaterial(
+            MEXD.WeatherOverlayMaterial
+        )
+
+        local count =
+            math.max(
+                2,
+                math.floor(
+                    baseCount
+                        * (
+                            0.48
+                            + maturity * 0.70
+                        )
+                )
+            )
+        local spread =
+            0.34
+            + maturity * 0.62
+
+        for i = 1, count do
+            local offsetU =
+                WeatherPatchRandom(
+                    patch,
+                    "cluster-u",
+                    -0.46,
+                    0.46,
+                    i
+                )
+                * (patch.width or 12)
+                * spread
+            local offsetV =
+                WeatherPatchRandom(
+                    patch,
+                    "cluster-v",
+                    -0.46,
+                    0.46,
+                    i
+                )
+                * (patch.height or 8)
+                * spread
+            local widthScale =
+                WeatherPatchRandom(
+                    patch,
+                    "cluster-w",
+                    elongated and 0.18 or 0.13,
+                    elongated and 0.52 or 0.40,
+                    i
+                )
+            local heightScale =
+                WeatherPatchRandom(
+                    patch,
+                    "cluster-h",
+                    elongated and 0.05 or 0.13,
+                    elongated and 0.20 or 0.42,
+                    i
+                )
+            local width =
+                math.max(
+                    0.55,
+                    (patch.width or 12)
+                        * widthScale
+                        * (
+                            0.62
+                            + maturity * 0.58
+                        )
+                )
+            local height =
+                math.max(
+                    0.40,
+                    (patch.height or 8)
+                        * heightScale
+                        * (
+                            0.62
+                            + maturity * 0.58
+                        )
+                )
+            local rotation =
+                (patch.rotation or 0)
+                + WeatherPatchRandom(
+                    patch,
+                    "cluster-r",
+                    -44,
+                    44,
+                    i
+                )
+
+            DrawWeatherSurfaceRect(
+                worldPos,
+                worldNormal,
+                worldU,
+                worldV,
+                offsetU,
+                offsetV,
+                width,
+                height,
+                rotation,
+                WeatherColor(
+                    palette,
+                    i,
+                    maturity,
+                    alphaScale
+                ),
+                0.17 + i * 0.0015
+            )
+        end
+    end
+
+    local function DrawRustPatch(
+        train,
+        patch,
+        maturity
+    )
+        -- Dark oxidised islands first, then a smaller warmer inner layer.
+        -- Many tiny cards form an irregular edge instead of one obvious decal.
+        DrawWeatherCluster(
+            train,
+            patch,
+            maturity,
+            WEATHER_COLORS.rust,
+            9,
+            0.90,
+            false
+        )
+
+        if maturity < 0.24 then
+            return
+        end
+
+        local inner = {
+            seed =
+                tostring(patch.seed)
+                .. ":inner",
+            pos = patch.pos,
+            normal = patch.normal,
+            width =
+                (patch.width or 10)
+                * 0.68,
+            height =
+                (patch.height or 7)
+                * 0.64,
+            rotation =
+                (patch.rotation or 0)
+                + 9,
+        }
+
+        DrawWeatherCluster(
+            train,
+            inner,
+            maturity,
+            WEATHER_COLORS.rust,
+            5,
+            0.66,
+            false
+        )
+    end
+
+    local function DrawPaintChip(
+        train,
+        patch,
+        maturity
+    )
+        -- The rust halo represents paint lifting around an exposed metal edge.
+        DrawWeatherCluster(
+            train,
+            patch,
+            maturity,
+            WEATHER_COLORS.rust,
+            5,
+            0.60,
+            true
+        )
+
+        local worldPos,
+            worldNormal,
+            worldU,
+            worldV =
+            GetWeatherPatchWorldBasis(
+                train,
+                patch
+            )
+
+        if not worldPos then
+            return
+        end
+
+        render.SetMaterial(
+            MEXD.WeatherOverlayMaterial
+        )
+
+        local scratches =
+            1
+            + math.floor(
+                maturity * 3.2
+            )
+
+        for i = 1, scratches do
+            local length =
+                (patch.width or 8)
+                * WeatherPatchRandom(
+                    patch,
+                    "scratch-length",
+                    0.34,
+                    0.92,
+                    i
+                )
+                * (
+                    0.70
+                    + maturity * 0.52
+                )
+            local thickness =
+                WeatherPatchRandom(
+                    patch,
+                    "scratch-thickness",
+                    0.32,
+                    1.15,
+                    i
+                )
+            local offsetU =
+                WeatherPatchRandom(
+                    patch,
+                    "scratch-u",
+                    -0.24,
+                    0.24,
+                    i
+                )
+                * (patch.width or 8)
+            local offsetV =
+                WeatherPatchRandom(
+                    patch,
+                    "scratch-v",
+                    -0.24,
+                    0.24,
+                    i
+                )
+                * (patch.height or 5)
+            local rotation =
+                (patch.rotation or 0)
+                + WeatherPatchRandom(
+                    patch,
+                    "scratch-r",
+                    -16,
+                    16,
+                    i
+                )
+
+            DrawWeatherSurfaceRect(
+                worldPos,
+                worldNormal,
+                worldU,
+                worldV,
+                offsetU,
+                offsetV,
+                length,
+                thickness,
+                rotation,
+                WeatherColor(
+                    WEATHER_COLORS.bare,
+                    i,
+                    maturity,
+                    0.82
+                ),
+                0.205 + i * 0.002
+            )
+        end
+    end
+
+    local function DrawDirtStreak(
+        train,
+        patch,
+        maturity
+    )
+        local worldPos,
+            worldNormal,
+            worldU,
+            worldV =
+            GetWeatherPatchWorldBasis(
+                train,
+                patch
+            )
+
+        if not worldPos then
+            return
+        end
+
+        render.SetMaterial(
+            MEXD.WeatherOverlayMaterial
+        )
+
+        local streaks =
+            2
+            + math.floor(
+                maturity * 4
+            )
+
+        for i = 1, streaks do
+            local width =
+                WeatherPatchRandom(
+                    patch,
+                    "streak-w",
+                    0.55,
+                    2.8,
+                    i
+                )
+            local height =
+                (patch.height or 14)
+                * WeatherPatchRandom(
+                    patch,
+                    "streak-h",
+                    0.42,
+                    1.0,
+                    i
+                )
+                * (
+                    0.68
+                    + maturity * 0.44
+                )
+            local offsetU =
+                WeatherPatchRandom(
+                    patch,
+                    "streak-u",
+                    -0.43,
+                    0.43,
+                    i
+                )
+                * (patch.width or 11)
+            local offsetV =
+                -height * 0.20
+                + WeatherPatchRandom(
+                    patch,
+                    "streak-v",
+                    -1.8,
+                    1.8,
+                    i
+                )
+
+            -- Side/end patch tangent V is local vertical, so zero rotation
+            -- naturally produces a thin rain/runoff streak.
+            DrawWeatherSurfaceRect(
+                worldPos,
+                worldNormal,
+                worldU,
+                worldV,
+                offsetU,
+                offsetV,
+                width,
+                height,
+                WeatherPatchRandom(
+                    patch,
+                    "streak-r",
+                    -4,
+                    4,
+                    i
+                ),
+                WeatherColor(
+                    WEATHER_COLORS.dirt,
+                    i,
+                    maturity,
+                    0.64
+                ),
+                0.145 + i * 0.001
+            )
+        end
+    end
+
+    local function DrawGrassTuft(
+        train,
+        patch,
+        maturity,
+        drawBlades
+    )
+        -- First draw the damp/mossy root bed so grass does not appear to float.
+        DrawWeatherCluster(
+            train,
+            patch,
+            maturity,
+            WEATHER_COLORS.moss,
+            6,
+            0.70,
+            false
+        )
+
+        if not drawBlades then
+            return
+        end
+
+        local worldPos,
+            worldNormal,
+            worldU,
+            worldV =
+            GetWeatherPatchWorldBasis(
+                train,
+                patch
+            )
+
+        if not worldPos then
+            return
+        end
+
+        render.SetMaterial(
+            MEXD.WeatherOverlayMaterial
+        )
+
+        local blades =
+            5
+            + math.floor(
+                maturity * 11
+            )
+
+        for i = 1, blades do
+            local offsetU =
+                WeatherPatchRandom(
+                    patch,
+                    "blade-u",
+                    -0.43,
+                    0.43,
+                    i
+                )
+                * (patch.width or 18)
+            local offsetV =
+                WeatherPatchRandom(
+                    patch,
+                    "blade-v",
+                    -0.43,
+                    0.43,
+                    i
+                )
+                * (patch.height or 12)
+            local bladeWidth =
+                WeatherPatchRandom(
+                    patch,
+                    "blade-w",
+                    0.34,
+                    0.92,
+                    i
+                )
+            local bladeHeight =
+                WeatherPatchRandom(
+                    patch,
+                    "blade-h",
+                    3.8,
+                    10.8,
+                    i
+                )
+                * (
+                    0.62
+                    + maturity * 0.70
+                )
+            local angle =
+                math.rad(
+                    WeatherPatchRandom(
+                        patch,
+                        "blade-angle",
+                        0,
+                        360,
+                        i
+                    )
+                )
+            local across =
+                worldU * math.cos(angle)
+                + worldV * math.sin(angle)
+            local lean =
+                worldU
+                    * WeatherPatchRandom(
+                        patch,
+                        "blade-lean-u",
+                        -0.20,
+                        0.20,
+                        i
+                    )
+                + worldV
+                    * WeatherPatchRandom(
+                        patch,
+                        "blade-lean-v",
+                        -0.20,
+                        0.20,
+                        i
+                    )
+            local direction =
+                worldNormal + lean
+
+            if direction:LengthSqr() <= 0.0001 then
+                direction = worldNormal
+            else
+                direction:Normalize()
+            end
+
+            if across:LengthSqr() <= 0.0001 then
+                across = worldU
+            else
+                across:Normalize()
+            end
+
+            local base =
+                worldPos
+                + worldU * offsetU
+                + worldV * offsetV
+                + worldNormal * 0.26
+            local half =
+                across
+                * bladeWidth
+                * 0.5
+            local tipOffset =
+                direction
+                * bladeHeight
+
+            render.DrawQuad(
+                base - half,
+                base + half,
+                base + half * 0.38 + tipOffset,
+                base - half * 0.38 + tipOffset,
+                WeatherColor(
+                    WEATHER_COLORS.grass,
+                    i,
+                    maturity,
+                    0.95
+                )
+            )
+
+            -- A second narrow card at a different angle gives nearby tufts
+            -- actual volume instead of the old flat roof sticker look.
+            if i % 2 == 0 then
+                local across2 =
+                    worldU
+                        * math.cos(angle + 1.0472)
+                    + worldV
+                        * math.sin(angle + 1.0472)
+
+                if across2:LengthSqr() > 0.0001 then
+                    across2:Normalize()
+
+                    local half2 =
+                        across2
+                        * bladeWidth
+                        * 0.34
+
+                    render.DrawQuad(
+                        base - half2,
+                        base + half2,
+                        base
+                            + half2 * 0.30
+                            + tipOffset * 0.92,
+                        base
+                            - half2 * 0.30
+                            + tipOffset * 0.92,
+                        WeatherColor(
+                            WEATHER_COLORS.grass,
+                            i + 2,
+                            maturity,
+                            0.78
+                        )
+                    )
+                end
+            end
+        end
     end
 
     function MEXD.BuildGrowthOverlayPatches(
@@ -21387,34 +22165,48 @@ if CLIENT then
         local maxs = train:OBBMaxs()
         local span = maxs - mins
         local seed =
-            "MEXWeather:"
+            "MEXWeatherV4:"
             .. tostring(train:EntIndex())
             .. ":"
             .. tostring(train:GetModel() or "")
         local patches = {}
 
-        for index = 1, 118 do
+        for index = 1, 168 do
+            local patchSeed =
+                seed
+                .. ":"
+                .. tostring(index)
             local kindRoll =
                 util.SharedRandom(
-                    seed .. ":kind",
+                    patchSeed .. ":kind",
                     0,
                     1,
                     index
                 )
-            local kind =
-                kindRoll < 0.42
-                and "growth"
-                or "rust"
+            local kind
+
+            if kindRoll < 0.13 then
+                kind = "grass"
+            elseif kindRoll < 0.39 then
+                kind = "moss"
+            elseif kindRoll < 0.72 then
+                kind = "rust"
+            elseif kindRoll < 0.90 then
+                kind = "chip"
+            else
+                kind = "dirt"
+            end
+
             local surfaceRoll =
                 util.SharedRandom(
-                    seed .. ":surface",
+                    patchSeed .. ":surface",
                     0,
                     1,
                     index
                 )
             local side =
                 util.SharedRandom(
-                    seed .. ":side",
+                    patchSeed .. ":side",
                     0,
                     1,
                     index
@@ -21424,7 +22216,7 @@ if CLIENT then
             local x =
                 Lerp(
                     util.SharedRandom(
-                        seed .. ":x",
+                        patchSeed .. ":x",
                         0.035,
                         0.965,
                         index
@@ -21436,17 +22228,23 @@ if CLIENT then
             local normal
             local width
             local height
+            local threshold
+            local rotation =
+                util.SharedRandom(
+                    patchSeed .. ":rot",
+                    -28,
+                    28,
+                    index
+                )
 
-            if kind == "growth"
-                and surfaceRoll < 0.66
-            then
-                -- Moss/ivy mostly starts on horizontal roof surfaces where
-                -- water and organic debris can remain.
+            if kind == "grass" then
+                -- Tall growth appears only on upward-facing places where soil,
+                -- leaves and standing water could realistically collect.
                 pos = Vector(
                     x,
                     Lerp(
                         util.SharedRandom(
-                            seed .. ":roof-y",
+                            patchSeed .. ":grass-y",
                             0.10,
                             0.90,
                             index
@@ -21459,85 +22257,313 @@ if CLIENT then
                 normal = Vector(0, 0, 1)
                 width =
                     util.SharedRandom(
-                        seed .. ":gw",
-                        14,
+                        patchSeed .. ":grass-w",
+                        12,
                         math.max(
-                            24,
+                            22,
                             math.min(
-                                42,
-                                span.y * 0.22
+                                38,
+                                span.y * 0.30
                             )
                         ),
                         index
                     )
                 height =
                     util.SharedRandom(
-                        seed .. ":gh",
+                        patchSeed .. ":grass-area-h",
                         8,
                         24,
                         index
                     )
-            elseif kind == "rust"
-                and surfaceRoll < 0.20
-            then
-                pos = Vector(
-                    x,
-                    Lerp(
-                        util.SharedRandom(
-                            seed .. ":rust-roof-y",
-                            0.06,
-                            0.94,
-                            index
+                threshold =
+                    util.SharedRandom(
+                        patchSeed .. ":grass-threshold",
+                        0.36,
+                        0.95,
+                        index
+                    )
+            elseif kind == "moss" then
+                if surfaceRoll < 0.60 then
+                    pos = Vector(
+                        x,
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":moss-roof-y",
+                                0.06,
+                                0.94,
+                                index
+                            ),
+                            mins.y,
+                            maxs.y
                         ),
-                        mins.y,
-                        maxs.y
-                    ),
-                    maxs.z
-                )
-                normal = Vector(0, 0, 1)
+                        maxs.z
+                    )
+                    normal = Vector(0, 0, 1)
+                else
+                    local upper =
+                        util.SharedRandom(
+                            patchSeed .. ":moss-upper",
+                            0,
+                            1,
+                            index
+                        ) < 0.20
+                    local zFraction =
+                        upper
+                        and util.SharedRandom(
+                            patchSeed .. ":moss-upper-z",
+                            0.84,
+                            0.95,
+                            index
+                        )
+                        or util.SharedRandom(
+                            patchSeed .. ":moss-lower-z",
+                            0.055,
+                            0.235,
+                            index
+                        )
+
+                    pos = Vector(
+                        x,
+                        side < 0
+                            and mins.y
+                            or maxs.y,
+                        Lerp(
+                            zFraction,
+                            mins.z,
+                            maxs.z
+                        )
+                    )
+                    normal = Vector(
+                        0,
+                        side,
+                        0
+                    )
+
+                    if MEXD.GrowthPatchNearOpening(
+                        train,
+                        pos
+                    ) then
+                        continue
+                    end
+                end
+
                 width =
                     util.SharedRandom(
-                        seed .. ":rw",
-                        8,
-                        26,
+                        patchSeed .. ":moss-w",
+                        7,
+                        29,
                         index
                     )
                 height =
                     util.SharedRandom(
-                        seed .. ":rh",
-                        5,
-                        15,
+                        patchSeed .. ":moss-h",
+                        4,
+                        16,
                         index
                     )
-            else
-                -- Side corrosion/vegetation is kept to the lower skirt or the
-                -- narrow roof seam. It deliberately avoids the middle window
-                -- band that caused the old floating leaves through windows.
-                local upperSeam =
+                threshold =
                     util.SharedRandom(
-                        seed .. ":seam",
-                        0,
-                        1,
+                        patchSeed .. ":moss-threshold",
+                        0.07,
+                        0.91,
                         index
-                    ) < (
+                    )
+            elseif kind == "rust"
+                or kind == "chip"
+            then
+                local endFace =
+                    surfaceRoll > 0.91
+                local roof =
+                    not endFace
+                    and surfaceRoll < (
                         kind == "rust"
-                        and 0.34
-                        or 0.16
+                        and 0.24
+                        or 0.13
                     )
+
+                if roof then
+                    pos = Vector(
+                        x,
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":metal-roof-y",
+                                0.05,
+                                0.95,
+                                index
+                            ),
+                            mins.y,
+                            maxs.y
+                        ),
+                        maxs.z
+                    )
+                    normal = Vector(0, 0, 1)
+                elseif endFace then
+                    local front =
+                        util.SharedRandom(
+                            patchSeed .. ":end",
+                            0,
+                            1,
+                            index
+                        ) < 0.5
+                    local zFraction =
+                        util.SharedRandom(
+                            patchSeed .. ":end-z",
+                            0.07,
+                            0.82,
+                            index
+                        )
+
+                    pos = Vector(
+                        front
+                            and maxs.x
+                            or mins.x,
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":end-y",
+                                0.12,
+                                0.88,
+                                index
+                            ),
+                            mins.y,
+                            maxs.y
+                        ),
+                        Lerp(
+                            zFraction,
+                            mins.z,
+                            maxs.z
+                        )
+                    )
+                    normal = Vector(
+                        front and 1 or -1,
+                        0,
+                        0
+                    )
+                else
+                    local zoneRoll =
+                        util.SharedRandom(
+                            patchSeed .. ":metal-zone",
+                            0,
+                            1,
+                            index
+                        )
+                    local zFraction
+
+                    if zoneRoll < 0.52 then
+                        zFraction =
+                            util.SharedRandom(
+                                patchSeed .. ":metal-low-z",
+                                0.055,
+                                0.29,
+                                index
+                            )
+                    elseif zoneRoll < 0.82 then
+                        zFraction =
+                            util.SharedRandom(
+                                patchSeed .. ":metal-high-z",
+                                0.80,
+                                0.955,
+                                index
+                            )
+                    else
+                        zFraction =
+                            util.SharedRandom(
+                                patchSeed .. ":metal-mid-z",
+                                0.30,
+                                0.76,
+                                index
+                            )
+                    end
+
+                    pos = Vector(
+                        x,
+                        side < 0
+                            and mins.y
+                            or maxs.y,
+                        Lerp(
+                            zFraction,
+                            mins.z,
+                            maxs.z
+                        )
+                    )
+                    normal = Vector(
+                        0,
+                        side,
+                        0
+                    )
+
+                    -- Mid-body paint damage must not become a card across a
+                    -- window or door opening.
+                    if zoneRoll >= 0.82
+                        and MEXD.GrowthPatchNearOpening(
+                            train,
+                            pos
+                        )
+                    then
+                        continue
+                    end
+                end
+
+                if kind == "rust" then
+                    width =
+                        util.SharedRandom(
+                            patchSeed .. ":rust-w",
+                            5,
+                            23,
+                            index
+                        )
+                    height =
+                        util.SharedRandom(
+                            patchSeed .. ":rust-h",
+                            3,
+                            13,
+                            index
+                        )
+                    threshold =
+                        util.SharedRandom(
+                            patchSeed .. ":rust-threshold",
+                            0.10,
+                            0.96,
+                            index
+                        )
+                else
+                    width =
+                        util.SharedRandom(
+                            patchSeed .. ":chip-w",
+                            4,
+                            17,
+                            index
+                        )
+                    height =
+                        util.SharedRandom(
+                            patchSeed .. ":chip-h",
+                            2,
+                            9,
+                            index
+                        )
+                    threshold =
+                        util.SharedRandom(
+                            patchSeed .. ":chip-threshold",
+                            0.14,
+                            0.95,
+                            index
+                        )
+                    rotation =
+                        util.SharedRandom(
+                            patchSeed .. ":chip-r",
+                            -16,
+                            16,
+                            index
+                        )
+                end
+            else
+                -- Runoff/dirt concentrates beneath roof edges and around the
+                -- lower body.  This breaks up the "uniformly tinted wagon"
+                -- look without painting over windows.
                 local zFraction =
-                    upperSeam
-                    and util.SharedRandom(
-                        seed .. ":upper-z",
-                        0.82,
-                        0.94,
-                        index
-                    )
-                    or util.SharedRandom(
-                        seed .. ":lower-z",
-                        0.08,
-                        kind == "growth"
-                            and 0.24
-                            or 0.31,
+                    util.SharedRandom(
+                        patchSeed .. ":dirt-z",
+                        0.10,
+                        0.72,
                         index
                     )
 
@@ -21565,37 +22591,28 @@ if CLIENT then
                     continue
                 end
 
-                if kind == "growth" then
-                    width =
-                        util.SharedRandom(
-                            seed .. ":side-gw",
-                            10,
-                            28,
-                            index
-                        )
-                    height =
-                        util.SharedRandom(
-                            seed .. ":side-gh",
-                            6,
-                            17,
-                            index
-                        )
-                else
-                    width =
-                        util.SharedRandom(
-                            seed .. ":side-rw",
-                            7,
-                            24,
-                            index
-                        )
-                    height =
-                        util.SharedRandom(
-                            seed .. ":side-rh",
-                            5,
-                            14,
-                            index
-                        )
-                end
+                width =
+                    util.SharedRandom(
+                        patchSeed .. ":dirt-w",
+                        8,
+                        26,
+                        index
+                    )
+                height =
+                    util.SharedRandom(
+                        patchSeed .. ":dirt-h",
+                        9,
+                        31,
+                        index
+                    )
+                threshold =
+                    util.SharedRandom(
+                        patchSeed .. ":dirt-threshold",
+                        0.05,
+                        0.90,
+                        index
+                    )
+                rotation = 0
             end
 
             patches[#patches + 1] = {
@@ -21604,22 +22621,9 @@ if CLIENT then
                 normal = normal,
                 width = width,
                 height = height,
-                rotation =
-                    util.SharedRandom(
-                        seed .. ":rot",
-                        -35,
-                        35,
-                        index
-                    ),
-                threshold =
-                    util.SharedRandom(
-                        seed .. ":threshold",
-                        kind == "growth"
-                            and 0.08
-                            or 0.10,
-                        0.96,
-                        index
-                    ),
+                rotation = rotation,
+                threshold = threshold,
+                seed = patchSeed,
             }
         end
 
@@ -21627,6 +22631,8 @@ if CLIENT then
             patches
         train.MEXDamageGrowthOverlayModel =
             train:GetModel()
+        train.MEXDamageGrowthOverlayVersion =
+            WEATHER_OVERLAY_VERSION
 
         return patches
     end
@@ -21636,6 +22642,11 @@ if CLIENT then
             return
         end
 
+        local dirt =
+            train:GetNW2Float(
+                "MEX.Damage.DirtLevel",
+                0
+            )
         local growth =
             train:GetNW2Float(
                 "MEX.Damage.OvergrowthLevel",
@@ -21646,21 +22657,45 @@ if CLIENT then
                 "MEX.Damage.CorrosionLevel",
                 0
             )
+        local scuff =
+            train:GetNW2Float(
+                "MEX.Damage.ScuffLevel",
+                0
+            )
+        local wear =
+            math.Clamp(
+                math.max(
+                    scuff,
+                    corrosion * 0.78,
+                    dirt * 0.22
+                ),
+                0,
+                1
+            )
 
         if growth <= 0.02
             and corrosion <= 0.02
+            and dirt <= 0.02
+            and wear <= 0.02
         then
             return
         end
 
-        local eye = EyePos()
+        local eye =
+            EyePos()
+        local distanceSqr = 0
 
-        if isvector(eye)
-            and eye:DistToSqr(
-                train:WorldSpaceCenter()
-            ) > 5200 * 5200
-        then
-            return
+        if isvector(eye) then
+            distanceSqr =
+                eye:DistToSqr(
+                    train:WorldSpaceCenter()
+                )
+
+            if distanceSqr
+                > 5200 * 5200
+            then
+                return
+            end
         end
 
         local patches =
@@ -21669,12 +22704,17 @@ if CLIENT then
         if not istable(patches)
             or train.MEXDamageGrowthOverlayModel
                 ~= train:GetModel()
+            or train.MEXDamageGrowthOverlayVersion
+                ~= WEATHER_OVERLAY_VERSION
         then
             patches =
                 MEXD.BuildGrowthOverlayPatches(
                     train
                 )
         end
+
+        local drawGrassBlades =
+            distanceSqr <= 2850 * 2850
 
         for _, patch in ipairs(
             patches or {}
@@ -21686,10 +22726,18 @@ if CLIENT then
                 continue
             end
 
-            local level =
-                patch.kind == "rust"
-                and corrosion
-                or growth
+            local level
+
+            if patch.kind == "rust" then
+                level = corrosion
+            elseif patch.kind == "chip" then
+                level = wear
+            elseif patch.kind == "dirt" then
+                level = dirt
+            else
+                level = growth
+            end
+
             local threshold =
                 tonumber(patch.threshold)
                 or 1
@@ -21698,71 +22746,54 @@ if CLIENT then
                 continue
             end
 
-            local worldPos =
-                train:LocalToWorld(
-                    patch.pos
-                )
-            local worldNormal =
-                train:LocalToWorld(
-                    patch.pos
-                        + patch.normal
-                )
-                - worldPos
-
-            if worldNormal:LengthSqr()
-                <= 0.0001
-            then
-                continue
-            end
-
-            worldNormal:Normalize()
-
             local maturity =
                 math.Clamp(
                     (
                         level - threshold
-                    ) / 0.34,
+                    ) / math.max(
+                        1 - threshold,
+                        0.16
+                    ),
                     0,
                     1
                 )
 
             if patch.kind == "rust" then
-                render.SetMaterial(
-                    MEXD.CorrosionOverlayMaterial
+                DrawRustPatch(
+                    train,
+                    patch,
+                    maturity
+                )
+            elseif patch.kind == "chip" then
+                DrawPaintChip(
+                    train,
+                    patch,
+                    maturity
+                )
+            elseif patch.kind == "dirt" then
+                DrawDirtStreak(
+                    train,
+                    patch,
+                    maturity
+                )
+            elseif patch.kind == "grass" then
+                DrawGrassTuft(
+                    train,
+                    patch,
+                    maturity,
+                    drawGrassBlades
                 )
             else
-                render.SetMaterial(
-                    MEXD.GrowthOverlayMaterial
+                DrawWeatherCluster(
+                    train,
+                    patch,
+                    maturity,
+                    WEATHER_COLORS.moss,
+                    8,
+                    0.84,
+                    false
                 )
             end
-
-            render.DrawQuadEasy(
-                worldPos
-                    + worldNormal * 0.20,
-                worldNormal,
-                tonumber(patch.width) or 18,
-                tonumber(patch.height) or 11,
-                patch.kind == "rust"
-                    and Color(
-                        124,
-                        77,
-                        46,
-                        math.floor(
-                            38
-                                + maturity * 76
-                        )
-                    )
-                    or Color(
-                        128,
-                        158,
-                        92,
-                        math.floor(
-                            48
-                                + maturity * 112
-                        )
-                    ),
-                tonumber(patch.rotation) or 0
-            )
         end
     end
 
