@@ -10,6 +10,22 @@ MEXTrackBuilder = MEXTrackBuilder or {}
 local Builder = MEXTrackBuilder
 
 local TRACK_CLASS = "mex_track_segment"
+local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad1024_plain.mdl"
+
+local VALID_TRACK_MODELS = {
+    ["models/metrostroi/tracks/railroad1024_plain.mdl"] = true,
+    ["models/metrostroi/tracks/railroad1024.mdl"] = true,
+    ["models/metrostroi/tracks/railroad1024_depot.mdl"] = true,
+    ["models/metrostroi/tracks/railroad1024_station.mdl"] = true,
+}
+
+local function SafeTrackModel(model)
+    model = tostring(model or "")
+    if VALID_TRACK_MODELS[model] then
+        return model
+    end
+    return DEFAULT_TRACK_MODEL
+end
 
 local TrackEntity = {}
 TrackEntity.Type = "anim"
@@ -17,7 +33,7 @@ TrackEntity.Base = "base_anim"
 TrackEntity.PrintName = "Metrostroi Expanded Track Segment"
 TrackEntity.Spawnable = false
 TrackEntity.AdminOnly = true
-TrackEntity.RenderGroup = RENDERGROUP_TRANSLUCENT
+TrackEntity.RenderGroup = RENDERGROUP_OPAQUE
 
 local function BoxConvex(mins, maxs)
     return {
@@ -33,21 +49,21 @@ local function BoxConvex(mins, maxs)
 end
 
 function TrackEntity:Initialize()
+    if not SERVER then return end
+
     local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
     local gauge = math.max(self:GetNW2Float("MEXGauge", 80), 8)
     local railWidth = math.max(self:GetNW2Float("MEXRailWidth", 4), 1)
     local railHeight = math.max(self:GetNW2Float("MEXRailHeight", 7), 1)
     local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
-    local sleeperLength = math.max(self:GetNW2Float("MEXSleeperLength", 128), gauge + 16)
+    local model = SafeTrackModel(self:GetNW2String("MEXTrackModel", DEFAULT_TRACK_MODEL))
 
-    self:SetRenderBounds(
-        Vector(-length * 0.5 - 8, -sleeperLength * 0.5 - 8, -8),
-        Vector(length * 0.5 + 8, sleeperLength * 0.5 + 8, sleeperHeight + railHeight + 12)
-    )
+    if util.IsValidModel(model) then
+        self:SetModel(model)
+    else
+        self:SetModel("models/hunter/blocks/cube025x025x025.mdl")
+    end
 
-    if not SERVER then return end
-
-    self:SetModel("models/hunter/blocks/cube025x025x025.mdl")
     self:SetSolid(SOLID_VPHYSICS)
     self:SetMoveType(MOVETYPE_VPHYSICS)
     self:SetCollisionGroup(COLLISION_GROUP_NONE)
@@ -81,33 +97,20 @@ function TrackEntity:Initialize()
 end
 
 if CLIENT then
-    local railColor = Color(105, 108, 112)
-    local sleeperColor = Color(93, 70, 47)
+    local fallbackRailMaterial = Material("metrostroi/metro_railroad_001")
+    local fallbackSleeperMaterial = Material("models/props_c17/furniturefabric003a")
 
-    function TrackEntity:Draw()
-        self:DrawTranslucent()
-    end
-
-    function TrackEntity:DrawTranslucent()
-        local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
-        local gauge = math.max(self:GetNW2Float("MEXGauge", 80), 8)
-        local railWidth = math.max(self:GetNW2Float("MEXRailWidth", 4), 1)
-        local railHeight = math.max(self:GetNW2Float("MEXRailHeight", 7), 1)
-        local sleeperSpacing = math.max(self:GetNW2Float("MEXSleeperSpacing", 32), 8)
-        local sleeperLength = math.max(self:GetNW2Float("MEXSleeperLength", 128), gauge + 16)
-        local sleeperWidth = math.max(self:GetNW2Float("MEXSleeperWidth", 10), 2)
-        local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
+    local function DrawFallbackTrack(self, length, gauge, railWidth, railHeight, sleeperSpacing, sleeperLength, sleeperWidth, sleeperHeight)
         local halfLength = length * 0.5
         local ang = self:GetAngles()
 
-        self:SetRenderBounds(
-            Vector(-halfLength - 8, -sleeperLength * 0.5 - 8, -8),
-            Vector(halfLength + 8, sleeperLength * 0.5 + 8, sleeperHeight + railHeight + 12)
-        )
+        if not fallbackSleeperMaterial:IsError() then
+            render.SetMaterial(fallbackSleeperMaterial)
+        else
+            render.SetColorMaterial()
+        end
 
-        render.SetColorMaterial()
-
-        local sleeperCount = math.Clamp(math.floor(length / sleeperSpacing) + 1, 2, 128)
+        local sleeperCount = math.Clamp(math.floor(length / sleeperSpacing) + 1, 2, 96)
         local step = sleeperCount > 1 and length / (sleeperCount - 1) or length
 
         for i = 0, sleeperCount - 1 do
@@ -117,9 +120,15 @@ if CLIENT then
                 ang,
                 Vector(-sleeperWidth * 0.5, -sleeperLength * 0.5, -sleeperHeight * 0.5),
                 Vector(sleeperWidth * 0.5, sleeperLength * 0.5, sleeperHeight * 0.5),
-                sleeperColor,
+                color_white,
                 true
             )
+        end
+
+        if not fallbackRailMaterial:IsError() then
+            render.SetMaterial(fallbackRailMaterial)
+        else
+            render.SetColorMaterial()
         end
 
         local railBottom = sleeperHeight
@@ -131,7 +140,7 @@ if CLIENT then
             ang,
             Vector(-halfLength, gauge * 0.5 - halfRail, railBottom),
             Vector(halfLength, gauge * 0.5 + halfRail, railTop),
-            railColor,
+            color_white,
             true
         )
         render.DrawBox(
@@ -139,8 +148,97 @@ if CLIENT then
             ang,
             Vector(-halfLength, -gauge * 0.5 - halfRail, railBottom),
             Vector(halfLength, -gauge * 0.5 + halfRail, railTop),
-            railColor,
+            color_white,
             true
+        )
+    end
+
+    local function DrawMetrostroiModelClipped(self, length)
+        local model = self:GetModel()
+        if not isstring(model) or not string.StartWith(model, "models/metrostroi/tracks/") then
+            return false
+        end
+        if not util.IsValidModel(model) then
+            return false
+        end
+
+        local mins = self:OBBMins()
+        local maxs = self:OBBMaxs()
+        local modelLength = maxs.x - mins.x
+
+        if modelLength < 64 then
+            return false
+        end
+
+        local center = (mins + maxs) * 0.5
+        local anchor = Vector(center.x, center.y, mins.z)
+        local ang = self:GetAngles()
+        local forward = ang:Forward()
+        local right = ang:Right()
+        local up = ang:Up()
+        local drawOrigin = self:GetPos()
+            - forward * anchor.x
+            - right * anchor.y
+            - up * anchor.z
+
+        local halfLength = length * 0.5
+        local oldClipping = render.EnableClipping(true)
+
+        render.PushCustomClipPlane(
+            forward,
+            forward:Dot(self:GetPos() - forward * halfLength)
+        )
+        render.PushCustomClipPlane(
+            -forward,
+            (-forward):Dot(self:GetPos() + forward * halfLength)
+        )
+
+        self:SetRenderOrigin(drawOrigin)
+        self:SetRenderAngles(ang)
+        self:DrawModel()
+        self:SetRenderOrigin(nil)
+        self:SetRenderAngles(nil)
+
+        render.PopCustomClipPlane()
+        render.PopCustomClipPlane()
+        render.EnableClipping(oldClipping)
+
+        return true
+    end
+
+    function TrackEntity:Draw()
+        local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
+        local gauge = math.max(self:GetNW2Float("MEXGauge", 80), 8)
+        local railWidth = math.max(self:GetNW2Float("MEXRailWidth", 4), 1)
+        local railHeight = math.max(self:GetNW2Float("MEXRailHeight", 7), 1)
+        local sleeperSpacing = math.max(self:GetNW2Float("MEXSleeperSpacing", 32), 8)
+        local sleeperLength = math.max(self:GetNW2Float("MEXSleeperLength", 128), gauge + 16)
+        local sleeperWidth = math.max(self:GetNW2Float("MEXSleeperWidth", 10), 2)
+        local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
+
+        if self.SetRenderBounds then
+            self:SetRenderBounds(
+                Vector(-length * 0.5 - 24, -sleeperLength * 0.5 - 24, -16),
+                Vector(length * 0.5 + 24, sleeperLength * 0.5 + 24, sleeperHeight + railHeight + 32)
+            )
+        end
+
+        if self:GetNW2Bool("MEXUseTrackModel", true)
+            and DrawMetrostroiModelClipped(self, length)
+        then
+            return
+        end
+
+        DrawFallbackTrack(
+            self,
+            length,
+            gauge,
+            railWidth,
+            railHeight,
+            sleeperSpacing,
+            sleeperLength,
+            sleeperWidth,
+            sleeperHeight
         )
     end
 end
@@ -251,7 +349,95 @@ local function CopySettings(settings)
         sleeper_length = math.Clamp(tonumber(settings.sleeper_length) or 128, 24, 256),
         sleeper_width = math.Clamp(tonumber(settings.sleeper_width) or 10, 2, 64),
         sleeper_height = math.Clamp(tonumber(settings.sleeper_height) or 5, 1, 32),
+        smooth = settings.smooth ~= false and tonumber(settings.smooth or 1) ~= 0,
+        curve_tension = math.Clamp(tonumber(settings.curve_tension) or 0.55, 0.05, 1.0),
+        segment_length = math.Clamp(tonumber(settings.segment_length) or 192, 48, 512),
+        use_track_model = settings.use_track_model ~= false and tonumber(settings.use_track_model or 1) ~= 0,
+        track_model = SafeTrackModel(settings.track_model),
     }
+end
+
+local function PointTangent(points, index, tension)
+    local count = #points
+    if count < 2 then return vector_origin end
+
+    if index <= 1 then
+        return (points[2] - points[1]) * tension
+    elseif index >= count then
+        return (points[count] - points[count - 1]) * tension
+    end
+
+    local previous = points[index - 1]
+    local current = points[index]
+    local nextPoint = points[index + 1]
+    local direction = nextPoint - previous
+    local directionLength = direction:Length()
+
+    if directionLength < 0.001 then
+        return vector_origin
+    end
+
+    local localLength = math.min(
+        current:Distance(previous),
+        current:Distance(nextPoint)
+    )
+
+    return direction / directionLength * localLength * tension
+end
+
+local function HermitePoint(p0, p1, m0, m1, t)
+    local t2 = t * t
+    local t3 = t2 * t
+    local h00 = 2 * t3 - 3 * t2 + 1
+    local h10 = t3 - 2 * t2 + t
+    local h01 = -2 * t3 + 3 * t2
+    local h11 = t3 - t2
+
+    return p0 * h00
+        + m0 * h10
+        + p1 * h01
+        + m1 * h11
+end
+
+function Builder.BuildSmoothPoints(controlPoints, settings)
+    settings = CopySettings(settings)
+
+    local points = {}
+    for _, value in ipairs(controlPoints or {}) do
+        local point = NormalizeVector(value)
+        if isvector(point) then
+            points[#points + 1] = point
+        end
+    end
+
+    if #points < 2 then
+        return points
+    end
+
+    local output = {points[1]}
+
+    for i = 1, #points - 1 do
+        local a = points[i]
+        local b = points[i + 1]
+        local directLength = a:Distance(b)
+        local steps = math.max(1, math.ceil(directLength / settings.segment_length))
+
+        if not settings.smooth or #points < 3 then
+            for step = 1, steps do
+                output[#output + 1] = LerpVector(step / steps, a, b)
+            end
+        else
+            local tangentA = PointTangent(points, i, settings.curve_tension)
+            local tangentB = PointTangent(points, i + 1, settings.curve_tension)
+
+            for step = 1, steps do
+                local t = step / steps
+                output[#output + 1] = HermitePoint(a, b, tangentA, tangentB, t)
+            end
+        end
+    end
+
+    return output
 end
 
 local function SpawnSegment(a, b, settings, routeID, segmentIndex)
@@ -276,11 +462,34 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     ent:SetNW2Float("MEXSleeperLength", settings.sleeper_length)
     ent:SetNW2Float("MEXSleeperWidth", settings.sleeper_width)
     ent:SetNW2Float("MEXSleeperHeight", settings.sleeper_height)
+    ent:SetNW2String("MEXTrackModel", settings.track_model)
+    ent:SetNW2Bool("MEXUseTrackModel", settings.use_track_model)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
 
     return ent
+end
+
+local function RemoveEntities(entities)
+    for _, ent in ipairs(entities or {}) do
+        if IsValid(ent) then
+            ent:Remove()
+        end
+    end
+end
+
+local function SpawnPolyline(points, settings, routeID)
+    local entities = {}
+
+    for i = 1, #points - 1 do
+        local ent = SpawnSegment(points[i], points[i + 1], settings, routeID, i)
+        if IsValid(ent) then
+            entities[#entities + 1] = ent
+        end
+    end
+
+    return entities
 end
 
 local function SetActiveStart(ply, pos)
@@ -295,11 +504,19 @@ local function SetActiveStart(ply, pos)
     end
 end
 
+local function RebuildActiveRoute(active)
+    if not active then return end
+
+    RemoveEntities(active.entities)
+    active.render_points = Builder.BuildSmoothPoints(active.points, active.settings)
+    active.entities = SpawnPolyline(active.render_points, active.settings, 0)
+end
+
 function Builder.SaveLayout()
     EnsureDirectories()
 
     local payload = {
-        version = 1,
+        version = 2,
         routes = Builder.Routes,
     }
 
@@ -345,9 +562,8 @@ function Builder.RespawnAll()
 
     for routeID, route in ipairs(Builder.Routes) do
         local settings = CopySettings(route.settings)
-        for i = 1, #route.points - 1 do
-            SpawnSegment(route.points[i], route.points[i + 1], settings, routeID, i)
-        end
+        local points = Builder.BuildSmoothPoints(route.points, settings)
+        SpawnPolyline(points, settings, routeID)
     end
 end
 
@@ -398,16 +614,14 @@ end
 local function NetworkPoints(route)
     local settings = CopySettings(route.settings)
     local zOffset = settings.sleeper_height + settings.rail_height
-    local points = {}
+    local points = Builder.BuildSmoothPoints(route.points, settings)
+    local result = {}
 
-    for _, point in ipairs(route.points or {}) do
-        local vec = NormalizeVector(point)
-        if isvector(vec) then
-            points[#points + 1] = vec + Vector(0, 0, zOffset)
-        end
+    for _, point in ipairs(points) do
+        result[#result + 1] = point + Vector(0, 0, zOffset)
     end
 
-    return points
+    return result
 end
 
 function Builder.RebuildMetrostroiNetwork(notifyPly)
@@ -440,7 +654,7 @@ function Builder.RebuildMetrostroiNetwork(notifyPly)
     file.Write(MetrostroiTrackPath(), util.TableToJSON(merged, true) or "[]")
 
     if IsValid(notifyPly) then
-        notifyPly:ChatPrint("[MEX Track Builder] Track data saved. Reloading Metrostroi rail network...")
+        notifyPly:ChatPrint("[MEX Track Builder] Smooth track data saved. Reloading Metrostroi rail network...")
     end
 
     if Metrostroi and isfunction(Metrostroi.Load) then
@@ -461,23 +675,27 @@ function Builder.SnapPoint(pos, maxDistance)
     local best = pos
     local bestDistSqr = maxDistance * maxDistance
 
-    for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
-        if IsValid(ent) then
-            local halfLength = ent:GetNW2Float("MEXLength", 0) * 0.5
-            if halfLength > 0 then
-                local endpoints = {
-                    ent:LocalToWorld(Vector(-halfLength, 0, 0)),
-                    ent:LocalToWorld(Vector(halfLength, 0, 0)),
-                }
+    local function CheckPoint(point)
+        if not isvector(point) then return end
 
-                for _, endpoint in ipairs(endpoints) do
-                    local distSqr = pos:DistToSqr(endpoint)
-                    if distSqr < bestDistSqr then
-                        best = endpoint
-                        bestDistSqr = distSqr
-                    end
-                end
-            end
+        local distSqr = pos:DistToSqr(point)
+        if distSqr < bestDistSqr then
+            best = point
+            bestDistSqr = distSqr
+        end
+    end
+
+    for _, route in ipairs(Builder.Routes) do
+        if istable(route.points) and #route.points > 0 then
+            CheckPoint(route.points[1])
+            CheckPoint(route.points[#route.points])
+        end
+    end
+
+    for _, active in pairs(Builder.Active) do
+        if istable(active.points) and #active.points > 0 then
+            CheckPoint(active.points[1])
+            CheckPoint(active.points[#active.points])
         end
     end
 
@@ -492,24 +710,22 @@ function Builder.AddPoint(ply, pos, settings)
         active = {
             points = {pos},
             entities = {},
+            render_points = {},
             settings = CopySettings(settings),
         }
         Builder.Active[ply] = active
         SetActiveStart(ply, pos)
-        ply:ChatPrint("[MEX Track Builder] Start point set. Left click to add track segments; right click to finish.")
+        ply:ChatPrint("[MEX Track Builder] Start point set. Add control points; curves are smoothed automatically.")
         return true
     end
 
     local previous = active.points[#active.points]
-    if previous:DistToSqr(pos) < 16 then
+    if previous:DistToSqr(pos) < 64 then
         return false
     end
 
-    local segment = SpawnSegment(previous, pos, active.settings, 0, #active.points)
-    if not IsValid(segment) then return false end
-
-    active.entities[#active.entities + 1] = segment
     active.points[#active.points + 1] = pos
+    RebuildActiveRoute(active)
     SetActiveStart(ply, pos)
 
     return true
@@ -519,10 +735,7 @@ function Builder.CancelRoute(ply, silent)
     local active = Builder.Active[ply]
     if not active then return false end
 
-    for _, ent in ipairs(active.entities or {}) do
-        if IsValid(ent) then ent:Remove() end
-    end
-
+    RemoveEntities(active.entities)
     Builder.Active[ply] = nil
     SetActiveStart(ply, nil)
 
@@ -545,20 +758,18 @@ function Builder.FinishRoute(ply, network)
         return false
     end
 
+    RemoveEntities(active.entities)
+
     local route = {
         points = active.points,
-        settings = active.settings,
+        settings = CopySettings(active.settings),
         network = network ~= false,
     }
+
     Builder.Routes[#Builder.Routes + 1] = route
     local routeID = #Builder.Routes
-
-    for index, ent in ipairs(active.entities or {}) do
-        if IsValid(ent) then
-            ent:SetNW2Int("MEXRouteID", routeID)
-            ent:SetNW2Int("MEXSegmentIndex", index)
-        end
-    end
+    local smoothPoints = Builder.BuildSmoothPoints(route.points, route.settings)
+    SpawnPolyline(smoothPoints, route.settings, routeID)
 
     Builder.Active[ply] = nil
     SetActiveStart(ply, nil)
@@ -570,9 +781,10 @@ function Builder.FinishRoute(ply, network)
 
     if IsValid(ply) then
         ply:ChatPrint(string.format(
-            "[MEX Track Builder] Route #%d saved (%d segments).",
+            "[MEX Track Builder] Route #%d saved (%d control points, %d smooth pieces).",
             routeID,
-            #route.points - 1
+            #route.points,
+            math.max(#smoothPoints - 1, 0)
         ))
     end
 

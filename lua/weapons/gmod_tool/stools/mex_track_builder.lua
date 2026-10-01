@@ -18,12 +18,17 @@ TOOL.ClientConVar = {
     snap = "1",
     snap_distance = "24",
     network = "1",
+    smooth = "1",
+    curve_tension = "0.55",
+    segment_length = "192",
+    use_track_model = "1",
+    track_model = "models/metrostroi/tracks/railroad1024_plain.mdl",
 }
 
 if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
-    language.Add("tool.mex_track_builder.desc", "Build persistent Metrostroi-compatible track routes in-game")
-    language.Add("tool.mex_track_builder.0", "LMB: start/add segment | RMB: finish route | Reload: delete aimed route or cancel")
+    language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
+    language.Add("tool.mex_track_builder.0", "LMB: add control point | RMB: finish route | Reload: delete aimed route or cancel")
 end
 
 local function ReadSettings(tool)
@@ -35,6 +40,11 @@ local function ReadSettings(tool)
         sleeper_length = tool:GetClientNumber("sleeper_length", 128),
         sleeper_width = tool:GetClientNumber("sleeper_width", 10),
         sleeper_height = tool:GetClientNumber("sleeper_height", 5),
+        smooth = tool:GetClientNumber("smooth", 1),
+        curve_tension = tool:GetClientNumber("curve_tension", 0.55),
+        segment_length = tool:GetClientNumber("segment_length", 192),
+        use_track_model = tool:GetClientNumber("use_track_model", 1),
+        track_model = tool:GetClientInfo("track_model"),
     }
 end
 
@@ -106,29 +116,43 @@ end
 function TOOL.BuildCPanel(panel)
     panel:AddControl("Header", {
         Text = "Metrostroi Expanded - Track Builder",
-        Description = "Build track directly in Sandbox. Routes are saved per map and can be merged into Metrostroi's track_<map>.txt network.",
+        Description = "Place control points instead of hard track corners. MEX builds a smooth curve through them and writes the same smooth path into Metrostroi's track_<map>.txt network.",
     })
 
     panel:Help("Controls")
-    panel:Help("LMB: place the first point, then add straight segments.")
-    panel:Help("RMB: finish and save the current route.")
+    panel:Help("LMB: place the first point and then additional control points.")
+    panel:Help("RMB: finish and save the route.")
     panel:Help("Reload on a MEX track: remove the whole saved route.")
     panel:Help("Reload elsewhere: cancel the unfinished route.")
 
+    panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
+    panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.1, 1.0, 2)
+    panel:NumSlider("Smooth piece length", "mex_track_builder_segment_length", 64, 512, 0)
+    panel:Help("Smaller piece length = smoother bends. 128-256 is recommended.")
+
+    panel:CheckBox("Use Metrostroi track model", "mex_track_builder_use_track_model")
+
+    local modelBox = panel:ComboBox("Metrostroi track style", "mex_track_builder_track_model")
+    modelBox:AddChoice("Plain track", "models/metrostroi/tracks/railroad1024_plain.mdl")
+    modelBox:AddChoice("Standard track", "models/metrostroi/tracks/railroad1024.mdl")
+    modelBox:AddChoice("Depot track", "models/metrostroi/tracks/railroad1024_depot.mdl")
+    modelBox:AddChoice("Station track", "models/metrostroi/tracks/railroad1024_station.mdl")
+
     panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 40, 120, 1)
-    panel:NumSlider("Rail width", "mex_track_builder_rail_width", 1, 12, 1)
-    panel:NumSlider("Rail height", "mex_track_builder_rail_height", 1, 16, 1)
-    panel:NumSlider("Sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
-    panel:NumSlider("Sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
-    panel:NumSlider("Sleeper width", "mex_track_builder_sleeper_width", 4, 24, 1)
-    panel:NumSlider("Sleeper height", "mex_track_builder_sleeper_height", 1, 12, 1)
+    panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
+    panel:NumSlider("Fallback rail height", "mex_track_builder_rail_height", 1, 16, 1)
+    panel:NumSlider("Fallback sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
+    panel:NumSlider("Fallback sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
+    panel:NumSlider("Fallback sleeper width", "mex_track_builder_sleeper_width", 4, 24, 1)
+    panel:NumSlider("Fallback sleeper height", "mex_track_builder_sleeper_height", 1, 12, 1)
 
     panel:CheckBox("Snap to existing MEX track endpoints", "mex_track_builder_snap")
     panel:NumSlider("Endpoint snap distance", "mex_track_builder_snap_distance", 2, 96, 0)
     panel:CheckBox("Add route to Metrostroi rail network", "mex_track_builder_network")
 
+    panel:Help("The Metrostroi model is clipped to each smooth piece instead of being stretched, so rail and sleeper proportions stay normal.")
+    panel:Help("If a selected Metrostroi model is missing, the tool falls back to procedural rails using Metrostroi materials.")
     panel:Help("The default gauge 80 SU is close to 1520 mm in Metrostroi scale.")
-    panel:Help("Track geometry is persistent for the current map. Metrostroi network data is rebuilt when a route is finished or removed.")
 
     panel:Button("Finish current route", "mex_track_builder_finish")
     panel:Button("Cancel unfinished route", "mex_track_builder_cancel")
