@@ -20818,26 +20818,29 @@ if CLIENT then
                         1
                     )
 
+                -- Keep only a mild grime/weather tint here. Actual moss/ivy
+                -- is rendered as attached texture patches below instead of
+                -- turning the entire wagon green.
                 ent:SetColor(Color(
                     math.Clamp(
                         base.r
                             * darken
-                            * (1 - moss * 0.12),
+                            * (1 - moss * 0.035),
                         0,
                         255
                     ),
                     math.Clamp(
                         base.g
                             * darken
-                            * (1 - moss * 0.03)
-                            + 18 * moss,
+                            * (1 - moss * 0.015)
+                            + 4 * moss,
                         0,
                         255
                     ),
                     math.Clamp(
                         base.b
                             * darken
-                            * (1 - moss * 0.20),
+                            * (1 - moss * 0.055),
                         0,
                         255
                     ),
@@ -20891,6 +20894,315 @@ if CLIENT then
                             scuff
                         )
                     end
+                end
+            end
+        end
+    )
+
+    MEXD.GrowthOverlayMaterial =
+        Material(
+            "models/props_foliage/ivy01"
+        )
+
+    if MEXD.GrowthOverlayMaterial:IsError() then
+        MEXD.GrowthOverlayMaterial =
+            Material(
+                "nature/grassfloor001a"
+            )
+    end
+
+    function MEXD.BuildGrowthOverlayPatches(
+        train
+    )
+        if not IsSubwayTrain(train) then
+            return {}
+        end
+
+        local mins = train:OBBMins()
+        local maxs = train:OBBMaxs()
+        local span = maxs - mins
+        local seed =
+            "MEXGrowth:"
+            .. tostring(train:EntIndex())
+            .. ":"
+            .. tostring(train:GetModel() or "")
+        local patches = {}
+
+        for index = 1, 84 do
+            local surfaceRoll =
+                util.SharedRandom(
+                    seed .. ":surface",
+                    0,
+                    1,
+                    index
+                )
+            local x =
+                Lerp(
+                    util.SharedRandom(
+                        seed .. ":x",
+                        0.04,
+                        0.96,
+                        index
+                    ),
+                    mins.x,
+                    maxs.x
+                )
+            local y =
+                Lerp(
+                    util.SharedRandom(
+                        seed .. ":y",
+                        0.06,
+                        0.94,
+                        index
+                    ),
+                    mins.y,
+                    maxs.y
+                )
+            local z =
+                Lerp(
+                    util.SharedRandom(
+                        seed .. ":z",
+                        0.20,
+                        0.94,
+                        index
+                    ),
+                    mins.z,
+                    maxs.z
+                )
+            local pos
+            local normal
+
+            if surfaceRoll < 0.54 then
+                pos = Vector(
+                    x,
+                    y,
+                    maxs.z
+                )
+                normal = Vector(0, 0, 1)
+            elseif surfaceRoll < 0.73 then
+                pos = Vector(
+                    x,
+                    mins.y,
+                    z
+                )
+                normal = Vector(0, -1, 0)
+            elseif surfaceRoll < 0.92 then
+                pos = Vector(
+                    x,
+                    maxs.y,
+                    z
+                )
+                normal = Vector(0, 1, 0)
+            else
+                local front =
+                    util.SharedRandom(
+                        seed .. ":end",
+                        0,
+                        1,
+                        index
+                    ) > 0.5
+
+                pos = Vector(
+                    front
+                        and maxs.x
+                        or mins.x,
+                    y,
+                    z
+                )
+                normal = Vector(
+                    front and 1 or -1,
+                    0,
+                    0
+                )
+            end
+
+            patches[#patches + 1] = {
+                pos = pos,
+                normal = normal,
+                width =
+                    util.SharedRandom(
+                        seed .. ":w",
+                        math.max(
+                            22,
+                            span.y * 0.08
+                        ),
+                        math.max(
+                            46,
+                            span.y * 0.32
+                        ),
+                        index
+                    ),
+                height =
+                    util.SharedRandom(
+                        seed .. ":h",
+                        18,
+                        62,
+                        index
+                    ),
+                rotation =
+                    util.SharedRandom(
+                        seed .. ":r",
+                        0,
+                        360,
+                        index
+                    ),
+                threshold =
+                    util.SharedRandom(
+                        seed .. ":threshold",
+                        0.03,
+                        0.98,
+                        index
+                    ),
+            }
+        end
+
+        train.MEXDamageGrowthOverlayPatches =
+            patches
+        train.MEXDamageGrowthOverlayModel =
+            train:GetModel()
+
+        return patches
+    end
+
+    function MEXD.DrawGrowthOverlay(train)
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        local growth =
+            train:GetNW2Float(
+                "MEX.Damage.OvergrowthLevel",
+                0
+            )
+
+        if growth <= 0.02 then
+            return
+        end
+
+        local eye = EyePos()
+        if isvector(eye)
+            and eye:DistToSqr(
+                train:WorldSpaceCenter()
+            ) > 6000 * 6000
+        then
+            return
+        end
+
+        local patches =
+            train.MEXDamageGrowthOverlayPatches
+
+        if not istable(patches)
+            or train.MEXDamageGrowthOverlayModel
+                ~= train:GetModel()
+        then
+            patches =
+                MEXD.BuildGrowthOverlayPatches(
+                    train
+                )
+        end
+
+        if not istable(patches)
+            or #patches <= 0
+        then
+            return
+        end
+
+        render.SetMaterial(
+            MEXD.GrowthOverlayMaterial
+        )
+
+        for _, patch in ipairs(patches) do
+            if not istable(patch)
+                or growth
+                    < (
+                        tonumber(
+                            patch.threshold
+                        ) or 1
+                    )
+            then
+                continue
+            end
+
+            local localPos = patch.pos
+            local localNormal =
+                patch.normal
+
+            if not isvector(localPos)
+                or not isvector(localNormal)
+            then
+                continue
+            end
+
+            local worldPos =
+                train:LocalToWorld(
+                    localPos
+                )
+            local worldNormal =
+                train:LocalToWorld(
+                    localPos
+                        + localNormal
+                )
+                - worldPos
+
+            if worldNormal:LengthSqr()
+                <= 0.0001
+            then
+                continue
+            end
+
+            worldNormal:Normalize()
+
+            local maturity =
+                math.Clamp(
+                    (
+                        growth
+                        - (
+                            tonumber(
+                                patch.threshold
+                            ) or 0
+                        )
+                    ) / 0.35,
+                    0,
+                    1
+                )
+
+            render.DrawQuadEasy(
+                worldPos
+                    + worldNormal * 0.9,
+                worldNormal,
+                tonumber(patch.width) or 40,
+                tonumber(patch.height) or 32,
+                Color(
+                    178,
+                    210,
+                    150,
+                    math.floor(
+                        75
+                            + maturity * 130
+                    )
+                ),
+                tonumber(patch.rotation) or 0
+            )
+        end
+    end
+
+    hook.Add(
+        "PostDrawTranslucentRenderables",
+        "MEX.Damage.GrowthOverlay",
+        function(drawingDepth, drawingSkybox)
+            if drawingDepth
+                or drawingSkybox
+            then
+                return
+            end
+
+            for _, train in ipairs(
+                ents.GetAll()
+            ) do
+                if IsSubwayTrain(train) then
+                    MEXD.DrawGrowthOverlay(
+                        train
+                    )
                 end
             end
         end
