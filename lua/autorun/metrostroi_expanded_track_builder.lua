@@ -12,6 +12,12 @@ local Builder = MEXTrackBuilder
 local TRACK_CLASS = "mex_track_segment"
 local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad16.mdl"
 
+-- Must match Metrostroi sh_rerail.lua. Rerailing assumes the rail running
+-- surface is exactly 10 Source units above the track base.
+local METROSTROI_TRACK_GAUGE = 80
+local METROSTROI_RAIL_WIDTH = 5.8
+local METROSTROI_RAIL_HEIGHT = 10
+
 -- Curved MEX track is built from Metrostroi's short 16-SU tile.
 -- Long 1024/4096 models cannot bend and caused the huge rail "fan".
 local VALID_TRACK_MODELS = {
@@ -68,24 +74,22 @@ function TrackEntity:Initialize()
     self:SetCollisionGroup(COLLISION_GROUP_NONE)
 
     local halfLength = length * 0.5
-    local halfRail = railWidth * 0.5
 
-    -- The client renderer places the bottom of railroad16.mdl exactly on the
-    -- generated spline plane. Therefore the physical rail surface must be
-    -- derived from the model's own vertical bounds as well. Using the old
-    -- sleeperHeight + railHeight value made the rerailer/collision several
-    -- units higher than the visible rail and left train wheels floating.
-    local modelMins = self:OBBMins()
-    local modelMaxs = self:OBBMaxs()
-    local modelHeight = math.max(modelMaxs.z - modelMins.z, 1)
-
-    local railTop = modelHeight
-    local railBottom = math.max(railTop - railHeight, 0)
+    -- Do not derive this from the model OBB. railroad16.mdl contains more
+    -- geometry than the running rail surface, so OBBMaxs().z is not the
+    -- rerail height. Stock Metrostroi uses a 10-SU-high rail in sh_rerail.lua.
+    local effectiveGauge = METROSTROI_TRACK_GAUGE
+    local effectiveRailWidth = METROSTROI_RAIL_WIDTH
+    local railTop = METROSTROI_RAIL_HEIGHT
+    local railBottom = 0
+    local halfRail = effectiveRailWidth * 0.5
 
     self:SetNW2Float("MEXRailSurfaceOffset", railTop)
+    self:SetNW2Float("MEXPhysicalGauge", effectiveGauge)
+    self:SetNW2Float("MEXPhysicalRailWidth", effectiveRailWidth)
 
-    local leftY = gauge * 0.5
-    local rightY = -gauge * 0.5
+    local leftY = effectiveGauge * 0.5
+    local rightY = -effectiveGauge * 0.5
 
     -- Only the two rail heads are solid. The previous implementation also
     -- created one wide rectangular collision bed under every segment. Subway
@@ -164,10 +168,11 @@ if CLIENT then
 
         local railTop = self:GetNW2Float(
             "MEXRailSurfaceOffset",
-            sleeperHeight + railHeight
+            METROSTROI_RAIL_HEIGHT
         )
-        local railBottom = math.max(railTop - railHeight, 0)
-        local halfRail = railWidth * 0.5
+        local railBottom = 0
+        local halfRail = METROSTROI_RAIL_WIDTH * 0.5
+        gauge = METROSTROI_TRACK_GAUGE
 
         render.DrawBox(
             self:GetPos(),
@@ -619,9 +624,9 @@ end
 local function CopySettings(settings)
     settings = settings or {}
     return {
-        gauge = math.Clamp(tonumber(settings.gauge) or 80, 8, 200),
-        rail_width = math.Clamp(tonumber(settings.rail_width) or 5.8, 1, 24),
-        rail_height = math.Clamp(tonumber(settings.rail_height) or 7, 1, 32),
+        gauge = math.Clamp(tonumber(settings.gauge) or METROSTROI_TRACK_GAUGE, 8, 200),
+        rail_width = math.Clamp(tonumber(settings.rail_width) or METROSTROI_RAIL_WIDTH, 1, 24),
+        rail_height = math.Clamp(tonumber(settings.rail_height) or METROSTROI_RAIL_HEIGHT, 1, 32),
         sleeper_spacing = math.Clamp(tonumber(settings.sleeper_spacing) or 32, 8, 256),
         sleeper_length = math.Clamp(tonumber(settings.sleeper_length) or 128, 24, 256),
         sleeper_width = math.Clamp(tonumber(settings.sleeper_width) or 10, 2, 64),
@@ -1726,13 +1731,7 @@ function Builder.GetMEXTrackData(pos, roughForward, maxDistance)
                     )
 
                     if railTop <= 0 then
-                        railTop = math.max(
-                            ent:GetNW2Float("MEXSleeperHeight", 5),
-                            0
-                        ) + math.max(
-                            ent:GetNW2Float("MEXRailHeight", 7),
-                            1
-                        )
+                        railTop = METROSTROI_RAIL_HEIGHT
                     end
 
                     local centerpos = basePos + up * railTop
@@ -2091,7 +2090,7 @@ function Builder.InstallRerailSupport()
         Metrostroi.MEXOriginalRerailGetTrackData
         or Metrostroi.RerailGetTrackData
 
-    if Metrostroi.MEXTrackBuilderRerailVersion == 3 then
+    if Metrostroi.MEXTrackBuilderRerailVersion == 4 then
         return true
     end
 
@@ -2130,7 +2129,7 @@ function Builder.InstallRerailSupport()
         return Builder.RerailTrainOnMEX(train)
     end
 
-    Metrostroi.MEXTrackBuilderRerailVersion = 3
+    Metrostroi.MEXTrackBuilderRerailVersion = 4
     print(
         "[Metrostroi Expanded] Track Builder rerail support installed"
     )

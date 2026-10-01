@@ -10,7 +10,7 @@ TOOL.ConfigName = ""
 TOOL.ClientConVar = {
     gauge = "80",
     rail_width = "5.8",
-    rail_height = "7",
+    rail_height = "10",
     sleeper_spacing = "32",
     sleeper_length = "128",
     sleeper_width = "10",
@@ -184,7 +184,7 @@ function TOOL.BuildCPanel(panel)
 
     panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 40, 120, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
-    panel:Help("Track collision now exists only on the two rails; sleepers and the space between them have no large invisible collision block.")
+    panel:Help("Physical rail geometry follows Metrostroi rerailer dimensions: 80 SU gauge, 5.8 SU rail width and 10 SU running-surface height. No wide invisible sleeper block is used.")
     panel:NumSlider("Fallback rail height", "mex_track_builder_rail_height", 1, 16, 1)
     panel:NumSlider("Fallback sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
     panel:NumSlider("Fallback sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
