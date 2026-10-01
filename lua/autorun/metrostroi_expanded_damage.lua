@@ -2505,7 +2505,8 @@ if SERVER then
                 train,
                 1,
                 firePos,
-                false
+                false,
+                "fire"
             )
         end
 
@@ -2518,7 +2519,8 @@ if SERVER then
                 train,
                 1,
                 firePos,
-                false
+                false,
+                "fire"
             )
         end
     end
@@ -5353,7 +5355,8 @@ if SERVER then
         train,
         ingress,
         worldPos,
-        sourceLive
+        sourceLive,
+        failureCause
     )
         if not IsSubwayTrain(train)
             or not istable(train.Systems)
@@ -5419,12 +5422,16 @@ if SERVER then
 
         local item =
             candidates[math.random(1, #candidates)]
+        failureCause =
+            tostring(
+                failureCause or "water"
+            )
 
         if not FailElectricalSystemOpen(
             train,
             item.name,
             {
-                cause = "water",
+                cause = failureCause,
                 temporary = false,
             }
         ) then
@@ -5445,7 +5452,11 @@ if SERVER then
         )
         train:SetNW2String(
             "MEX.Damage.WearFailure",
-            "Water-seized relay: " .. item.name
+            (
+                failureCause == "fire"
+                and "Fire-damaged relay: "
+                or "Water-seized relay: "
+            ) .. item.name
         )
 
         if sourceLive then
@@ -5477,7 +5488,8 @@ if SERVER then
         train,
         ingress,
         worldPos,
-        sourceLive
+        sourceLive,
+        failureCause
     )
         if not IsSubwayTrain(train)
             or not istable(train.Lights)
@@ -5520,6 +5532,10 @@ if SERVER then
 
         local item =
             candidates[math.random(1, #candidates)]
+        failureCause =
+            tostring(
+                failureCause or "water"
+            )
 
         train.MEXDamageWearFailedLights[
             item.index
@@ -5537,7 +5553,11 @@ if SERVER then
         )
         train:SetNW2String(
             "MEX.Damage.WearFailure",
-            "Water-damaged light #"
+            (
+                failureCause == "fire"
+                and "Fire-damaged light #"
+                or "Water-damaged light #"
+            )
                 .. tostring(item.index)
         )
 
@@ -9843,11 +9863,16 @@ if SERVER then
                 * SU_TO_KMH
         local occupied =
             #FindTrainPlayers(train) > 0
+        local railVoltage =
+            GetThirdRailVoltage(train)
         local electricallyAwake =
             IsTrainInstrumentationPowered(train)
             or (
                 MEXD.IsHighVoltageConnected(train)
-                and GetThirdRailVoltage(train) >= 100
+                and HasThirdRailContact(
+                    train,
+                    railVoltage
+                )
             )
 
         local active =
@@ -11806,7 +11831,7 @@ if SERVER then
     concommand.Add("mex_damage_set_neglect_enabled", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
-        if IsValid(MEXD.NeglectEnabledConVar) then
+        if MEXD.NeglectEnabledConVar then
             MEXD.NeglectEnabledConVar:SetBool(
                 tobool(args[1])
             )
