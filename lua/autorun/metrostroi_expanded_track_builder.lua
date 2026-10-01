@@ -69,8 +69,21 @@ function TrackEntity:Initialize()
 
     local halfLength = length * 0.5
     local halfRail = railWidth * 0.5
-    local railBottom = sleeperHeight
-    local railTop = sleeperHeight + railHeight
+
+    -- The client renderer places the bottom of railroad16.mdl exactly on the
+    -- generated spline plane. Therefore the physical rail surface must be
+    -- derived from the model's own vertical bounds as well. Using the old
+    -- sleeperHeight + railHeight value made the rerailer/collision several
+    -- units higher than the visible rail and left train wheels floating.
+    local modelMins = self:OBBMins()
+    local modelMaxs = self:OBBMaxs()
+    local modelHeight = math.max(modelMaxs.z - modelMins.z, 1)
+
+    local railTop = modelHeight
+    local railBottom = math.max(railTop - railHeight, 0)
+
+    self:SetNW2Float("MEXRailSurfaceOffset", railTop)
+
     local leftY = gauge * 0.5
     local rightY = -gauge * 0.5
 
@@ -149,8 +162,11 @@ if CLIENT then
             render.SetColorMaterial()
         end
 
-        local railBottom = sleeperHeight
-        local railTop = sleeperHeight + railHeight
+        local railTop = self:GetNW2Float(
+            "MEXRailSurfaceOffset",
+            sleeperHeight + railHeight
+        )
+        local railBottom = math.max(railTop - railHeight, 0)
         local halfRail = railWidth * 0.5
 
         render.DrawBox(
@@ -1704,13 +1720,20 @@ function Builder.GetMEXTrackData(pos, roughForward, maxDistance)
                     )
 
                     local basePos = ent:GetPos() + forward * along
-                    local railTop = math.max(
-                        ent:GetNW2Float("MEXSleeperHeight", 5),
+                    local railTop = ent:GetNW2Float(
+                        "MEXRailSurfaceOffset",
                         0
-                    ) + math.max(
-                        ent:GetNW2Float("MEXRailHeight", 7),
-                        1
                     )
+
+                    if railTop <= 0 then
+                        railTop = math.max(
+                            ent:GetNW2Float("MEXSleeperHeight", 5),
+                            0
+                        ) + math.max(
+                            ent:GetNW2Float("MEXRailHeight", 7),
+                            1
+                        )
+                    end
 
                     local centerpos = basePos + up * railTop
                     local offset = pos - centerpos
@@ -2068,7 +2091,7 @@ function Builder.InstallRerailSupport()
         Metrostroi.MEXOriginalRerailGetTrackData
         or Metrostroi.RerailGetTrackData
 
-    if Metrostroi.MEXTrackBuilderRerailVersion == 2 then
+    if Metrostroi.MEXTrackBuilderRerailVersion == 3 then
         return true
     end
 
@@ -2107,7 +2130,7 @@ function Builder.InstallRerailSupport()
         return Builder.RerailTrainOnMEX(train)
     end
 
-    Metrostroi.MEXTrackBuilderRerailVersion = 2
+    Metrostroi.MEXTrackBuilderRerailVersion = 3
     print(
         "[Metrostroi Expanded] Track Builder rerail support installed"
     )
