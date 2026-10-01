@@ -5599,29 +5599,6 @@ if SERVER then
             item.name
         )
 
-        -- Mechanical switchgear can rust solid even if electrical damage is
-        -- disabled.  At high neglect levels this gradually affects a large
-        -- portion of the cab rather than an arbitrary fixed 20 percent.
-        if weatheringActive
-            and MEXD.IsPhysicalDamageEnabled()
-            and level > 0.36
-            and math.Rand(0, 1)
-                < (
-                    0.022
-                    + level * 0.145
-                )
-                * MEXD.GetNeglectScale()
-        then
-            MEXD.FailCorrodedControl(
-                train,
-                level
-            )
-        end
-
-        if not MEXD.IsElectricalDamageEnabled() then
-            return
-        end
-
         local voltage, current =
             GetTrainElectricalWaterState(train)
         voltage = math.max(
@@ -10863,6 +10840,29 @@ if SERVER then
                 0.8
             )
             * math.Rand(0.80, 1.35)
+
+        -- Mechanical switchgear can rust solid even if electrical damage is
+        -- disabled. At high neglect levels this gradually affects a large
+        -- portion of the cab instead of an arbitrary fixed 20 percent.
+        if weatheringActive
+            and MEXD.IsPhysicalDamageEnabled()
+            and level > 0.36
+            and math.Rand(0, 1)
+                < (
+                    0.022
+                    + level * 0.145
+                )
+                * MEXD.GetNeglectScale()
+        then
+            MEXD.FailCorrodedControl(
+                train,
+                level
+            )
+        end
+
+        if not MEXD.IsElectricalDamageEnabled() then
+            return
+        end
 
         local voltage, current =
             GetTrainElectricalWaterState(train)
