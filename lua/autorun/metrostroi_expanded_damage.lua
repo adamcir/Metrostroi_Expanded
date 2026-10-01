@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.18.7"
+MEXD.Version = "0.18.8"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -88,6 +88,24 @@ if SERVER then
         0.1,
         3.0
     )
+
+    MEXD.NeglectEnabledConVar = CreateConVar(
+        "mex_damage_neglect_enabled",
+        "1",
+        settingFlags,
+        "Enable long-term neglect, dirt, weathering and corrosion",
+        0,
+        1
+    )
+
+    MEXD.NeglectScaleConVar = CreateConVar(
+        "mex_damage_neglect_scale",
+        "1.0",
+        settingFlags,
+        "Long-term neglect/weathering simulation speed and severity",
+        0.1,
+        3.0
+    )
 end
 
 local function ReadBoolConVar(name, defaultValue)
@@ -123,6 +141,22 @@ end
 
 function MEXD.IsElectricalDamageEnabled()
     return ReadBoolConVar(ELECTRICAL_ENABLED_CVAR_NAME, true)
+end
+
+function MEXD.IsNeglectEnabled()
+    return ReadBoolConVar(
+        "mex_damage_neglect_enabled",
+        true
+    )
+end
+
+function MEXD.GetNeglectScale()
+    return ReadFloatConVar(
+        "mex_damage_neglect_scale",
+        1.0,
+        0.1,
+        3.0
+    )
 end
 
 function MEXD.IsAnyDamageEnabled()
@@ -9716,6 +9750,421 @@ if SERVER then
         return result
     end
 
+    function MEXD.ResetNeglect(train)
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        train.MEXDamageNeglectExposure = 0
+        train.MEXDamageNeglectIdleSeconds = 0
+        train.MEXDamageNeglectLastActive = CurTime()
+        train.MEXDamageNextNeglectFault = nil
+        train.MEXDamageWeatherExposed = nil
+        train.MEXDamageWeatherProbeAt = nil
+
+        train:SetNW2Float(
+            "MEX.Damage.NeglectLevel",
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.DirtLevel",
+            0
+        )
+        train:SetNW2Float(
+            "MEX.Damage.OvergrowthLevel",
+            0
+        )
+    end
+
+    function MEXD.IsTrainWeatherExposed(train)
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        local now = CurTime()
+
+        if (
+            train.MEXDamageWeatherProbeAt
+            or 0
+        ) <= now
+        then
+            train.MEXDamageWeatherProbeAt =
+                now + 5
+
+            local maxs = train:OBBMaxs()
+            local startPos =
+                train:LocalToWorld(Vector(
+                    0,
+                    0,
+                    isvector(maxs)
+                        and maxs.z + 8
+                        or 120
+                ))
+
+            local tr = util.TraceLine({
+                start = startPos,
+                endpos =
+                    startPos
+                    + Vector(0, 0, 8192),
+                mask = MASK_SOLID_BRUSHONLY,
+                filter = train,
+            })
+
+            train.MEXDamageWeatherExposed =
+                tr.HitSky == true
+                or tr.Fraction >= 0.999
+        end
+
+        return train.MEXDamageWeatherExposed
+            == true
+    end
+
+    function MEXD.UpdateNeglectWear(
+        train,
+        dT
+    )
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        if not MEXD.IsNeglectEnabled() then
+            if train:GetNW2Float(
+                "MEX.Damage.NeglectLevel",
+                0
+            ) > 0
+            then
+                MEXD.ResetNeglect(train)
+            end
+            return
+        end
+
+        local speedKmh =
+            train:GetVelocity():Length()
+                * SU_TO_KMH
+        local occupied =
+            #FindTrainPlayers(train) > 0
+        local electricallyAwake =
+            IsTrainInstrumentationPowered(train)
+            or (
+                MEXD.IsHighVoltageConnected(train)
+                and GetThirdRailVoltage(train) >= 100
+            )
+
+        local active =
+            speedKmh > 2.0
+            or occupied
+            or electricallyAwake
+
+        if active then
+            train.MEXDamageNeglectIdleSeconds = 0
+            train.MEXDamageNeglectLastActive =
+                CurTime()
+        else
+            train.MEXDamageNeglectIdleSeconds =
+                math.max(
+                    0,
+                    tonumber(
+                        train.MEXDamageNeglectIdleSeconds
+                    ) or 0
+                )
+                + dT
+
+            local weatherFactor =
+                MEXD.IsTrainWeatherExposed(train)
+                and 1
+                or 0.36
+            local scale =
+                MEXD.GetNeglectScale()
+
+            -- Gameplay uses compressed calendar time so long-term storage can
+            -- actually be observed: at 1.00, roughly one real minute of
+            -- continuous abandonment represents one simulated day.
+            train.MEXDamageNeglectExposure =
+                math.Clamp(
+                    (
+                        tonumber(
+                            train.MEXDamageNeglectExposure
+                        ) or 0
+                    )
+                    + dT
+                        / (60 * 45)
+                        * scale
+                        * weatherFactor,
+                    0,
+                    1
+                )
+        end
+
+        local level =
+            math.Clamp(
+                tonumber(
+                    train.MEXDamageNeglectExposure
+                ) or 0,
+                0,
+                1
+            )
+        local weather =
+            MEXD.IsTrainWeatherExposed(train)
+        local dirt =
+            math.Clamp(
+                level
+                    * (
+                        weather
+                        and 1.08
+                        or 0.72
+                    )
+                    + train:GetNW2Float(
+                        "MEX.Damage.ScuffLevel",
+                        0
+                    ) * 0.18,
+                0,
+                1
+            )
+        local growth =
+            weather
+            and math.Clamp(
+                (level - 0.42) / 0.58,
+                0,
+                1
+            )
+            or 0
+
+        train:SetNW2Float(
+            "MEX.Damage.NeglectLevel",
+            level
+        )
+        train:SetNW2Float(
+            "MEX.Damage.DirtLevel",
+            dirt
+        )
+        train:SetNW2Float(
+            "MEX.Damage.OvergrowthLevel",
+            growth
+        )
+
+        if level < 0.16
+            or not MEXD.IsElectricalDamageEnabled()
+        then
+            return
+        end
+
+        local now = CurTime()
+        if (
+            train.MEXDamageNextNeglectFault
+            or 0
+        ) > now
+        then
+            return
+        end
+
+        train.MEXDamageNextNeglectFault =
+            now
+            + Lerp(
+                level,
+                5.0,
+                0.8
+            )
+            * math.Rand(0.80, 1.35)
+
+        local voltage, current =
+            GetTrainElectricalWaterState(train)
+        local powered =
+            voltage >= 18
+            and current > 0.01
+
+        -- Oxidized/dirty contacts first become intermittent. Using the train
+        -- after a long storage period can therefore cause random relay chatter
+        -- without instantly destroying everything.
+        if powered
+            and level > 0.18
+            and math.Rand(0, 1)
+                < 0.10 + level * 0.32
+        then
+            StartWaterRelayChatter(
+                train,
+                math.Clamp(
+                    0.10 + level * 0.36,
+                    0.1,
+                    0.52
+                ),
+                train:WorldSpaceCenter()
+            )
+        end
+
+        if level > 0.54
+            and istable(train.Systems)
+            and math.Rand(0, 1)
+                < 0.035
+                    + level * 0.10
+                    * MEXD.GetNeglectScale()
+        then
+            local candidates = {}
+
+            for systemName, system in pairs(
+                train.Systems
+            ) do
+                systemName = tostring(systemName)
+
+                if IsRelayLikeElectricalSystem(system)
+                    and not MEXD.IsVisiblePanelOperatorSystem(
+                        train,
+                        systemName,
+                        system
+                    )
+                    and not IsCircuitBreakerSystem(
+                        systemName,
+                        system
+                    )
+                    and not IsFuseSystemName(
+                        systemName
+                    )
+                    and not (
+                        train.MEXDamageElectricalFailureSystems
+                        and train.MEXDamageElectricalFailureSystems[
+                            systemName
+                        ]
+                    )
+                then
+                    candidates[
+                        #candidates + 1
+                    ] = systemName
+                end
+            end
+
+            if #candidates > 0 then
+                local systemName =
+                    candidates[
+                        math.random(
+                            1,
+                            #candidates
+                        )
+                    ]
+
+                if FailElectricalSystemOpen(
+                    train,
+                    systemName,
+                    {
+                        cause = "neglect",
+                        temporary = false,
+                    }
+                ) then
+                    train.MEXDamageWearFailedSystems =
+                        train.MEXDamageWearFailedSystems
+                        or {}
+                    train.MEXDamageWearFailedSystems[
+                        systemName
+                    ] = true
+                    train:SetNW2Int(
+                        "MEX.Damage.FailedRelayCount",
+                        table.Count(
+                            train.MEXDamageWearFailedSystems
+                        )
+                    )
+                    train:SetNW2String(
+                        "MEX.Damage.WearFailure",
+                        "Corroded relay: "
+                            .. systemName
+                    )
+                end
+            end
+        end
+
+        if level > 0.66
+            and istable(train.Lights)
+            and math.Rand(0, 1)
+                < 0.025
+                    + level * 0.075
+                    * MEXD.GetNeglectScale()
+        then
+            train.MEXDamageWearFailedLights =
+                train.MEXDamageWearFailedLights
+                or {}
+
+            local candidates = {}
+
+            for index, light in pairs(
+                train.Lights
+            ) do
+                if istable(light)
+                    and isvector(light[2])
+                    and not train.MEXDamageWearFailedLights[
+                        index
+                    ]
+                then
+                    candidates[
+                        #candidates + 1
+                    ] = index
+                end
+            end
+
+            if #candidates > 0 then
+                local index =
+                    candidates[
+                        math.random(
+                            1,
+                            #candidates
+                        )
+                    ]
+
+                train.MEXDamageWearFailedLights[
+                    index
+                ] = true
+                train:SetNW2Bool(
+                    "MEX.Damage.WearLight."
+                        .. tostring(index),
+                    true
+                )
+                train:SetNW2Int(
+                    "MEX.Damage.FailedLightCount",
+                    table.Count(
+                        train.MEXDamageWearFailedLights
+                    )
+                )
+                train:SetNW2String(
+                    "MEX.Damage.WearFailure",
+                    "Storage-damaged light #"
+                        .. tostring(index)
+                )
+
+                local direct =
+                    train.MEXDamageWearOriginalSetLightPower
+
+                if isfunction(direct) then
+                    direct(
+                        train,
+                        index,
+                        false,
+                        0
+                    )
+                elseif isfunction(
+                    train.SetLightPower
+                ) then
+                    train:SetLightPower(
+                        index,
+                        false,
+                        0
+                    )
+                end
+            end
+        end
+
+        if powered
+            and level > 0.74
+        then
+            MEXD.TryStartTrainFire(
+                train,
+                train:WorldSpaceCenter(),
+                math.Clamp(
+                    0.0015
+                        + level * 0.0045,
+                    0,
+                    0.008
+                ),
+                "neglected electrical insulation"
+            )
+        end
+    end
+
     local function ApplyCrashInjuries(
         train,
         deltaKmh,
@@ -11063,6 +11512,7 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.LastImpactKmh", 0)
         train:SetNW2Float("MEX.Damage.ScuffLevel", 0)
         MEXD.StopTrainFire(train)
+        MEXD.ResetNeglect(train)
         train:SetNW2Float("MEX.Damage.BlastStrength", 0)
         train:SetNW2Float("MEX.Damage.BlastRadius", 0)
         train:SetNW2Vector("MEX.Damage.BlastLocal", vector_origin)
@@ -11353,6 +11803,24 @@ if SERVER then
         SetScaleSetting(electricalScaleConVar, args[1])
     end)
 
+    concommand.Add("mex_damage_set_neglect_enabled", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+
+        if IsValid(MEXD.NeglectEnabledConVar) then
+            MEXD.NeglectEnabledConVar:SetBool(
+                tobool(args[1])
+            )
+        end
+    end)
+
+    concommand.Add("mex_damage_set_neglect_scale", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        SetScaleSetting(
+            MEXD.NeglectScaleConVar,
+            args[1]
+        )
+    end)
+
     cvars.AddChangeCallback(
         DAMAGE_ENABLED_CVAR_NAME,
         function(_, _, newValue)
@@ -11374,6 +11842,20 @@ if SERVER then
             end
         end,
         "MEX.Damage.Settings.ElectricalEnabled"
+    )
+
+    cvars.AddChangeCallback(
+        "mex_damage_neglect_enabled",
+        function(_, _, newValue)
+            if tobool(newValue) then return end
+
+            for _, train in ipairs(ents.GetAll()) do
+                if IsSubwayTrain(train) then
+                    MEXD.ResetNeglect(train)
+                end
+            end
+        end,
+        "MEX.Damage.Settings.NeglectEnabled"
     )
 
     local function SendImpactEffect(train, zone, amount, worldPos, normal)
@@ -13176,6 +13658,10 @@ if SERVER then
                     MEXD.EnforceWaterRunningGearDamage(
                         train
                     )
+                    MEXD.UpdateNeglectWear(
+                        train,
+                        dT
+                    )
                 end
             end
         end
@@ -13833,6 +14319,59 @@ if CLIENT then
                         deformationEnabled,
                         deformationScale,
                     }
+                )
+            end
+        )
+
+        spawnmenu.AddToolMenuOption(
+            "Utilities",
+            "Metrostroi Expanded",
+            "MEXNeglectWeatheringSettings",
+            "Neglect & Weathering",
+            "",
+            "",
+            function(panel)
+                panel:ClearControls()
+
+                panel:Help(
+                    "Simulates long-term abandonment: dirt, weathering, "
+                    .. "green growth on outdoor stock, oxidized contacts and "
+                    .. "storage-related electrical unreliability."
+                )
+
+                local enabled = AddMEXUtilityCheck(
+                    panel,
+                    "Enable long-term neglect / weathering",
+                    "mex_damage_set_neglect_enabled",
+                    MEXD.IsNeglectEnabled
+                )
+
+                local scale = AddMEXUtilitySlider(
+                    panel,
+                    "Neglect / weathering simulation level",
+                    "mex_damage_set_neglect_scale",
+                    MEXD.GetNeglectScale
+                )
+
+                panel:Help(
+                    "For gameplay this uses compressed calendar time. At "
+                    .. "1.00, about one real minute of continuous abandonment "
+                    .. "represents one simulated day. Covered stock ages much "
+                    .. "more slowly than stock exposed to the sky."
+                )
+                panel:Help(
+                    "Using or powering the train stops additional abandonment "
+                    .. "progress, but existing dirt, corrosion and failed parts "
+                    .. "do not repair themselves."
+                )
+                panel:Help(
+                    "1.00 = intended baseline. Lower values slow the effect; "
+                    .. "higher values accelerate it."
+                )
+
+                InstallMEXUtilityRefresh(
+                    panel,
+                    { enabled, scale }
                 )
             end
         )
@@ -19654,6 +20193,152 @@ if CLIENT then
 
         print("------------------------------------------------------------")
     end)
+
+    hook.Add(
+        "Think",
+        "MEX.Damage.NeglectVisual",
+        function()
+            if (
+                MEXD._nextNeglectVisualUpdate
+                or 0
+            ) > RealTime()
+            then
+                return
+            end
+
+            MEXD._nextNeglectVisualUpdate =
+                RealTime() + 0.65
+
+            local function applyWeathering(
+                ent,
+                dirt,
+                growth,
+                scuff
+            )
+                if not IsValid(ent) then
+                    return
+                end
+
+                local level =
+                    math.Clamp(
+                        math.max(
+                            dirt,
+                            growth,
+                            scuff * 0.65
+                        ),
+                        0,
+                        1
+                    )
+
+                if level <= 0.002 then
+                    if ent.MEXDamageWeatherBaseColor then
+                        ent:SetColor(
+                            ent.MEXDamageWeatherBaseColor
+                        )
+                        ent.MEXDamageWeatherBaseColor = nil
+                    end
+                    return
+                end
+
+                if not ent.MEXDamageWeatherBaseColor then
+                    ent.MEXDamageWeatherBaseColor =
+                        ent:GetColor()
+                end
+
+                local base =
+                    ent.MEXDamageWeatherBaseColor
+                local darken =
+                    math.Clamp(
+                        1
+                            - dirt * 0.22
+                            - scuff * 0.08,
+                        0.58,
+                        1
+                    )
+                local moss =
+                    math.Clamp(
+                        growth,
+                        0,
+                        1
+                    )
+
+                ent:SetColor(Color(
+                    math.Clamp(
+                        base.r
+                            * darken
+                            * (1 - moss * 0.12),
+                        0,
+                        255
+                    ),
+                    math.Clamp(
+                        base.g
+                            * darken
+                            * (1 - moss * 0.03)
+                            + 18 * moss,
+                        0,
+                        255
+                    ),
+                    math.Clamp(
+                        base.b
+                            * darken
+                            * (1 - moss * 0.20),
+                        0,
+                        255
+                    ),
+                    base.a
+                ))
+            end
+
+            for _, train in ipairs(ents.GetAll()) do
+                if not IsSubwayTrain(train) then
+                    continue
+                end
+
+                local dirt =
+                    train:GetNW2Float(
+                        "MEX.Damage.DirtLevel",
+                        0
+                    )
+                local growth =
+                    train:GetNW2Float(
+                        "MEX.Damage.OvergrowthLevel",
+                        0
+                    )
+                local scuff =
+                    train:GetNW2Float(
+                        "MEX.Damage.ScuffLevel",
+                        0
+                    )
+
+                applyWeathering(
+                    train,
+                    dirt,
+                    growth,
+                    scuff
+                )
+
+                for name, prop in pairs(
+                    train.ClientEnts or {}
+                ) do
+                    if IsValid(prop)
+                        and ModelLooksStructural(
+                            tostring(name),
+                            string.lower(
+                                prop:GetModel() or ""
+                            )
+                        )
+                    then
+                        applyWeathering(
+                            prop,
+                            dirt,
+                            growth,
+                            scuff
+                        )
+                    end
+                end
+            end
+        end
+    )
 
     concommand.Add("mex_damage_mesh_status", function()
         local train = GetAimedClientTrain()
