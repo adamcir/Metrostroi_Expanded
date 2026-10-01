@@ -1802,19 +1802,25 @@ local function FinishRerailMove(saved, timerName)
 end
 
 local function TrainRerailEntities(train)
-    local list = {
-        train,
-        train.FrontBogey,
-        train.RearBogey,
-        train.FrontCouple,
-        train.RearCouple,
-    }
+    local list = {}
+
+    local function Add(ent)
+        if IsValid(ent) then
+            list[#list + 1] = ent
+        end
+    end
+
+    Add(train)
+    Add(train.FrontBogey)
+    Add(train.RearBogey)
+    Add(train.FrontCouple)
+    Add(train.RearCouple)
 
     if IsValid(train.FrontBogey) then
-        list[#list + 1] = train.FrontBogey.Wheels
+        Add(train.FrontBogey.Wheels)
     end
     if IsValid(train.RearBogey) then
-        list[#list + 1] = train.RearBogey.Wheels
+        Add(train.RearBogey.Wheels)
     end
 
     return list
@@ -2082,19 +2088,23 @@ function Builder.InstallRerailSupport()
     end
 
     Metrostroi.RerailBogey = function(bogey)
-        if Builder.RerailBogeyOnMEX(bogey) then
+        -- Preserve normal map/world rails first. Only use MEX geometry when
+        -- the stock rerailer cannot find a conventional track.
+        if originalBogey(bogey) then
             return true
         end
 
-        return originalBogey(bogey)
+        return Builder.RerailBogeyOnMEX(bogey)
     end
 
     Metrostroi.RerailTrain = function(train)
-        if Builder.RerailTrainOnMEX(train) then
+        -- Preserve normal map/world rails first. This prevents a nearby MEX
+        -- route from stealing a rerail that belongs to an ordinary map track.
+        if originalTrain(train) then
             return true
         end
 
-        return originalTrain(train)
+        return Builder.RerailTrainOnMEX(train)
     end
 
     Metrostroi.MEXTrackBuilderRerailVersion = 2
