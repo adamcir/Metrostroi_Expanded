@@ -74,20 +74,11 @@ function TrackEntity:Initialize()
     local leftY = gauge * 0.5
     local rightY = -gauge * 0.5
 
-    -- Continuous solid sleeper bed + both rails. This makes the generated
-    -- track solid for Sandbox/player physics instead of colliding only on two
-    -- very thin rail strips.
-    local sleeperHalf = math.max(
-        self:GetNW2Float("MEXSleeperLength", 128),
-        gauge + 16
-    ) * 0.5
-    local bedTop = math.max(sleeperHeight, 2)
-
+    -- Only the two rail heads are solid. The previous implementation also
+    -- created one wide rectangular collision bed under every segment. Subway
+    -- bogeys hit that invisible bed before the wheels reached the rail model,
+    -- which made trains visibly float above MEX track.
     local convexes = {
-        BoxConvex(
-            Vector(-halfLength, -sleeperHalf, 0),
-            Vector(halfLength, sleeperHalf, bedTop)
-        ),
         BoxConvex(
             Vector(-halfLength, leftY - halfRail, railBottom),
             Vector(halfLength, leftY + halfRail, railTop)
@@ -613,7 +604,7 @@ local function CopySettings(settings)
     settings = settings or {}
     return {
         gauge = math.Clamp(tonumber(settings.gauge) or 80, 8, 200),
-        rail_width = math.Clamp(tonumber(settings.rail_width) or 4, 1, 24),
+        rail_width = math.Clamp(tonumber(settings.rail_width) or 5.8, 1, 24),
         rail_height = math.Clamp(tonumber(settings.rail_height) or 7, 1, 32),
         sleeper_spacing = math.Clamp(tonumber(settings.sleeper_spacing) or 32, 8, 256),
         sleeper_length = math.Clamp(tonumber(settings.sleeper_length) or 128, 24, 256),
@@ -1639,6 +1630,490 @@ function Builder.FinishRoute(ply, network)
 
     return true
 end
+
+-- --------------------------------------------------------------------------
+-- Metrostroi rerailer support for runtime-built MEX rails
+-- --------------------------------------------------------------------------
+-- The stock Metrostroi rerailer intentionally traces MASK_NPCWORLDSTATIC.
+-- MEX rails are scripted entities, not BSP/world geometry, so the stock
+-- getTrackData() cannot ever see them. These helpers reproduce the track data
+-- Metrostroi expects directly from our generated rail segments.
+
+local DEFAULT_BOGEY_OFFSET = 31
+
+local function OrientTrackData(data, roughForward)
+    if not istable(data) then return nil end
+    if not isvector(data.forward) or not isvector(data.up) then return nil end
+
+    local forward = data.forward:GetNormalized()
+    local up = data.up:GetNormalized()
+
+    if isvector(roughForward)
+        and roughForward:LengthSqr() > 0.000001
+        and forward:Dot(roughForward) < 0
+    then
+        forward = -forward
+    end
+
+    local right = forward:Cross(up)
+    if right:LengthSqr() <= 0.000001 then
+        return nil
+    end
+    right:Normalize()
+
+    return {
+        forward = forward,
+        right = right,
+        up = up,
+        centerpos = data.centerpos,
+        entity = data.entity,
+        route_id = data.route_id,
+    }
+end
+
+function Builder.GetMEXTrackData(pos, roughForward, maxDistance)
+    if not isvector(pos) then return nil end
+
+    maxDistance = math.Clamp(tonumber(maxDistance) or 768, 64, 4096)
+    local maxDistanceSqr = maxDistance * maxDistance
+    local best
+    local bestDistance = maxDistanceSqr
+
+    for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
+        if IsValid(ent)
+            and ent:GetNW2Int("MEXRouteID", 0) > 0
+        then
+            local length = math.max(
+                ent:GetNW2Float("MEXLength", 0),
+                0
+            )
+
+            if length > 1 then
+                local forward = ent:GetAngles():Forward():GetNormalized()
+                local up = ent:GetAngles():Up():GetNormalized()
+                local right = forward:Cross(up)
+
+                if right:LengthSqr() > 0.000001 then
+                    right:Normalize()
+
+                    local relative = pos - ent:GetPos()
+                    local along = math.Clamp(
+                        relative:Dot(forward),
+                        -length * 0.5,
+                        length * 0.5
+                    )
+
+                    local basePos = ent:GetPos() + forward * along
+                    local railTop = math.max(
+                        ent:GetNW2Float("MEXSleeperHeight", 5),
+                        0
+                    ) + math.max(
+                        ent:GetNW2Float("MEXRailHeight", 7),
+                        1
+                    )
+
+                    local centerpos = basePos + up * railTop
+                    local offset = pos - centerpos
+                    local sideways = math.abs(offset:Dot(right))
+                    local vertical = math.abs(offset:Dot(up))
+
+                    -- Similar search envelope to the stock rerailer, but it
+                    -- works with entity-built track and follows slopes.
+                    if sideways <= 320 and vertical <= maxDistance then
+                        local distance = offset:LengthSqr()
+
+                        if distance < bestDistance then
+                            bestDistance = distance
+                            best = {
+                                forward = forward,
+                                right = right,
+                                up = up,
+                                centerpos = centerpos,
+                                entity = ent,
+                                route_id = ent:GetNW2Int("MEXRouteID", 0),
+                            }
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return OrientTrackData(best, roughForward)
+end
+
+local function ValidPhysics(ent)
+    if not IsValid(ent) then return nil end
+    local phys = ent:GetPhysicsObject()
+    if not IsValid(phys) then return nil end
+    return phys
+end
+
+local function StopPhysics(ent)
+    local phys = ValidPhysics(ent)
+    if not phys then return end
+
+    phys:SetVelocity(vector_origin)
+    phys:AddAngleVelocity(-phys:GetAngleVelocity())
+    phys:EnableMotion(false)
+end
+
+local function BeginRerailMove(entities)
+    local saved = {}
+
+    for _, ent in ipairs(entities or {}) do
+        if IsValid(ent) and not saved[ent] then
+            local phys = ValidPhysics(ent)
+
+            saved[ent] = {
+                solid = ent:GetSolid(),
+                motion = phys and phys:IsMotionEnabled() or nil,
+            }
+
+            ent:SetSolid(SOLID_NONE)
+
+            if phys then
+                phys:SetVelocity(vector_origin)
+                phys:AddAngleVelocity(-phys:GetAngleVelocity())
+                phys:EnableMotion(false)
+            end
+        end
+    end
+
+    return saved
+end
+
+local function FinishRerailMove(saved, timerName)
+    timer.Create(timerName, 0.8, 1, function()
+        for ent, state in pairs(saved or {}) do
+            if IsValid(ent) then
+                ent:SetSolid(state.solid or SOLID_VPHYSICS)
+
+                local phys = ValidPhysics(ent)
+                if phys then
+                    phys:SetVelocity(vector_origin)
+                    phys:AddAngleVelocity(-phys:GetAngleVelocity())
+                    phys:EnableMotion(state.motion ~= false)
+                    phys:Wake()
+                end
+            end
+        end
+    end)
+end
+
+local function TrainRerailEntities(train)
+    local list = {
+        train,
+        train.FrontBogey,
+        train.RearBogey,
+        train.FrontCouple,
+        train.RearCouple,
+    }
+
+    if IsValid(train.FrontBogey) then
+        list[#list + 1] = train.FrontBogey.Wheels
+    end
+    if IsValid(train.RearBogey) then
+        list[#list + 1] = train.RearBogey.Wheels
+    end
+
+    return list
+end
+
+local function BogeyLocalPosition(train, bogey)
+    if not IsValid(train) or not IsValid(bogey) then
+        return vector_origin
+    end
+
+    if isvector(bogey.SpawnPos) then
+        return bogey.SpawnPos
+    end
+
+    return train:WorldToLocal(bogey:GetPos())
+end
+
+local function BogeyLocalAngle(train, bogey)
+    if IsValid(bogey) and isangle(bogey.SpawnAng) then
+        return bogey.SpawnAng
+    end
+
+    if IsValid(train) and IsValid(bogey) then
+        return train:WorldToLocalAngles(bogey:GetAngles())
+    end
+
+    return angle_zero
+end
+
+local function AlignDataForward(data, direction)
+    if not istable(data) then return nil end
+
+    if isvector(direction)
+        and direction:LengthSqr() > 0.000001
+        and data.forward:Dot(direction) < 0
+    then
+        data.forward = -data.forward
+        data.right = -data.right
+    end
+
+    return data
+end
+
+function Builder.RerailBogeyOnMEX(bogey)
+    if not IsValid(bogey) then return false end
+
+    local data = Builder.GetMEXTrackData(
+        bogey:GetPos(),
+        bogey:GetAngles():Forward(),
+        1024
+    )
+    if not data then return false end
+
+    local wheels = bogey.Wheels
+    local saved = BeginRerailMove({
+        bogey,
+        wheels,
+    })
+
+    local offset = tonumber(bogey.BogeyOffset) or DEFAULT_BOGEY_OFFSET
+
+    bogey:SetPos(data.centerpos + data.up * offset)
+    bogey:SetAngles(data.forward:Angle())
+    StopPhysics(bogey)
+
+    FinishRerailMove(
+        saved,
+        "mex_track_rerail_bogey_" .. bogey:EntIndex()
+    )
+
+    return true
+end
+
+function Builder.RerailTrainOnMEX(train)
+    if not IsValid(train)
+        or train.SubwayTrain == nil
+        or train.NoPhysics
+        or not IsValid(train.FrontBogey)
+        or not IsValid(train.RearBogey)
+        or not ValidPhysics(train)
+    then
+        return false
+    end
+
+    local currentForward = train:GetAngles():Forward()
+    local centerData = Builder.GetMEXTrackData(
+        train:GetPos(),
+        currentForward,
+        1400
+    )
+    if not centerData then return false end
+
+    local frontLocal = BogeyLocalPosition(train, train.FrontBogey)
+    local rearLocal = BogeyLocalPosition(train, train.RearBogey)
+    local bogeyMidLocal = (frontLocal + rearLocal) * 0.5
+
+    local frontOffset = tonumber(train.FrontBogey.BogeyOffset)
+        or DEFAULT_BOGEY_OFFSET
+    local rearOffset = tonumber(train.RearBogey.BogeyOffset)
+        or DEFAULT_BOGEY_OFFSET
+    local averageBogeyOffset = (frontOffset + rearOffset) * 0.5
+
+    local initialAngle = centerData.forward:Angle()
+    local initialOrigin = LocalToWorld(
+        -bogeyMidLocal,
+        initialAngle,
+        centerData.centerpos + centerData.up * averageBogeyOffset,
+        initialAngle
+    )
+
+    local frontGuess = LocalToWorld(
+        frontLocal,
+        initialAngle,
+        initialOrigin,
+        initialAngle
+    )
+    local rearGuess = LocalToWorld(
+        rearLocal,
+        initialAngle,
+        initialOrigin,
+        initialAngle
+    )
+
+    local frontData = Builder.GetMEXTrackData(
+        frontGuess,
+        centerData.forward,
+        900
+    ) or centerData
+    local rearData = Builder.GetMEXTrackData(
+        rearGuess,
+        centerData.forward,
+        900
+    ) or centerData
+
+    AlignDataForward(frontData, centerData.forward)
+    AlignDataForward(rearData, centerData.forward)
+
+    local combinedForward = frontData.forward + rearData.forward
+    if combinedForward:LengthSqr() <= 0.000001 then
+        combinedForward = centerData.forward
+    else
+        combinedForward:Normalize()
+    end
+
+    if combinedForward:Dot(currentForward) < 0 then
+        combinedForward = -combinedForward
+    end
+
+    local combinedUp = frontData.up + rearData.up
+    if combinedUp:LengthSqr() <= 0.000001 then
+        combinedUp = centerData.up
+    else
+        combinedUp:Normalize()
+    end
+
+    local trainAngle = combinedForward:Angle()
+    local railMidpoint = (
+        frontData.centerpos
+        + rearData.centerpos
+    ) * 0.5
+
+    local trainPos = LocalToWorld(
+        -bogeyMidLocal,
+        trainAngle,
+        railMidpoint + combinedUp * averageBogeyOffset,
+        trainAngle
+    )
+
+    local saved = BeginRerailMove(TrainRerailEntities(train))
+
+    train:SetPos(trainPos)
+    train:SetAngles(trainAngle)
+
+    train.FrontBogey:SetPos(
+        train:LocalToWorld(frontLocal)
+    )
+    train.FrontBogey:SetAngles(
+        train:LocalToWorldAngles(
+            BogeyLocalAngle(train, train.FrontBogey)
+        )
+    )
+
+    train.RearBogey:SetPos(
+        train:LocalToWorld(rearLocal)
+    )
+    train.RearBogey:SetAngles(
+        train:LocalToWorldAngles(
+            BogeyLocalAngle(train, train.RearBogey)
+        )
+    )
+
+    if IsValid(train.FrontCouple)
+        and isvector(train.FrontCouple.SpawnPos)
+        and isangle(train.FrontCouple.SpawnAng)
+    then
+        train.FrontCouple:SetPos(
+            train:LocalToWorld(train.FrontCouple.SpawnPos)
+        )
+        train.FrontCouple:SetAngles(
+            train:LocalToWorldAngles(train.FrontCouple.SpawnAng)
+        )
+    end
+
+    if IsValid(train.RearCouple)
+        and isvector(train.RearCouple.SpawnPos)
+        and isangle(train.RearCouple.SpawnAng)
+    then
+        train.RearCouple:SetPos(
+            train:LocalToWorld(train.RearCouple.SpawnPos)
+        )
+        train.RearCouple:SetAngles(
+            train:LocalToWorldAngles(train.RearCouple.SpawnAng)
+        )
+    end
+
+    StopPhysics(train)
+    StopPhysics(train.FrontBogey)
+    StopPhysics(train.RearBogey)
+
+    FinishRerailMove(
+        saved,
+        "mex_track_rerail_train_" .. train:EntIndex()
+    )
+
+    return true
+end
+
+function Builder.InstallRerailSupport()
+    if not Metrostroi
+        or not isfunction(Metrostroi.RerailTrain)
+        or not isfunction(Metrostroi.RerailBogey)
+        or not isfunction(Metrostroi.RerailGetTrackData)
+    then
+        return false
+    end
+
+    -- Preserve the real Metrostroi implementations even across Lua refreshes.
+    Metrostroi.MEXOriginalRerailTrain =
+        Metrostroi.MEXOriginalRerailTrain
+        or Metrostroi.RerailTrain
+    Metrostroi.MEXOriginalRerailBogey =
+        Metrostroi.MEXOriginalRerailBogey
+        or Metrostroi.RerailBogey
+    Metrostroi.MEXOriginalRerailGetTrackData =
+        Metrostroi.MEXOriginalRerailGetTrackData
+        or Metrostroi.RerailGetTrackData
+
+    if Metrostroi.MEXTrackBuilderRerailVersion == 2 then
+        return true
+    end
+
+    local originalTrain = Metrostroi.MEXOriginalRerailTrain
+    local originalBogey = Metrostroi.MEXOriginalRerailBogey
+    local originalTrackData = Metrostroi.MEXOriginalRerailGetTrackData
+
+    Metrostroi.RerailGetTrackData = function(pos, forward)
+        local normal = originalTrackData(pos, forward)
+        if normal then return normal end
+
+        return Builder.GetMEXTrackData(
+            pos,
+            forward,
+            1024
+        ) or false
+    end
+
+    Metrostroi.RerailBogey = function(bogey)
+        if Builder.RerailBogeyOnMEX(bogey) then
+            return true
+        end
+
+        return originalBogey(bogey)
+    end
+
+    Metrostroi.RerailTrain = function(train)
+        if Builder.RerailTrainOnMEX(train) then
+            return true
+        end
+
+        return originalTrain(train)
+    end
+
+    Metrostroi.MEXTrackBuilderRerailVersion = 2
+    print(
+        "[Metrostroi Expanded] Track Builder rerail support installed"
+    )
+
+    return true
+end
+
+hook.Add("Think", "MEXTrackBuilderInstallRerailSupport", function()
+    if Builder.InstallRerailSupport() then
+        hook.Remove(
+            "Think",
+            "MEXTrackBuilderInstallRerailSupport"
+        )
+    end
+end)
+
 
 function Builder.RemoveRoute(routeID, ply)
     routeID = math.floor(tonumber(routeID) or 0)

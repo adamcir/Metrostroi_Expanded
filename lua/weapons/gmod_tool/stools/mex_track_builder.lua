@@ -9,7 +9,7 @@ TOOL.ConfigName = ""
 
 TOOL.ClientConVar = {
     gauge = "80",
-    rail_width = "4",
+    rail_width = "5.8",
     rail_height = "7",
     sleeper_spacing = "32",
     sleeper_length = "128",
@@ -184,6 +184,7 @@ function TOOL.BuildCPanel(panel)
 
     panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 40, 120, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
+    panel:Help("Track collision now exists only on the two rails; sleepers and the space between them have no large invisible collision block.")
     panel:NumSlider("Fallback rail height", "mex_track_builder_rail_height", 1, 16, 1)
     panel:NumSlider("Fallback sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
     panel:NumSlider("Fallback sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
@@ -210,4 +211,6 @@ function TOOL.BuildCPanel(panel)
     panel:Button("Finish current route", "mex_track_builder_finish")
     panel:Button("Cancel unfinished route", "mex_track_builder_cancel")
     panel:Button("Rebuild Metrostroi network", "mex_track_builder_rebuild")
+    panel:Button("Rerail aimed Metrostroi train", "metrostroi_rerail")
+    panel:Help("The normal Metrostroi rerailer and train spawner now also recognize saved MEX Track Builder rails.")
 end
