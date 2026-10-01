@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.20.1"
+MEXD.Version = "0.20.2"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1507,6 +1507,18 @@ if SERVER then
                 "MEX.Damage.BatteryFailed",
                 true
             )
+
+            if isfunction(
+                MEXD.EnsureBatteryFailureHook
+            ) then
+                MEXD.EnsureBatteryFailureHook(
+                    train
+                )
+            end
+
+            if isnumber(train.Battery.Voltage) then
+                train.Battery.Voltage = 0
+            end
         end
 
         return new < old
@@ -4897,6 +4909,9 @@ if SERVER then
 
         train.MEXDamageBatteryGlitchHookInstalled = true
     end
+
+    MEXD.EnsureBatteryFailureHook =
+        EnsureWaterBatteryGlitchHook
 
     local function StartWaterBatteryGlitch(
         train,
@@ -12143,30 +12158,97 @@ if SERVER then
             hitPos
         )
 
-        if deltaKmh >= 28 then
+        if deltaKmh >= 28
+            and istable(train.Battery)
+        then
             local batteryDamage =
                 math.Clamp(
                     (
-                        (deltaKmh - 25) / 150
-                        + severity * 0.08
+                        (deltaKmh - 24) / 90
+                        + severity * 0.24
                     )
                     * realism,
                     0,
-                    0.52
+                    1
                 )
 
-            if zone == "floor"
-                or zone == "left"
+            local batteryZoneMultiplier = 1
+
+            if zone == "floor" then
+                batteryZoneMultiplier = 1.42
+            elseif zone == "left"
                 or zone == "right"
             then
-                batteryDamage = batteryDamage * 1.25
+                batteryZoneMultiplier = 1.24
+            elseif zone == "front"
+                or zone == "rear"
+            then
+                batteryZoneMultiplier = 1.08
             end
 
-            if MEXD.ApplyBatteryDamage(
+            batteryDamage =
+                math.Clamp(
+                    batteryDamage
+                        * batteryZoneMultiplier,
+                    0,
+                    1
+                )
+
+            MEXD.ApplyBatteryDamage(
                 train,
                 batteryDamage,
                 "crash"
-            ) then
+            )
+
+            -- A heavy impact can crack plates, tear an internal connection or
+            -- short a cell. This is a hard failure, not a temporary blackout:
+            -- cycling VB/electrics must not resurrect it.
+            local hardFailure =
+                deltaKmh >= 48
+                or (
+                    deltaKmh >= 36
+                    and (
+                        zone == "floor"
+                        or zone == "left"
+                        or zone == "right"
+                    )
+                    and severity >= 0.28
+                )
+                or MEXD.GetBatteryHealth(train)
+                    <= BATTERY_MIN_WORKING_HEALTH
+
+            if hardFailure then
+                train:SetNW2Float(
+                    "MEX.Damage.BatteryHealth",
+                    math.min(
+                        MEXD.GetBatteryHealth(train),
+                        0.05
+                    )
+                )
+                train:SetNW2Bool(
+                    "MEX.Damage.BatteryFailed",
+                    true
+                )
+                train:SetNW2String(
+                    "MEX.Damage.BatteryLastCause",
+                    "crash"
+                )
+
+                EnsureWaterBatteryGlitchHook(train)
+
+                if isnumber(
+                    train.Battery.Voltage
+                ) then
+                    train.Battery.Voltage = 0
+                end
+
+                train:SetNW2Bool(
+                    "MEX.Damage.LowVoltageBlackout",
+                    true
+                )
+            elseif batteryDamage > 0 then
+                -- Partial damage still installs the wrapper so reduced health
+                -- and capacity are represented immediately.
                 EnsureWaterBatteryGlitchHook(train)
             end
         end
@@ -12652,9 +12734,39 @@ if SERVER then
         RestoreSensitiveWaterSystems(train)
         RestoreWaterRelayChatter(train)
         RestoreWaterVisualGlitchHooks(train)
-        RestoreWaterBatteryGlitchHook(train)
+
+        local batteryFailed =
+            train:GetNW2Bool(
+                "MEX.Damage.BatteryFailed",
+                false
+            )
+            or train:GetNW2Bool(
+                "MEX.Damage.BatteryWaterFailed",
+                false
+            )
+            or (
+                istable(train.Battery)
+                and MEXD.GetBatteryHealth(train)
+                    <= BATTERY_MIN_WORKING_HEALTH
+            )
+
+        if batteryFailed then
+            -- "Restart electrical" is only a subsystem reset. Keep a broken
+            -- accumulator broken and keep forcing its native voltage to zero.
+            EnsureWaterBatteryGlitchHook(train)
+
+            if istable(train.Battery)
+                and isnumber(
+                    train.Battery.Voltage
+                )
+            then
+                train.Battery.Voltage = 0
+            end
+        else
+            RestoreWaterBatteryGlitchHook(train)
+        end
+
         RestoreWaterElectricBlackoutHook(train)
-        RestoreBatteryForService(train)
         RestoreGRKVWearFailure(train)
 
         train.MEXDamageGRKVWear = 0
@@ -12689,7 +12801,10 @@ if SERVER then
         train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
         train:SetNW2Float("MEX.Damage.ThirdRailVoltage", 0)
         train:SetNW2Bool("MEX.Damage.ThirdRailConnected", false)
-        train:SetNW2Bool("MEX.Damage.LowVoltageBlackout", false)
+        train:SetNW2Bool(
+            "MEX.Damage.LowVoltageBlackout",
+            batteryFailed
+        )
         train:SetNW2String("MEX.Damage.ChatteringRelay", "")
         train:SetNW2String("MEX.Damage.DoorWaterFault", "")
         train:SetNW2Float("MEX.Damage.WaterWetness", 0)
