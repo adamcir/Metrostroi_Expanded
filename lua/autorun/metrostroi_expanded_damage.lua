@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.20.0"
+MEXD.Version = "0.20.1"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1449,6 +1449,20 @@ if SERVER then
 
     local BATTERY_MIN_WORKING_HEALTH = 0.12
 
+    local function RememberBatteryBaseline(train)
+        if not IsSubwayTrain(train) or not istable(train.Battery) then return end
+        local b = train.Battery
+        if not train.MEXDamageBatteryRepairCapacity then
+            local c = tonumber(b.FactoryCapacity) or tonumber(b.Capacity)
+            if c and c > 0 then train.MEXDamageBatteryRepairCapacity = c end
+        end
+        if not train.MEXDamageBatteryRepairVoltage then
+            local v = math.abs(tonumber(b.Voltage) or 0)
+            if v >= 18 and v <= 140 then train.MEXDamageBatteryRepairVoltage = v end
+        end
+    end
+
+
     local function GetBatteryHealth(train)
         if not IsSubwayTrain(train) then return 1 end
 
@@ -1470,6 +1484,8 @@ if SERVER then
         then
             return false
         end
+
+        RememberBatteryBaseline(train)
 
         amount = math.max(tonumber(amount) or 0, 0)
         if amount <= 0 then return false end
@@ -4721,6 +4737,49 @@ if SERVER then
         )
     end
 
+    local function RestoreBatteryForService(train)
+        if not IsSubwayTrain(train) or not istable(train.Battery) then return false end
+        RememberBatteryBaseline(train)
+        RestoreWaterBatteryGlitchHook(train)
+
+        local b = train.Battery
+        local capacity = tonumber(train.MEXDamageBatteryRepairCapacity)
+            or tonumber(b.FactoryCapacity) or tonumber(b.Capacity)
+        if capacity and capacity > 0 then
+            b.Capacity = capacity
+            if isnumber(b.Charge) then b.Charge = capacity end
+        end
+
+        local voltage = tonumber(train.MEXDamageBatteryRepairVoltage)
+        if not voltage or voltage < 18 then
+            local cells = tonumber(b.ElementCount)
+            voltage = cells and cells > 0 and math.Clamp(cells * 1.16,24,110) or 65
+        end
+        if isnumber(b.Voltage) then b.Voltage = math.Clamp(voltage,18,140) end
+        if isnumber(b.Current) then b.Current = 0 end
+
+        train:SetNW2Float("MEX.Damage.BatteryHealth",1)
+        train:SetNW2Bool("MEX.Damage.BatteryFailed",false)
+        train:SetNW2Bool("MEX.Damage.BatteryWaterFailed",false)
+        train:SetNW2String("MEX.Damage.BatteryLastCause","")
+        train.MEXDamageBatteryFloodLevel = 0
+        train.MEXDamageBatteryFloodFactor = 1
+        train.MEXDamageBatteryVoltageFactor = 1
+        train.MEXDamageBatteryGlitchUntil = nil
+        train:SetNW2Float("MEX.Damage.BatteryFloodLevel",0)
+        train:SetNW2Float("MEX.Damage.BatteryGlitchFactor",1)
+        train:SetNW2Bool("MEX.Damage.LowVoltageBrownout",false)
+        train:SetNW2Bool("MEX.Damage.LowVoltageBlackout",false)
+
+        if isfunction(b.Think) then pcall(b.Think,b,0) end
+        timer.Simple(0.20,function()
+            if IsSubwayTrain(train) and istable(train.Battery) and isfunction(train.Battery.Think) then
+                pcall(train.Battery.Think,train.Battery,0)
+            end
+        end)
+        return true
+    end
+
     local function EnsureWaterBatteryGlitchHook(train)
         if not IsSubwayTrain(train)
             or train.MEXDamageBatteryGlitchHookInstalled
@@ -4730,12 +4789,15 @@ if SERVER then
             return
         end
 
+        RememberBatteryBaseline(train)
+
         local battery = train.Battery
         local originalThink = battery.Think
 
         train.MEXDamageOriginalBatteryThink = originalThink
         train.MEXDamageOriginalBatteryCapacity =
-            tonumber(battery.Capacity)
+            tonumber(train.MEXDamageBatteryRepairCapacity)
+                or tonumber(battery.Capacity)
                 or train.MEXDamageOriginalBatteryCapacity
 
         battery.Think = function(self, ...)
@@ -12539,6 +12601,7 @@ if SERVER then
         RestoreWaterVisualGlitchHooks(train)
         RestoreWaterBatteryGlitchHook(train)
         RestoreWaterElectricBlackoutHook(train)
+        RestoreBatteryForService(train)
 
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterMoisture = 0
@@ -12591,6 +12654,7 @@ if SERVER then
         RestoreWaterVisualGlitchHooks(train)
         RestoreWaterBatteryGlitchHook(train)
         RestoreWaterElectricBlackoutHook(train)
+        RestoreBatteryForService(train)
         RestoreGRKVWearFailure(train)
 
         train.MEXDamageGRKVWear = 0
@@ -13286,74 +13350,19 @@ if SERVER then
     end
 
     local function RepairBatteryOnly(train)
-        if not IsSubwayTrain(train)
-            or not istable(train.Battery)
-        then
-            return false
-        end
-
-        local damaged =
-            train:GetNW2Float(
-                "MEX.Damage.BatteryHealth",
-                1
-            ) < 0.999
-            or train:GetNW2Bool(
-                "MEX.Damage.BatteryFailed",
-                false
-            )
-            or train:GetNW2Bool(
-                "MEX.Damage.BatteryWaterFailed",
-                false
-            )
-            or train:GetNW2Float(
-                "MEX.Damage.BatteryFloodLevel",
-                0
-            ) > 0.01
-
+        if not IsSubwayTrain(train) or not istable(train.Battery) then return false end
+        local b=train.Battery
+        local cap=tonumber(b.Capacity) or tonumber(train.MEXDamageBatteryRepairCapacity) or 0
+        local charge=tonumber(b.Charge)
+        local fraction=(cap>0 and charge) and math.Clamp(charge/cap,0,1) or 1
+        local damaged=train:GetNW2Float("MEX.Damage.BatteryHealth",1)<0.999
+            or train:GetNW2Bool("MEX.Damage.BatteryFailed",false)
+            or train:GetNW2Bool("MEX.Damage.BatteryWaterFailed",false)
+            or train:GetNW2Float("MEX.Damage.BatteryFloodLevel",0)>0.01
+            or fraction<0.92
+            or math.abs(tonumber(b.Voltage) or 0)<18
         if not damaged then return false end
-
-        train:SetNW2Float(
-            "MEX.Damage.BatteryHealth",
-            1
-        )
-        train:SetNW2Bool(
-            "MEX.Damage.BatteryFailed",
-            false
-        )
-        train:SetNW2Bool(
-            "MEX.Damage.BatteryWaterFailed",
-            false
-        )
-        train:SetNW2String(
-            "MEX.Damage.BatteryLastCause",
-            ""
-        )
-
-        train.MEXDamageBatteryFloodLevel = 0
-        train.MEXDamageBatteryFloodFactor = 1
-        train.MEXDamageBatteryVoltageFactor = 1
-        train.MEXDamageBatteryGlitchUntil = nil
-        train.MEXDamagePostSurfaceBatteryStress = nil
-        train.MEXDamageSurfaceReboundUsed = nil
-
-        train:SetNW2Float(
-            "MEX.Damage.BatteryFloodLevel",
-            0
-        )
-        train:SetNW2Float(
-            "MEX.Damage.BatteryGlitchFactor",
-            1
-        )
-        train:SetNW2Bool(
-            "MEX.Damage.LowVoltageBrownout",
-            false
-        )
-        train:SetNW2Bool(
-            "MEX.Damage.LowVoltageBlackout",
-            false
-        )
-
-        return true
+        return RestoreBatteryForService(train)
     end
 
     local function RepairGRKVOnly(train)
