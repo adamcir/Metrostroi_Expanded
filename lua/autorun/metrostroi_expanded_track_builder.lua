@@ -313,20 +313,221 @@ end
 
 scripted_ents.Register(TrackEntity, TRACK_CLASS)
 
+-- Build reusable attachment nodes from the actually spawned smooth track.
+-- Both server-side snapping and the client visualization use this exact
+-- geometry, so the point the player sees is the point the new track uses.
+local function CollectTrackSnapNodes(spacing)
+    spacing = math.Clamp(tonumber(spacing) or 192, 32, 1024)
+
+    local routes = {}
+    for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
+        if IsValid(ent) then
+            local routeID = ent:GetNW2Int("MEXRouteID", 0)
+            local segmentIndex = ent:GetNW2Int("MEXSegmentIndex", 0)
+
+            if routeID > 0 and segmentIndex > 0 then
+                routes[routeID] = routes[routeID] or {}
+                routes[routeID][#routes[routeID] + 1] = {
+                    ent = ent,
+                    index = segmentIndex,
+                }
+            end
+        end
+    end
+
+    local nodes = {}
+
+    local function AddNode(pos, dir, routeID, kind)
+        if not isvector(pos) or not isvector(dir) then return end
+        if dir:LengthSqr() <= 0.000001 then return end
+
+        if #nodes > 0 and nodes[#nodes].pos:DistToSqr(pos) < 4 then
+            if kind == "end" then
+                nodes[#nodes].kind = "end"
+            end
+            return
+        end
+
+        nodes[#nodes + 1] = {
+            pos = pos,
+            dir = dir:GetNormalized(),
+            route_id = routeID,
+            kind = kind or "mid",
+        }
+    end
+
+    for routeID, pieces in pairs(routes) do
+        table.sort(pieces, function(a, b)
+            return a.index < b.index
+        end)
+
+        local first = pieces[1] and pieces[1].ent
+        local last = pieces[#pieces] and pieces[#pieces].ent
+
+        if IsValid(first) and IsValid(last) then
+            local firstLength = first:GetNW2Float("MEXLength", 0)
+            local firstDir = first:GetAngles():Forward():GetNormalized()
+            local firstPos = first:GetPos() - firstDir * firstLength * 0.5
+            AddNode(firstPos, firstDir, routeID, "start")
+
+            local untilNext = spacing
+
+            for pieceIndex, entry in ipairs(pieces) do
+                local ent = entry.ent
+                if IsValid(ent) then
+                    local length = math.max(ent:GetNW2Float("MEXLength", 0), 0)
+                    local dir = ent:GetAngles():Forward():GetNormalized()
+                    local segStart = ent:GetPos() - dir * length * 0.5
+                    local cursor = 0
+
+                    while length > 0 and cursor + untilNext <= length do
+                        cursor = cursor + untilNext
+                        local pos = segStart + dir * cursor
+
+                        local tangent = dir
+                        if cursor >= length - 0.5 and pieces[pieceIndex + 1] then
+                            local nextEnt = pieces[pieceIndex + 1].ent
+                            if IsValid(nextEnt) then
+                                local nextDir = nextEnt:GetAngles():Forward():GetNormalized()
+                                local blended = dir + nextDir
+                                if blended:LengthSqr() > 0.000001 then
+                                    tangent = blended:GetNormalized()
+                                end
+                            end
+                        end
+
+                        AddNode(pos, tangent, routeID, "mid")
+                        untilNext = spacing
+                    end
+
+                    untilNext = untilNext - (length - cursor)
+                    if untilNext <= 0.001 then
+                        untilNext = spacing
+                    end
+                end
+            end
+
+            local lastLength = last:GetNW2Float("MEXLength", 0)
+            local lastDir = last:GetAngles():Forward():GetNormalized()
+            local lastPos = last:GetPos() + lastDir * lastLength * 0.5
+            AddNode(lastPos, lastDir, routeID, "end")
+        end
+    end
+
+    return nodes
+end
+
 if CLIENT then
-    hook.Add("PostDrawTranslucentRenderables", "MEXTrackBuilderPreview", function()
+    local snapCache = {}
+    local nextSnapCache = 0
+
+    local function TrackBuilderSelected()
         local ply = LocalPlayer()
-        if not IsValid(ply) or not ply:GetNW2Bool("MEXTrackBuilderActive", false) then return end
+        if not IsValid(ply) then return false end
 
         local weapon = ply:GetActiveWeapon()
-        if not IsValid(weapon) or weapon:GetClass() ~= "gmod_tool" then return end
-        if weapon:GetMode() ~= "mex_track_builder" then return end
+        return IsValid(weapon)
+            and weapon:GetClass() == "gmod_tool"
+            and weapon:GetMode() == "mex_track_builder"
+    end
+
+    hook.Add("PostDrawTranslucentRenderables", "MEXTrackBuilderPreview", function()
+        if not TrackBuilderSelected() then return end
+
+        local ply = LocalPlayer()
+        local tr = ply:GetEyeTrace()
+
+        local showNodes = GetConVar("mex_track_builder_show_snap_nodes")
+        local spacingCvar = GetConVar("mex_track_builder_snap_node_spacing")
+        local distanceCvar = GetConVar("mex_track_builder_snap_distance")
+
+        if showNodes and showNodes:GetBool() then
+            if CurTime() >= nextSnapCache then
+                snapCache = CollectTrackSnapNodes(
+                    spacingCvar and spacingCvar:GetFloat() or 192
+                )
+                nextSnapCache = CurTime() + 0.2
+            end
+
+            local snapDistance = distanceCvar and distanceCvar:GetFloat() or 24
+            local nearest
+            local nearestDist = snapDistance * snapDistance
+
+            if tr.Hit then
+                for _, node in ipairs(snapCache) do
+                    local dist = tr.HitPos:DistToSqr(node.pos)
+                    if dist <= nearestDist then
+                        nearestDist = dist
+                        nearest = node
+                    end
+                end
+            end
+
+            render.SetColorMaterial()
+
+            for _, node in ipairs(snapCache) do
+                if ply:GetPos():DistToSqr(node.pos) <= 5000 * 5000 then
+                    local selected = node == nearest
+                    local color
+
+                    if selected then
+                        color = Color(255, 190, 40)
+                    elseif node.kind == "start" or node.kind == "end" then
+                        color = Color(80, 255, 100)
+                    else
+                        color = Color(70, 190, 255)
+                    end
+
+                    render.DrawWireframeSphere(
+                        node.pos,
+                        selected and 8 or 5,
+                        8,
+                        8,
+                        color,
+                        true
+                    )
+                    render.DrawLine(
+                        node.pos - node.dir * 12,
+                        node.pos + node.dir * 12,
+                        color,
+                        true
+                    )
+                end
+            end
+        end
+
+        if ply:GetNW2Bool("MEXTrackBuilderLoopActive", false) then
+            local loopStart = ply:GetNW2Vector(
+                "MEXTrackBuilderLoopStart",
+                vector_origin
+            )
+
+            if loopStart ~= vector_origin then
+                render.SetColorMaterial()
+                render.DrawWireframeSphere(
+                    loopStart,
+                    10,
+                    12,
+                    12,
+                    Color(255, 80, 220),
+                    true
+                )
+
+                if tr.Hit then
+                    render.DrawLine(
+                        loopStart,
+                        tr.HitPos,
+                        Color(255, 80, 220),
+                        true
+                    )
+                end
+            end
+        end
+
+        if not ply:GetNW2Bool("MEXTrackBuilderActive", false) then return end
 
         local startPos = ply:GetNW2Vector("MEXTrackBuilderStart", vector_origin)
-        if startPos == vector_origin then return end
-
-        local tr = ply:GetEyeTrace()
-        if not tr.Hit then return end
+        if startPos == vector_origin or not tr.Hit then return end
 
         render.SetColorMaterial()
         render.DrawLine(startPos, tr.HitPos, Color(80, 220, 100), true)
@@ -339,6 +540,7 @@ end
 
 Builder.Routes = Builder.Routes or {}
 Builder.Active = Builder.Active or {}
+Builder.LoopStart = Builder.LoopStart or {}
 
 local DATA_DIR = "metrostroi_expanded"
 local NETWORK_DIR = "metrostroi_data"
@@ -425,32 +627,55 @@ local function CopySettings(settings)
     }
 end
 
-local function PointTangent(points, index, tension)
+local function AnchorDirection(anchor)
+    if not istable(anchor) then return nil end
+
+    local dir = NormalizeVector(anchor.dir)
+    if not isvector(dir) or dir:LengthSqr() <= 0.000001 then
+        return nil
+    end
+
+    return dir:GetNormalized()
+end
+
+local function PointTangent(points, index, tension, anchors)
     local count = #points
     if count < 2 then return vector_origin end
 
+    local current = points[index]
+    local direction
+    local localLength
+
     if index <= 1 then
-        return (points[2] - points[1]) * tension
+        direction = points[2] - current
+        localLength = direction:Length()
     elseif index >= count then
-        return (points[count] - points[count - 1]) * tension
+        direction = current - points[count - 1]
+        localLength = direction:Length()
+    else
+        local previous = points[index - 1]
+        local nextPoint = points[index + 1]
+        direction = nextPoint - previous
+        localLength = math.min(
+            current:Distance(previous),
+            current:Distance(nextPoint)
+        )
     end
 
-    local previous = points[index - 1]
-    local current = points[index]
-    local nextPoint = points[index + 1]
-    local direction = nextPoint - previous
-    local directionLength = direction:Length()
-
-    if directionLength < 0.001 then
+    if not isvector(direction) or direction:LengthSqr() <= 0.000001 then
         return vector_origin
     end
 
-    local localLength = math.min(
-        current:Distance(previous),
-        current:Distance(nextPoint)
-    )
+    local anchorDir = AnchorDirection(anchors and anchors[index])
+    if anchorDir then
+        if anchorDir:Dot(direction) < 0 then
+            anchorDir = -anchorDir
+        end
 
-    return direction / directionLength * localLength * tension
+        return anchorDir * math.max(localLength, 1) * tension
+    end
+
+    return direction:GetNormalized() * math.max(localLength, 1) * tension
 end
 
 local function HermitePoint(p0, p1, m0, m1, t)
@@ -467,7 +692,7 @@ local function HermitePoint(p0, p1, m0, m1, t)
         + m1 * h11
 end
 
-function Builder.BuildSmoothPoints(controlPoints, settings)
+function Builder.BuildSmoothPoints(controlPoints, settings, anchors)
     settings = CopySettings(settings)
 
     local points = {}
@@ -490,13 +715,23 @@ function Builder.BuildSmoothPoints(controlPoints, settings)
         local directLength = a:Distance(b)
         local steps = math.max(1, math.ceil(directLength / settings.segment_length))
 
-        if not settings.smooth or #points < 3 then
+        if not settings.smooth then
             for step = 1, steps do
                 output[#output + 1] = LerpVector(step / steps, a, b)
             end
         else
-            local tangentA = PointTangent(points, i, settings.curve_tension)
-            local tangentB = PointTangent(points, i + 1, settings.curve_tension)
+            local tangentA = PointTangent(
+                points,
+                i,
+                settings.curve_tension,
+                anchors
+            )
+            local tangentB = PointTangent(
+                points,
+                i + 1,
+                settings.curve_tension,
+                anchors
+            )
 
             for step = 1, steps do
                 local t = step / steps
@@ -507,6 +742,54 @@ function Builder.BuildSmoothPoints(controlPoints, settings)
 
     return output
 end
+
+local function ReadPointArray(tbl)
+    local result = {}
+
+    for _, entry in ipairs(OrderedNumericValues(tbl or {})) do
+        local point = NormalizeVector(entry.value)
+        if isvector(point) then
+            result[#result + 1] = point
+        end
+    end
+
+    return result
+end
+
+local function ReadAnchors(tbl)
+    local result = {}
+
+    for key, value in pairs(tbl or {}) do
+        local index = tonumber(key)
+        if index and istable(value) then
+            local dir = NormalizeVector(value.dir)
+            if isvector(dir) and dir:LengthSqr() > 0.000001 then
+                result[index] = {
+                    dir = dir:GetNormalized(),
+                }
+            end
+        end
+    end
+
+    return result
+end
+
+local function RouteRenderPoints(route)
+    if not istable(route) then return {} end
+
+    local generated = ReadPointArray(route.generated_points)
+    if #generated >= 2 then
+        return generated
+    end
+
+    return Builder.BuildSmoothPoints(
+        route.points or {},
+        route.settings,
+        route.anchors
+    )
+end
+
+Builder.GetRouteRenderPoints = RouteRenderPoints
 
 local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     if not isvector(a) or not isvector(b) then return nil end
@@ -576,7 +859,11 @@ local function RebuildActiveRoute(active)
     if not active then return end
 
     RemoveEntities(active.entities)
-    active.render_points = Builder.BuildSmoothPoints(active.points, active.settings)
+    active.render_points = Builder.BuildSmoothPoints(
+        active.points,
+        active.settings,
+        active.anchors
+    )
     active.entities = SpawnPolyline(active.render_points, active.settings, 0)
 end
 
@@ -601,20 +888,19 @@ function Builder.LoadLayout()
 
     for _, routeEntry in ipairs(OrderedNumericValues(decoded.routes)) do
         local route = routeEntry.value
-        if istable(route) and istable(route.points) then
-            local points = {}
-            for _, pointEntry in ipairs(OrderedNumericValues(route.points)) do
-                local vec = NormalizeVector(pointEntry.value)
-                if isvector(vec) then
-                    points[#points + 1] = vec
-                end
-            end
 
-            if #points >= 2 then
+        if istable(route) then
+            local points = ReadPointArray(route.points)
+            local generated = ReadPointArray(route.generated_points)
+
+            if #points >= 2 or #generated >= 2 then
                 Builder.Routes[#Builder.Routes + 1] = {
                     points = points,
+                    generated_points = #generated >= 2 and generated or nil,
+                    anchors = ReadAnchors(route.anchors),
                     settings = CopySettings(route.settings),
                     network = route.network ~= false,
+                    kind = isstring(route.kind) and route.kind or nil,
                 }
             end
         end
@@ -630,7 +916,7 @@ function Builder.RespawnAll()
 
     for routeID, route in ipairs(Builder.Routes) do
         local settings = CopySettings(route.settings)
-        local points = Builder.BuildSmoothPoints(route.points, settings)
+        local points = RouteRenderPoints(route)
         SpawnPolyline(points, settings, routeID)
     end
 end
@@ -682,7 +968,7 @@ end
 local function NetworkPoints(route)
     local settings = CopySettings(route.settings)
     local zOffset = settings.sleeper_height + settings.rail_height
-    local points = Builder.BuildSmoothPoints(route.points, settings)
+    local points = RouteRenderPoints(route)
     local result = {}
 
     for _, point in ipairs(points) do
@@ -736,51 +1022,48 @@ function Builder.RebuildMetrostroiNetwork(notifyPly)
     end
 end
 
-function Builder.SnapPoint(pos, maxDistance)
-    if not isvector(pos) then return pos end
+function Builder.SnapPoint(pos, maxDistance, spacing)
+    if not isvector(pos) then return pos, nil end
 
     maxDistance = math.Clamp(tonumber(maxDistance) or 24, 1, 256)
-    local best = pos
+
+    local best
     local bestDistSqr = maxDistance * maxDistance
 
-    local function CheckPoint(point)
-        if not isvector(point) then return end
+    for _, node in ipairs(CollectTrackSnapNodes(spacing)) do
+        local distSqr = pos:DistToSqr(node.pos)
 
-        local distSqr = pos:DistToSqr(point)
         if distSqr < bestDistSqr then
-            best = point
+            best = node
             bestDistSqr = distSqr
         end
     end
 
-    for _, route in ipairs(Builder.Routes) do
-        if istable(route.points) and #route.points > 0 then
-            CheckPoint(route.points[1])
-            CheckPoint(route.points[#route.points])
-        end
+    if best then
+        return best.pos, best
     end
 
-    for _, active in pairs(Builder.Active) do
-        if istable(active.points) and #active.points > 0 then
-            CheckPoint(active.points[1])
-            CheckPoint(active.points[#active.points])
-        end
-    end
-
-    return best
+    return pos, nil
 end
 
-function Builder.AddPoint(ply, pos, settings)
+function Builder.AddPoint(ply, pos, settings, anchor)
     if not IsValid(ply) or not ply:IsAdmin() or not isvector(pos) then return false end
 
     local active = Builder.Active[ply]
     if not active then
         active = {
             points = {pos},
+            anchors = {},
             entities = {},
             render_points = {},
             settings = CopySettings(settings),
         }
+
+        if istable(anchor) and isvector(anchor.dir) then
+            active.anchors[1] = {
+                dir = anchor.dir:GetNormalized(),
+            }
+        end
         Builder.Active[ply] = active
         SetActiveStart(ply, pos)
         ply:ChatPrint("[MEX Track Builder] Start point set. Add control points; curves are smoothed automatically.")
@@ -793,11 +1076,508 @@ function Builder.AddPoint(ply, pos, settings)
     end
 
     active.points[#active.points + 1] = pos
+
+    if istable(anchor) and isvector(anchor.dir) then
+        active.anchors[#active.points] = {
+            dir = anchor.dir:GetNormalized(),
+        }
+    end
+
     RebuildActiveRoute(active)
     SetActiveStart(ply, pos)
 
     return true
 end
+
+local PI = math.pi
+local TWO_PI = PI * 2
+
+local function Atan2(y, x)
+    if x > 0 then
+        return math.atan(y / x)
+    elseif x < 0 and y >= 0 then
+        return math.atan(y / x) + PI
+    elseif x < 0 and y < 0 then
+        return math.atan(y / x) - PI
+    elseif x == 0 and y > 0 then
+        return PI * 0.5
+    elseif x == 0 and y < 0 then
+        return -PI * 0.5
+    end
+
+    return 0
+end
+
+local function PositiveAngle(angle)
+    while angle < 0 do
+        angle = angle + TWO_PI
+    end
+    while angle >= TWO_PI do
+        angle = angle - TWO_PI
+    end
+    return angle
+end
+
+local function OrientedDirection(dir, fallback)
+    dir = NormalizeVector(dir)
+
+    if not isvector(dir) or dir:LengthSqr() <= 0.000001 then
+        if isvector(fallback) and fallback:LengthSqr() > 0.000001 then
+            return fallback:GetNormalized()
+        end
+        return Vector(1, 0, 0)
+    end
+
+    dir = dir:GetNormalized()
+
+    if isvector(fallback)
+        and fallback:LengthSqr() > 0.000001
+        and dir:Dot(fallback) < 0
+    then
+        dir = -dir
+    end
+
+    return dir
+end
+
+local function HermiteSegment(p0, p1, dir0, dir1, steps, handle)
+    steps = math.max(math.floor(steps or 2), 2)
+    handle = math.max(tonumber(handle) or p0:Distance(p1) * 0.75, 1)
+
+    local m0 = OrientedDirection(dir0, p1 - p0) * handle
+    local m1 = OrientedDirection(dir1, p1 - p0) * handle
+    local result = {}
+
+    for i = 0, steps do
+        result[#result + 1] = HermitePoint(
+            p0,
+            p1,
+            m0,
+            m1,
+            i / steps
+        )
+    end
+
+    return result
+end
+
+local function EstimateMinRadius(points)
+    local best = math.huge
+
+    for i = 2, #points - 1 do
+        local p0 = points[i - 1]
+        local p1 = points[i]
+        local p2 = points[i + 1]
+
+        local a = p0:Distance(p1)
+        local b = p1:Distance(p2)
+        local c = p2:Distance(p0)
+        local cross = (p1 - p0):Cross(p2 - p0):Length()
+
+        if a > 0.001
+            and b > 0.001
+            and c > 0.001
+            and cross > 0.001
+        then
+            local radius = (a * b * c) / (2 * cross)
+            best = math.min(best, radius)
+        end
+    end
+
+    return best
+end
+
+local function EstimateMaxGrade(points)
+    local maxGrade = 0
+
+    for i = 1, #points - 1 do
+        local delta = points[i + 1] - points[i]
+        local horizontal = math.sqrt(delta.x * delta.x + delta.y * delta.y)
+
+        if horizontal > 0.001 then
+            maxGrade = math.max(
+                maxGrade,
+                math.abs(delta.z) / horizontal * 100
+            )
+        end
+    end
+
+    return maxGrade
+end
+
+local function LoopCandidate(startPos, endPos, startAnchor, endAnchor, radius, settings, center)
+    local startAngle = Atan2(
+        startPos.y - center.y,
+        startPos.x - center.x
+    )
+    local endAngle = Atan2(
+        endPos.y - center.y,
+        endPos.x - center.x
+    )
+
+    local positiveSweep = PositiveAngle(endAngle - startAngle)
+    local sweep
+
+    -- The long arc is the actual loop. The short arc would merely connect
+    -- the two selected points with an ordinary bend.
+    if positiveSweep > PI then
+        sweep = positiveSweep
+    else
+        sweep = positiveSweep - TWO_PI
+    end
+
+    local sign = sweep >= 0 and 1 or -1
+
+    local function CircleTangent(angle)
+        return Vector(
+            -math.sin(angle) * sign,
+            math.cos(angle) * sign,
+            0
+        )
+    end
+
+    local score = 0
+
+    local startDir = AnchorDirection(startAnchor)
+    if startDir then
+        score = score + math.abs(
+            startDir:Dot(CircleTangent(startAngle))
+        )
+    else
+        score = score + 0.5
+    end
+
+    local endDir = AnchorDirection(endAnchor)
+    if endDir then
+        score = score + math.abs(
+            endDir:Dot(CircleTangent(endAngle))
+        )
+    else
+        score = score + 0.5
+    end
+
+    local arcLength = math.abs(sweep) * radius
+    local stepLength = math.Clamp(
+        tonumber(settings.segment_length) or 48,
+        16,
+        96
+    )
+    local steps = math.Clamp(
+        math.ceil(arcLength / stepLength),
+        24,
+        1024
+    )
+
+    local raw = {}
+
+    for i = 0, steps do
+        local t = i / steps
+        local angle = startAngle + sweep * t
+
+        raw[#raw + 1] = Vector(
+            center.x + math.cos(angle) * radius,
+            center.y + math.sin(angle) * radius,
+            Lerp(t, startPos.z, endPos.z)
+        )
+    end
+
+    raw[1] = startPos
+    raw[#raw] = endPos
+
+    -- Blend the circle tangentially into snapped existing track. This avoids
+    -- a visible kink even though a generic pair of selected points does not
+    -- mathematically define a circle with both required endpoint tangents.
+    local transitionDistance = math.min(
+        radius * 0.30,
+        math.max(256, radius * 0.18)
+    )
+    local transitionSteps = math.Clamp(
+        math.ceil(transitionDistance / stepLength),
+        3,
+        math.floor((#raw - 3) / 4)
+    )
+
+    if transitionSteps >= 3 and #raw >= transitionSteps * 2 + 5 then
+        local startJoinIndex = 1 + transitionSteps
+        local endJoinIndex = #raw - transitionSteps
+
+        local startJoin = raw[startJoinIndex]
+        local endJoin = raw[endJoinIndex]
+
+        local startCircleDir = (
+            raw[startJoinIndex + 1]
+            - raw[startJoinIndex - 1]
+        ):GetNormalized()
+
+        local endCircleDir = (
+            raw[endJoinIndex + 1]
+            - raw[endJoinIndex - 1]
+        ):GetNormalized()
+
+        local chosenStartDir = startDir
+            and OrientedDirection(startDir, startJoin - startPos)
+            or (startJoin - startPos):GetNormalized()
+
+        local chosenEndDir = endDir
+            and OrientedDirection(endDir, endPos - endJoin)
+            or (endPos - endJoin):GetNormalized()
+
+        local startBlend = HermiteSegment(
+            startPos,
+            startJoin,
+            chosenStartDir,
+            startCircleDir,
+            transitionSteps,
+            math.max(startPos:Distance(startJoin) * 0.85, 64)
+        )
+
+        local endBlend = HermiteSegment(
+            endJoin,
+            endPos,
+            endCircleDir,
+            chosenEndDir,
+            transitionSteps,
+            math.max(endJoin:Distance(endPos) * 0.85, 64)
+        )
+
+        local blended = {}
+
+        for i = 1, #startBlend - 1 do
+            blended[#blended + 1] = startBlend[i]
+        end
+
+        for i = startJoinIndex, endJoinIndex do
+            blended[#blended + 1] = raw[i]
+        end
+
+        for i = 2, #endBlend do
+            blended[#blended + 1] = endBlend[i]
+        end
+
+        raw = blended
+    end
+
+    return {
+        points = raw,
+        score = score,
+        radius = radius,
+        min_radius = EstimateMinRadius(raw),
+        max_grade = EstimateMaxGrade(raw),
+    }
+end
+
+function Builder.BuildSafeLoop(startInfo, endInfo, settings, minRadius, maxGrade)
+    if not istable(startInfo) or not istable(endInfo) then return nil end
+
+    local startPos = NormalizeVector(startInfo.pos)
+    local endPos = NormalizeVector(endInfo.pos)
+
+    if not isvector(startPos) or not isvector(endPos) then return nil end
+
+    local chord = Vector(
+        endPos.x - startPos.x,
+        endPos.y - startPos.y,
+        0
+    )
+    local chordLength = chord:Length()
+
+    if chordLength < 32 then
+        return nil, "Start and end are too close."
+    end
+
+    settings = CopySettings(settings)
+    minRadius = math.Clamp(tonumber(minRadius) or 3072, 512, 16384)
+    maxGrade = math.Clamp(tonumber(maxGrade) or 4, 0.5, 12)
+
+    local radius = math.max(
+        minRadius,
+        chordLength * 0.505
+    )
+
+    local best
+    local lastBest
+
+    for _ = 1, 7 do
+        local midpoint = (startPos + endPos) * 0.5
+        local perpendicular = Vector(
+            -chord.y / chordLength,
+            chord.x / chordLength,
+            0
+        )
+
+        local halfChord = chordLength * 0.5
+        local offset = math.sqrt(
+            math.max(radius * radius - halfChord * halfChord, 0)
+        )
+
+        local centerA = midpoint + perpendicular * offset
+        local centerB = midpoint - perpendicular * offset
+
+        local candidateA = LoopCandidate(
+            startPos,
+            endPos,
+            startInfo.anchor,
+            endInfo.anchor,
+            radius,
+            settings,
+            centerA
+        )
+
+        local candidateB = LoopCandidate(
+            startPos,
+            endPos,
+            startInfo.anchor,
+            endInfo.anchor,
+            radius,
+            settings,
+            centerB
+        )
+
+        if candidateA.score >= candidateB.score then
+            best = candidateA
+        else
+            best = candidateB
+        end
+
+        lastBest = best
+
+        local radiusSafe = best.min_radius == math.huge
+            or best.min_radius >= minRadius * 0.90
+        local gradeSafe = best.max_grade <= maxGrade
+
+        if radiusSafe and gradeSafe then
+            return best
+        end
+
+        radius = radius * 1.25
+    end
+
+    return lastBest
+end
+
+function Builder.CancelAutoLoop(ply, silent)
+    if not Builder.LoopStart[ply] then return false end
+
+    Builder.LoopStart[ply] = nil
+
+    if IsValid(ply) then
+        ply:SetNW2Bool("MEXTrackBuilderLoopActive", false)
+        ply:SetNW2Vector("MEXTrackBuilderLoopStart", vector_origin)
+
+        if not silent then
+            ply:ChatPrint("[MEX Track Builder] Auto loop start cancelled.")
+        end
+    end
+
+    return true
+end
+
+function Builder.AutoLoopClick(
+    ply,
+    pos,
+    anchor,
+    settings,
+    minRadius,
+    maxGrade,
+    network
+)
+    if not IsValid(ply)
+        or not ply:IsAdmin()
+        or not isvector(pos)
+    then
+        return false
+    end
+
+    local start = Builder.LoopStart[ply]
+
+    if not start then
+        Builder.CancelRoute(ply, true)
+
+        Builder.LoopStart[ply] = {
+            pos = pos,
+            anchor = anchor,
+            settings = CopySettings(settings),
+        }
+
+        ply:SetNW2Bool("MEXTrackBuilderLoopActive", true)
+        ply:SetNW2Vector("MEXTrackBuilderLoopStart", pos)
+        ply:ChatPrint(
+            "[MEX Track Builder] Auto loop start selected. "
+            .. "Click the end point; the safest large-radius loop will be generated."
+        )
+
+        return true
+    end
+
+    local result, reason = Builder.BuildSafeLoop(
+        start,
+        {
+            pos = pos,
+            anchor = anchor,
+        },
+        start.settings,
+        minRadius,
+        maxGrade
+    )
+
+    if not result or not istable(result.points) or #result.points < 3 then
+        if isstring(reason) then
+            ply:ChatPrint("[MEX Track Builder] " .. reason)
+        end
+        return false
+    end
+
+    local route = {
+        points = {
+            start.pos,
+            pos,
+        },
+        anchors = {
+            [1] = istable(start.anchor)
+                and isvector(start.anchor.dir)
+                and {dir = start.anchor.dir:GetNormalized()}
+                or nil,
+            [2] = istable(anchor)
+                and isvector(anchor.dir)
+                and {dir = anchor.dir:GetNormalized()}
+                or nil,
+        },
+        generated_points = result.points,
+        settings = CopySettings(start.settings),
+        network = network ~= false,
+        kind = "auto_loop",
+    }
+
+    Builder.Routes[#Builder.Routes + 1] = route
+    local routeID = #Builder.Routes
+
+    SpawnPolyline(
+        route.generated_points,
+        route.settings,
+        routeID
+    )
+
+    Builder.LoopStart[ply] = nil
+    ply:SetNW2Bool("MEXTrackBuilderLoopActive", false)
+    ply:SetNW2Vector("MEXTrackBuilderLoopStart", vector_origin)
+
+    Builder.SaveLayout()
+
+    if route.network then
+        Builder.RebuildMetrostroiNetwork(ply)
+    end
+
+    ply:ChatPrint(string.format(
+        "[MEX Track Builder] Auto loop #%d created. Radius %.0f SU, measured minimum %.0f SU, max grade %.2f%%.",
+        routeID,
+        result.radius,
+        result.min_radius == math.huge and result.radius or result.min_radius,
+        result.max_grade
+    ))
+
+    return true
+end
+
 
 function Builder.CancelRoute(ply, silent)
     local active = Builder.Active[ply]
@@ -830,13 +1610,14 @@ function Builder.FinishRoute(ply, network)
 
     local route = {
         points = active.points,
+        anchors = active.anchors,
         settings = CopySettings(active.settings),
         network = network ~= false,
     }
 
     Builder.Routes[#Builder.Routes + 1] = route
     local routeID = #Builder.Routes
-    local smoothPoints = Builder.BuildSmoothPoints(route.points, route.settings)
+    local smoothPoints = RouteRenderPoints(route)
     SpawnPolyline(smoothPoints, route.settings, routeID)
 
     Builder.Active[ply] = nil
@@ -877,6 +1658,7 @@ end
 
 hook.Add("PlayerDisconnected", "MEXTrackBuilderPlayerDisconnected", function(ply)
     Builder.CancelRoute(ply, true)
+    Builder.CancelAutoLoop(ply, true)
 end)
 
 hook.Add("PostCleanupMap", "MEXTrackBuilderRespawn", function()
@@ -905,7 +1687,15 @@ end)
 
 concommand.Add("mex_track_builder_cancel", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
-    Builder.CancelRoute(ply)
+
+    if not Builder.CancelAutoLoop(ply) then
+        Builder.CancelRoute(ply)
+    end
+end)
+
+concommand.Add("mex_track_builder_cancel_loop", function(ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    Builder.CancelAutoLoop(ply)
 end)
 
 concommand.Add("mex_track_builder_rebuild", function(ply)

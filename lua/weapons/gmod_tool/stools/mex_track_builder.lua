@@ -16,7 +16,12 @@ TOOL.ClientConVar = {
     sleeper_width = "10",
     sleeper_height = "5",
     snap = "1",
-    snap_distance = "24",
+    snap_distance = "32",
+    snap_node_spacing = "192",
+    show_snap_nodes = "1",
+    auto_loop = "0",
+    loop_min_radius = "3072",
+    loop_max_grade = "4",
     network = "1",
     smooth = "1",
     curve_tension = "0.45",
@@ -28,7 +33,7 @@ TOOL.ClientConVar = {
 if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
     language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
-    language.Add("tool.mex_track_builder.0", "LMB: add control point | RMB: finish route | Reload: delete aimed route or cancel")
+    language.Add("tool.mex_track_builder.0", "LMB: add/snap point (Auto Loop: start/end) | RMB: finish/cancel loop | Reload: delete route or cancel")
 end
 
 local function ReadSettings(tool)
@@ -54,17 +59,46 @@ function TOOL:LeftClick(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if not MEXTrackBuilder or not MEXTrackBuilder.AddPoint then return false end
+    if not MEXTrackBuilder then return false end
 
     local pos = trace.HitPos
-    if self:GetClientNumber("snap", 1) > 0 and MEXTrackBuilder.SnapPoint then
-        pos = MEXTrackBuilder.SnapPoint(
+    local anchor
+
+    if self:GetClientNumber("snap", 1) > 0
+        and MEXTrackBuilder.SnapPoint
+    then
+        pos, anchor = MEXTrackBuilder.SnapPoint(
             pos,
-            self:GetClientNumber("snap_distance", 24)
+            self:GetClientNumber("snap_distance", 32),
+            self:GetClientNumber("snap_node_spacing", 192)
         )
     end
 
-    local ok = MEXTrackBuilder.AddPoint(ply, pos, ReadSettings(self))
+    local ok
+
+    if self:GetClientNumber("auto_loop", 0) > 0 then
+        if not MEXTrackBuilder.AutoLoopClick then return false end
+
+        ok = MEXTrackBuilder.AutoLoopClick(
+            ply,
+            pos,
+            anchor,
+            ReadSettings(self),
+            self:GetClientNumber("loop_min_radius", 3072),
+            self:GetClientNumber("loop_max_grade", 4),
+            self:GetClientNumber("network", 1) > 0
+        )
+    else
+        if not MEXTrackBuilder.AddPoint then return false end
+
+        ok = MEXTrackBuilder.AddPoint(
+            ply,
+            pos,
+            ReadSettings(self),
+            anchor
+        )
+    end
+
     if ok then
         ply:EmitSound("buttons/button15.wav", 55, 110, 0.35)
     end
@@ -77,7 +111,16 @@ function TOOL:RightClick(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if not MEXTrackBuilder or not MEXTrackBuilder.FinishRoute then return false end
+    if not MEXTrackBuilder then return false end
+
+    if self:GetClientNumber("auto_loop", 0) > 0 then
+        if MEXTrackBuilder.CancelAutoLoop then
+            return MEXTrackBuilder.CancelAutoLoop(ply)
+        end
+        return false
+    end
+
+    if not MEXTrackBuilder.FinishRoute then return false end
 
     local ok = MEXTrackBuilder.FinishRoute(
         ply,
@@ -97,6 +140,12 @@ function TOOL:Reload(trace)
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
     if not MEXTrackBuilder then return false end
+
+    if ply:GetNW2Bool("MEXTrackBuilderLoopActive", false)
+        and MEXTrackBuilder.CancelAutoLoop
+    then
+        return MEXTrackBuilder.CancelAutoLoop(ply)
+    end
 
     local ent = trace.Entity
     if IsValid(ent) and ent:GetClass() == "mex_track_segment" then
@@ -120,10 +169,10 @@ function TOOL.BuildCPanel(panel)
     })
 
     panel:Help("Controls")
-    panel:Help("LMB: place the first point and then additional control points.")
-    panel:Help("RMB: finish and save the route.")
-    panel:Help("Reload on a MEX track: remove the whole saved route.")
-    panel:Help("Reload elsewhere: cancel the unfinished route.")
+    panel:Help("Normal mode: LMB places control points; RMB finishes the route.")
+    panel:Help("Auto Loop mode: first LMB marks the start, second LMB marks the end and immediately creates a safe loop.")
+    panel:Help("RMB cancels a waiting Auto Loop start.")
+    panel:Help("Reload on a MEX track removes the whole saved route; elsewhere it cancels unfinished work.")
 
     panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
     panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.1, 0.85, 2)
@@ -141,8 +190,17 @@ function TOOL.BuildCPanel(panel)
     panel:NumSlider("Fallback sleeper width", "mex_track_builder_sleeper_width", 4, 24, 1)
     panel:NumSlider("Fallback sleeper height", "mex_track_builder_sleeper_height", 1, 12, 1)
 
-    panel:CheckBox("Snap to existing MEX track endpoints", "mex_track_builder_snap")
-    panel:NumSlider("Endpoint snap distance", "mex_track_builder_snap_distance", 2, 96, 0)
+    panel:CheckBox("Show track attachment points", "mex_track_builder_show_snap_nodes")
+    panel:CheckBox("Snap to track attachment points", "mex_track_builder_snap")
+    panel:NumSlider("Attachment point spacing", "mex_track_builder_snap_node_spacing", 64, 512, 0)
+    panel:NumSlider("Snap distance", "mex_track_builder_snap_distance", 4, 128, 0)
+    panel:Help("Green points are route ends; blue points are reusable attachment points along the track. Their short line shows the tangent direction used for a smooth connection.")
+
+    panel:CheckBox("AUTO LOOP - create a safe circle with two clicks", "mex_track_builder_auto_loop")
+    panel:NumSlider("Auto Loop minimum radius (SU)", "mex_track_builder_loop_min_radius", 1024, 8192, 0)
+    panel:NumSlider("Auto Loop maximum grade (%)", "mex_track_builder_loop_max_grade", 1, 8, 1)
+    panel:Help("Auto Loop chooses the circle side that best matches snapped track tangents, uses the long circular arc, and enlarges the loop when needed to respect the requested radius/grade.")
+
     panel:CheckBox("Add route to Metrostroi rail network", "mex_track_builder_network")
 
     panel:Help("railroad16.mdl is repeated along the spline, so track pieces keep their normal proportions without the long-model fan effect.")
