@@ -1907,6 +1907,7 @@ function Builder.RerailBogeyOnMEX(bogey)
     bogey:SetPos(data.centerpos + data.up * offset)
     bogey:SetAngles(data.forward:Angle())
     StopPhysics(bogey)
+    ResetBogeyWheelsToBogey(bogey)
 
     FinishRerailMove(
         saved,
@@ -1914,6 +1915,24 @@ function Builder.RerailBogeyOnMEX(bogey)
     )
 
     return true
+end
+
+local function ResetBogeyWheelsToBogey(bogey)
+    if not IsValid(bogey) or not IsValid(bogey.Wheels) then return end
+
+    local wheels = bogey.Wheels
+    local types = bogey.Types
+    local typ = istable(types) and types[bogey.BogeyType or "717"] or nil
+
+    if istable(typ) then
+        local localPos = isvector(typ[2]) and typ[2] or vector_origin
+        local localAng = isangle(typ[3]) and typ[3] or angle_zero
+
+        wheels:SetPos(bogey:LocalToWorld(localPos))
+        wheels:SetAngles(bogey:LocalToWorldAngles(localAng))
+    end
+
+    StopPhysics(wheels)
 end
 
 function Builder.RerailTrainOnMEX(train)
@@ -1928,111 +1947,136 @@ function Builder.RerailTrainOnMEX(train)
     end
 
     local currentForward = train:GetAngles():Forward()
-    local centerData = Builder.GetMEXTrackData(
+
+    -- Same first step as stock Metrostroi: obtain track orientation below
+    -- the body, then use that orientation to estimate where each bogey will
+    -- be after rerailing.
+    local trackData = Builder.GetMEXTrackData(
         train:GetPos(),
         currentForward,
         1400
     )
-    if not centerData then return false end
+    if not trackData then return false end
 
-    local frontLocal = BogeyLocalPosition(train, train.FrontBogey)
-    local rearLocal = BogeyLocalPosition(train, train.RearBogey)
-    local bogeyMidLocal = (frontLocal + rearLocal) * 0.5
+    AlignDataForward(trackData, currentForward)
 
-    local frontOffset = tonumber(train.FrontBogey.BogeyOffset)
-        or DEFAULT_BOGEY_OFFSET
-    local rearOffset = tonumber(train.RearBogey.BogeyOffset)
-        or DEFAULT_BOGEY_OFFSET
-    local averageBogeyOffset = (frontOffset + rearOffset) * 0.5
+    local ang = trackData.forward:Angle()
 
-    local initialAngle = centerData.forward:Angle()
-    local initialOrigin = LocalToWorld(
-        -bogeyMidLocal,
-        initialAngle,
-        centerData.centerpos + centerData.up * averageBogeyOffset,
-        initialAngle
-    )
+    -- IMPORTANT: stock sh_rerail.lua uses the CURRENT local bogey offsets
+    -- here, not SpawnPos. This keeps different train classes and damaged/
+    -- shifted bogeys from moving the whole car body vertically.
+    local frontOffset = train:WorldToLocal(train.FrontBogey:GetPos())
+    frontOffset:Rotate(ang)
+    local frontGuess = frontOffset + train:GetPos()
 
-    local frontGuess = LocalToWorld(
-        frontLocal,
-        initialAngle,
-        initialOrigin,
-        initialAngle
-    )
-    local rearGuess = LocalToWorld(
-        rearLocal,
-        initialAngle,
-        initialOrigin,
-        initialAngle
-    )
+    local rearOffset = train:WorldToLocal(train.RearBogey:GetPos())
+    rearOffset:Rotate(ang)
+    local rearGuess = rearOffset + train:GetPos()
 
     local frontData = Builder.GetMEXTrackData(
         frontGuess,
-        centerData.forward,
-        900
-    ) or centerData
+        trackData.forward,
+        1000
+    )
     local rearData = Builder.GetMEXTrackData(
         rearGuess,
-        centerData.forward,
-        900
-    ) or centerData
+        trackData.forward,
+        1000
+    )
 
-    AlignDataForward(frontData, centerData.forward)
-    AlignDataForward(rearData, centerData.forward)
+    if not frontData or not rearData then
+        return false
+    end
 
-    local combinedForward = frontData.forward + rearData.forward
-    if combinedForward:LengthSqr() <= 0.000001 then
-        combinedForward = centerData.forward
+    AlignDataForward(frontData, trackData.forward)
+    AlignDataForward(rearData, trackData.forward)
+
+    -- On a curve the two bogeys can have slightly different tangents.
+    -- Average them for the car body while preserving the direction the train
+    -- was already facing.
+    local bodyForward = frontData.forward + rearData.forward
+    if bodyForward:LengthSqr() <= 0.000001 then
+        bodyForward = trackData.forward
     else
-        combinedForward:Normalize()
+        bodyForward:Normalize()
     end
 
-    if combinedForward:Dot(currentForward) < 0 then
-        combinedForward = -combinedForward
+    if bodyForward:Dot(currentForward) < 0 then
+        bodyForward = -bodyForward
     end
 
-    local combinedUp = frontData.up + rearData.up
-    if combinedUp:LengthSqr() <= 0.000001 then
-        combinedUp = centerData.up
-    else
-        combinedUp:Normalize()
-    end
+    ang = bodyForward:Angle()
 
-    local trainAngle = combinedForward:Angle()
-    local railMidpoint = (
+    -- Copy the actual Metrostroi rerailer body-height calculation:
+    --  1. midpoint of both rail-contact positions
+    --  2. remove the local body->bogey midpoint offset
+    --  3. add BogeyOffset once
+    --
+    -- The previous MEX implementation effectively mixed SpawnPos and an
+    -- averaged up-vector here, which could leave the complete wagon floating.
+    local trainOriginToBogeyOffset = (
+        train:WorldToLocal(train.FrontBogey:GetPos())
+        + train:WorldToLocal(train.RearBogey:GetPos())
+    ) * 0.5
+
+    local trainPos = (
         frontData.centerpos
         + rearData.centerpos
     ) * 0.5
 
-    local trainPos = LocalToWorld(
-        -bogeyMidLocal,
-        trainAngle,
-        railMidpoint + combinedUp * averageBogeyOffset,
-        trainAngle
-    )
+    local bogeyOffset = tonumber(train.FrontBogey.BogeyOffset)
+        or DEFAULT_BOGEY_OFFSET
 
-    local saved = BeginRerailMove(TrainRerailEntities(train))
+    trainPos = LocalToWorld(
+        -trainOriginToBogeyOffset,
+        ang,
+        trainPos,
+        ang
+    ) + Vector(0, 0, bogeyOffset)
+
+    local saved = BeginRerailMove(
+        TrainRerailEntities(train)
+    )
 
     train:SetPos(trainPos)
-    train:SetAngles(trainAngle)
+    train:SetAngles(ang)
 
-    train.FrontBogey:SetPos(
-        train:LocalToWorld(frontLocal)
-    )
-    train.FrontBogey:SetAngles(
-        train:LocalToWorldAngles(
-            BogeyLocalAngle(train, train.FrontBogey)
+    -- After positioning the body, do exactly what stock Metrostroi does:
+    -- place bogeys at their original spawn transforms relative to the car.
+    if isvector(train.FrontBogey.SpawnPos) then
+        train.FrontBogey:SetPos(
+            train:LocalToWorld(train.FrontBogey.SpawnPos)
         )
-    )
+    else
+        train.FrontBogey:SetPos(frontData.centerpos + Vector(0, 0, bogeyOffset))
+    end
 
-    train.RearBogey:SetPos(
-        train:LocalToWorld(rearLocal)
-    )
-    train.RearBogey:SetAngles(
-        train:LocalToWorldAngles(
-            BogeyLocalAngle(train, train.RearBogey)
+    if isangle(train.FrontBogey.SpawnAng) then
+        train.FrontBogey:SetAngles(
+            train:LocalToWorldAngles(train.FrontBogey.SpawnAng)
         )
-    )
+    else
+        train.FrontBogey:SetAngles(frontData.forward:Angle())
+    end
+
+    local rearBogeyOffset = tonumber(train.RearBogey.BogeyOffset)
+        or bogeyOffset
+
+    if isvector(train.RearBogey.SpawnPos) then
+        train.RearBogey:SetPos(
+            train:LocalToWorld(train.RearBogey.SpawnPos)
+        )
+    else
+        train.RearBogey:SetPos(rearData.centerpos + Vector(0, 0, rearBogeyOffset))
+    end
+
+    if isangle(train.RearBogey.SpawnAng) then
+        train.RearBogey:SetAngles(
+            train:LocalToWorldAngles(train.RearBogey.SpawnAng)
+        )
+    else
+        train.RearBogey:SetAngles(rearData.forward:Angle())
+    end
 
     if IsValid(train.FrontCouple)
         and isvector(train.FrontCouple.SpawnPos)
@@ -2057,6 +2101,13 @@ function Builder.RerailTrainOnMEX(train)
             train:LocalToWorldAngles(train.RearCouple.SpawnAng)
         )
     end
+
+    -- Wheels are welded separate entities. Moving only the bogey can leave
+    -- the weld stretched for one physics tick and make the bogey jump or sit
+    -- at a false height. Put them back at the bogey type's original transform
+    -- before restoring physics.
+    ResetBogeyWheelsToBogey(train.FrontBogey)
+    ResetBogeyWheelsToBogey(train.RearBogey)
 
     StopPhysics(train)
     StopPhysics(train.FrontBogey)
@@ -2090,7 +2141,7 @@ function Builder.InstallRerailSupport()
         Metrostroi.MEXOriginalRerailGetTrackData
         or Metrostroi.RerailGetTrackData
 
-    if Metrostroi.MEXTrackBuilderRerailVersion == 4 then
+    if Metrostroi.MEXTrackBuilderRerailVersion == 5 then
         return true
     end
 
@@ -2129,7 +2180,7 @@ function Builder.InstallRerailSupport()
         return Builder.RerailTrainOnMEX(train)
     end
 
-    Metrostroi.MEXTrackBuilderRerailVersion = 4
+    Metrostroi.MEXTrackBuilderRerailVersion = 5
     print(
         "[Metrostroi Expanded] Track Builder rerail support installed"
     )
