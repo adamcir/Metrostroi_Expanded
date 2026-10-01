@@ -1886,6 +1886,24 @@ local function AlignDataForward(data, direction)
     return data
 end
 
+local function ResetBogeyWheelsToBogey(bogey)
+    if not IsValid(bogey) or not IsValid(bogey.Wheels) then return end
+
+    local wheels = bogey.Wheels
+    local types = bogey.Types
+    local typ = istable(types) and types[bogey.BogeyType or "717"] or nil
+
+    if istable(typ) then
+        local localPos = isvector(typ[2]) and typ[2] or vector_origin
+        local localAng = isangle(typ[3]) and typ[3] or angle_zero
+
+        wheels:SetPos(bogey:LocalToWorld(localPos))
+        wheels:SetAngles(bogey:LocalToWorldAngles(localAng))
+    end
+
+    StopPhysics(wheels)
+end
+
 function Builder.RerailBogeyOnMEX(bogey)
     if not IsValid(bogey) then return false end
 
@@ -1915,24 +1933,6 @@ function Builder.RerailBogeyOnMEX(bogey)
     )
 
     return true
-end
-
-local function ResetBogeyWheelsToBogey(bogey)
-    if not IsValid(bogey) or not IsValid(bogey.Wheels) then return end
-
-    local wheels = bogey.Wheels
-    local types = bogey.Types
-    local typ = istable(types) and types[bogey.BogeyType or "717"] or nil
-
-    if istable(typ) then
-        local localPos = isvector(typ[2]) and typ[2] or vector_origin
-        local localAng = isangle(typ[3]) and typ[3] or angle_zero
-
-        wheels:SetPos(bogey:LocalToWorld(localPos))
-        wheels:SetAngles(bogey:LocalToWorldAngles(localAng))
-    end
-
-    StopPhysics(wheels)
 end
 
 function Builder.RerailTrainOnMEX(train)
