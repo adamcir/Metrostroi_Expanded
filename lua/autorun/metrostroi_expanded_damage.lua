@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.19.0"
+MEXD.Version = "0.20.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -5599,6 +5599,29 @@ if SERVER then
             item.name
         )
 
+        -- Mechanical switchgear can rust solid even if electrical damage is
+        -- disabled.  At high neglect levels this gradually affects a large
+        -- portion of the cab rather than an arbitrary fixed 20 percent.
+        if weatheringActive
+            and MEXD.IsPhysicalDamageEnabled()
+            and level > 0.36
+            and math.Rand(0, 1)
+                < (
+                    0.022
+                    + level * 0.145
+                )
+                * MEXD.GetNeglectScale()
+        then
+            MEXD.FailCorrodedControl(
+                train,
+                level
+            )
+        end
+
+        if not MEXD.IsElectricalDamageEnabled() then
+            return
+        end
+
         local voltage, current =
             GetTrainElectricalWaterState(train)
         voltage = math.max(
@@ -10236,6 +10259,10 @@ if SERVER then
             "MEX.Damage.InteriorDecay",
             0
         )
+        train:SetNW2Float(
+            "MEX.Damage.PanelCorrosion",
+            0
+        )
         train:SetNW2Bool(
             "MEX.Damage.NeglectAccumulating",
             false
@@ -10406,7 +10433,8 @@ if SERVER then
     end
 
     function MEXD.FailCorrodedControl(
-        train
+        train,
+        severity
     )
         if not IsSubwayTrain(train)
             or not istable(train.ButtonMap)
@@ -10415,6 +10443,17 @@ if SERVER then
         end
 
         EnsureButtonEventGuard(train)
+
+        severity =
+            math.Clamp(
+                tonumber(severity)
+                    or train:GetNW2Float(
+                        "MEX.Damage.NeglectLevel",
+                        0
+                    ),
+                0,
+                1
+            )
 
         local candidates = {}
         local seenKeys = {}
@@ -10471,11 +10510,20 @@ if SERVER then
                 train.MEXDamageFailedControls
                 or {}
             )
+        -- A lightly weathered cab should still have almost all controls.
+        -- At a full "decades abandoned" state, however, a large part of the
+        -- metal switchgear can legitimately seize from rust/oxide.
+        local maxFraction =
+            math.Clamp(
+                0.12 + severity * 0.52,
+                0.12,
+                0.64
+            )
         local maximum =
             math.max(
                 1,
                 math.floor(
-                    total * 0.20
+                    total * maxFraction
                 )
             )
 
@@ -10785,9 +10833,16 @@ if SERVER then
             )
         )
 
-        if level < 0.16
-            or not MEXD.IsElectricalDamageEnabled()
-        then
+        train:SetNW2Float(
+            "MEX.Damage.PanelCorrosion",
+            math.Clamp(
+                (level - 0.28) / 0.72,
+                0,
+                1
+            )
+        )
+
+        if level < 0.16 then
             return
         end
 
@@ -10836,16 +10891,6 @@ if SERVER then
                     0.52
                 ),
                 train:WorldSpaceCenter()
-            )
-        end
-
-        if weatheringActive
-            and level > 0.40
-            and math.Rand(0, 1)
-                < 0.035 + level * 0.085
-        then
-            MEXD.FailCorrodedControl(
-                train
             )
         end
 
@@ -21066,6 +21111,242 @@ if CLIENT then
         print("------------------------------------------------------------")
     end)
 
+    ---------------------------------------------------------------------------
+    -- Material-aware long-term neglect
+    ---------------------------------------------------------------------------
+
+    local function NeglectContainsAny(
+        text,
+        words
+    )
+        text = string.lower(
+            tostring(text or "")
+        )
+
+        for _, word in ipairs(words) do
+            if string.find(
+                text,
+                word,
+                1,
+                true
+            ) then
+                return true
+            end
+        end
+
+        return false
+    end
+
+    local function NeglectMaterialText(
+        name,
+        ent
+    )
+        local identity =
+            string.lower(
+                tostring(name or "")
+                .. " "
+                .. tostring(
+                    IsValid(ent)
+                    and ent:GetModel()
+                    or ""
+                )
+            )
+        local materials = {}
+
+        if IsValid(ent)
+            and isfunction(ent.GetMaterials)
+        then
+            for _, materialName in ipairs(
+                ent:GetMaterials() or {}
+            ) do
+                materials[#materials + 1] =
+                    string.lower(
+                        tostring(materialName or "")
+                    )
+            end
+        end
+
+        return identity,
+            table.concat(
+                materials,
+                " "
+            )
+    end
+
+    function MEXD.ClassifyNeglectMaterial(
+        name,
+        ent
+    )
+        if not IsValid(ent) then
+            return "generic"
+        end
+
+        local model =
+            tostring(ent:GetModel() or "")
+        local cacheKey =
+            tostring(name or "")
+            .. "|"
+            .. model
+
+        if ent.MEXDamageNeglectMaterialKey
+                == cacheKey
+            and ent.MEXDamageNeglectMaterialClass
+        then
+            return ent.MEXDamageNeglectMaterialClass
+        end
+
+        local identity,
+            materialText =
+            NeglectMaterialText(
+                name,
+                ent
+            )
+        local profile = "generic"
+
+        local floorWords = {
+            "floor", "podl", "linoleum", "lino",
+            "rubberfloor", "vinylfloor", "carpet",
+        }
+        local fabricWords = {
+            "seat", "couch", "fabric", "cloth",
+            "upholstery", "leather", "textile",
+        }
+        local rubberWords = {
+            "rubber", "gasket", "seal", "hose",
+            "tyre", "tire",
+        }
+        local woodWords = {
+            "wood", "plywood", "veneer",
+        }
+        local plasticWords = {
+            "plastic", "bakelite", "abs", "vinyl",
+            "polymer",
+        }
+        local controlWords = {
+            "pult", "panel", "dashboard", "console",
+            "button", "switch", "toggle", "tumbler",
+            "lever", "handle", "controller", "reverser",
+            "kran", "crane", "valve", "breaker", "fuse",
+        }
+        local lightWords = {
+            "lamp", "light", "headlight", "lens",
+            "indicator",
+        }
+        local metalWords = {
+            "metal", "steel", "iron", "chrome",
+            "aluminium", "aluminum", "copper",
+            "brass", "stainless",
+        }
+
+        -- Strong identity beats a material name. A dashboard can contain one
+        -- glass gauge material without the whole dashboard becoming "glass".
+        if ModelLooksGlass(
+            tostring(name or ""),
+            model
+        ) then
+            profile = "glass"
+        elseif NeglectContainsAny(
+            identity,
+            floorWords
+        ) then
+            profile = "floor"
+        elseif NeglectContainsAny(
+            identity,
+            fabricWords
+        ) then
+            profile = "fabric"
+        elseif NeglectContainsAny(
+            identity,
+            rubberWords
+        ) then
+            profile = "rubber"
+        elseif NeglectContainsAny(
+            identity,
+            woodWords
+        ) then
+            profile = "wood"
+        elseif NeglectContainsAny(
+            identity,
+            controlWords
+        ) then
+            if NeglectContainsAny(
+                materialText,
+                plasticWords
+            ) then
+                profile = "panel"
+            else
+                -- Old Metrostroi cabs are overwhelmingly painted metal around
+                -- their switchgear; default controls/panels to corrodible metal
+                -- unless the actual material says plastic/bakelite.
+                profile = "panel_metal"
+            end
+        elseif NeglectContainsAny(
+            identity,
+            lightWords
+        ) then
+            profile = "light_lens"
+        elseif NeglectContainsAny(
+            materialText,
+            {"glass", "window", "stekl", "windscreen"}
+        ) then
+            profile = "glass"
+        elseif NeglectContainsAny(
+            materialText,
+            floorWords
+        ) then
+            profile = "floor"
+        elseif NeglectContainsAny(
+            materialText,
+            fabricWords
+        ) then
+            profile = "fabric"
+        elseif NeglectContainsAny(
+            materialText,
+            rubberWords
+        ) then
+            profile = "rubber"
+        elseif NeglectContainsAny(
+            materialText,
+            woodWords
+        ) then
+            profile = "wood"
+        elseif NeglectContainsAny(
+            materialText,
+            plasticWords
+        ) then
+            profile = "plastic"
+        elseif NeglectContainsAny(
+            materialText,
+            metalWords
+        )
+            or NeglectContainsAny(
+                identity,
+                {
+                    "handrail", "pole", "rail",
+                    "frame", "body", "roof",
+                    "door", "shell",
+                }
+            )
+        then
+            profile = "metal"
+        elseif NeglectContainsAny(
+            identity,
+            {
+                "interior", "salon", "wall",
+                "ceiling", "cab", "cabin",
+            }
+        ) then
+            profile = "interior"
+        end
+
+        ent.MEXDamageNeglectMaterialKey =
+            cacheKey
+        ent.MEXDamageNeglectMaterialClass =
+            profile
+
+        return profile
+    end
+
     hook.Add(
         "Think",
         "MEX.Damage.NeglectVisual",
@@ -21085,18 +21366,56 @@ if CLIENT then
                 ent,
                 dirt,
                 growth,
-                scuff
+                scuff,
+                corrosion,
+                interiorDecay,
+                profile
             )
                 if not IsValid(ent) then
                     return
                 end
+
+                dirt =
+                    math.Clamp(
+                        tonumber(dirt) or 0,
+                        0,
+                        1
+                    )
+                growth =
+                    math.Clamp(
+                        tonumber(growth) or 0,
+                        0,
+                        1
+                    )
+                scuff =
+                    math.Clamp(
+                        tonumber(scuff) or 0,
+                        0,
+                        1
+                    )
+                corrosion =
+                    math.Clamp(
+                        tonumber(corrosion) or 0,
+                        0,
+                        1
+                    )
+                interiorDecay =
+                    math.Clamp(
+                        tonumber(interiorDecay) or 0,
+                        0,
+                        1
+                    )
+                profile =
+                    tostring(profile or "generic")
 
                 local level =
                     math.Clamp(
                         math.max(
                             dirt,
                             growth,
-                            scuff * 0.65
+                            scuff * 0.65,
+                            corrosion,
+                            interiorDecay
                         ),
                         0,
                         1
@@ -21119,47 +21438,186 @@ if CLIENT then
 
                 local base =
                     ent.MEXDamageWeatherBaseColor
-                local darken =
-                    math.Clamp(
-                        1
-                            - dirt * 0.14
-                            - scuff * 0.05,
-                        0.72,
-                        1
-                    )
-                local moss =
-                    math.Clamp(
-                        growth,
-                        0,
-                        1
-                    )
+                local r = base.r
+                local g = base.g
+                local b = base.b
 
-                -- Keep only a mild grime/weather tint here. Actual moss/ivy
-                -- is rendered as attached texture patches below instead of
-                -- turning the entire wagon green.
-                ent:SetColor(Color(
-                    math.Clamp(
-                        base.r
-                            * darken
-                            * (1 - moss * 0.010),
-                        0,
-                        255
-                    ),
-                    math.Clamp(
-                        base.g
-                            * darken
-                            * (1 - moss * 0.004)
-                            + 1.5 * moss,
-                        0,
-                        255
-                    ),
-                    math.Clamp(
+                if profile == "glass"
+                    or profile == "light_lens"
+                then
+                    -- Old glazing does not rust. It becomes grey, hazy and
+                    -- dirty from mineral deposits, dust and failed seals.
+                    local haze =
+                        math.Clamp(
+                            dirt * 0.38
+                                + interiorDecay * 0.56
+                                + growth * 0.08,
+                            0,
+                            profile == "glass"
+                                and 0.82
+                                or 0.64
+                        )
+                    local grey =
+                        150
+                            - dirt * 28
+                            - interiorDecay * 18
+
+                    r = Lerp(haze, base.r, grey)
+                    g = Lerp(haze, base.g, grey + 2)
+                    b = Lerp(haze, base.b, grey + 4)
+                elseif profile == "floor" then
+                    -- Linoleum/rubber floors become very dark, brown-grey and
+                    -- stained rather than rusty.
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.34
+                                - interiorDecay * 0.36,
+                            0.38,
+                            1
+                        )
+                    r =
+                        base.r * darken
+                        + 18 * interiorDecay
+                    g =
+                        base.g * darken
+                        + 13 * interiorDecay
+                    b =
+                        base.b * darken
+                        + 7 * interiorDecay
+                elseif profile == "fabric" then
+                    local fade =
+                        math.Clamp(
+                            interiorDecay * 0.54
+                                + dirt * 0.18,
+                            0,
+                            0.68
+                        )
+                    local luminance =
+                        base.r * 0.30
+                        + base.g * 0.59
+                        + base.b * 0.11
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.25
+                                - interiorDecay * 0.24,
+                            0.46,
+                            1
+                        )
+
+                    r =
+                        Lerp(fade, base.r, luminance)
+                        * darken
+                    g =
+                        Lerp(fade, base.g, luminance)
+                        * darken
+                        + 4 * interiorDecay
+                    b =
+                        Lerp(fade, base.b, luminance)
+                        * darken
+                elseif profile == "rubber" then
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.30
+                                - interiorDecay * 0.22,
+                            0.42,
+                            1
+                        )
+                    r = base.r * darken
+                    g = base.g * darken
+                    b = base.b * darken
+                elseif profile == "wood" then
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.26
+                                - interiorDecay * 0.28,
+                            0.46,
+                            1
+                        )
+                    r =
+                        base.r * darken
+                        + 10 * interiorDecay
+                    g =
+                        base.g * darken
+                        + 6 * interiorDecay
+                    b =
+                        base.b * darken
+                elseif profile == "plastic"
+                    or profile == "panel"
+                then
+                    -- Plastics/bakelite chalk, yellow and lose saturation. They
+                    -- get filthy but never receive the rust treatment.
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.22
+                                - interiorDecay * 0.18,
+                            0.56,
+                            1
+                        )
+                    local yellow =
+                        interiorDecay * 0.16
+
+                    r =
+                        base.r * darken
+                        + 18 * yellow
+                    g =
+                        base.g * darken
+                        + 11 * yellow
+                    b =
                         base.b
-                            * darken
-                            * (1 - moss * 0.015),
-                        0,
-                        255
-                    ),
+                        * darken
+                        * (1 - yellow)
+                elseif profile == "metal"
+                    or profile == "panel_metal"
+                then
+                    -- Painted/bare metal gets dull and takes a subtle brown
+                    -- oxide cast; detailed rust islands are rendered separately.
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.18
+                                - scuff * 0.07
+                                - corrosion * 0.12
+                                - interiorDecay * 0.10,
+                            0.55,
+                            1
+                        )
+
+                    r =
+                        base.r * darken
+                        + corrosion * 18
+                    g =
+                        base.g
+                        * darken
+                        * (1 - corrosion * 0.08)
+                    b =
+                        base.b
+                        * darken
+                        * (1 - corrosion * 0.18)
+                else
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.18
+                                - scuff * 0.05
+                                - interiorDecay * 0.16,
+                            0.62,
+                            1
+                        )
+
+                    r = base.r * darken
+                    g = base.g * darken
+                    b = base.b * darken
+                end
+
+                ent:SetColor(Color(
+                    math.Clamp(r, 0, 255),
+                    math.Clamp(g, 0, 255),
+                    math.Clamp(b, 0, 255),
                     base.a
                 ))
             end
@@ -21195,11 +21653,17 @@ if CLIENT then
                         0
                     )
 
+                -- Keep the main carbody tint deliberately subtle because some
+                -- train models bake window glass into the body model. Surface
+                -- rust/vegetation is handled by the procedural patches.
                 applyWeathering(
                     train,
-                    dirt,
-                    growth,
-                    scuff
+                    dirt * 0.42,
+                    growth * 0.05,
+                    scuff * 0.35,
+                    corrosion * 0.28,
+                    0,
+                    "metal"
                 )
 
                 for name, prop in pairs(
@@ -21209,71 +21673,120 @@ if CLIENT then
                         continue
                     end
 
-                    local propName =
-                        string.lower(
-                            tostring(name or "")
-                        )
-                    local propModel =
-                        string.lower(
-                            prop:GetModel() or ""
+                    local profile =
+                        MEXD.ClassifyNeglectMaterial(
+                            name,
+                            prop
                         )
 
-                    if ModelLooksStructural(
-                        propName,
-                        propModel
-                    ) then
+                    if profile == "glass"
+                        or profile == "light_lens"
+                    then
                         applyWeathering(
                             prop,
-                            dirt,
-                            growth,
-                            scuff
+                            dirt * 0.62,
+                            0,
+                            scuff * 0.05,
+                            0,
+                            math.max(
+                                interiorDecay,
+                                corrosion * 0.22
+                            ),
+                            profile
                         )
-                        continue
-                    end
-
-                    if ModelLooksGlass(
-                        propName,
-                        propModel
-                    ) then
-                        continue
-                    end
-
-                    local text =
-                        propName
-                        .. " "
-                        .. propModel
-                    local interiorLike =
-                        string.find(text, "seat", 1, true)
-                        or string.find(text, "salon", 1, true)
-                        or string.find(text, "interior", 1, true)
-                        or string.find(text, "panel", 1, true)
-                        or string.find(text, "wall", 1, true)
-                        or string.find(text, "ceiling", 1, true)
-                        or string.find(text, "floor", 1, true)
-                        or string.find(text, "handrail", 1, true)
-                        or string.find(text, "handle", 1, true)
-                        or string.find(text, "pole", 1, true)
-                        or string.find(text, "lamp", 1, true)
-                        or string.find(text, "light", 1, true)
-                        or string.find(text, "cab", 1, true)
-
-                    if interiorLike then
+                    elseif profile == "floor" then
                         applyWeathering(
                             prop,
                             math.Clamp(
-                                dirt * 0.38
-                                    + corrosion * 0.20
-                                    + interiorDecay * 0.24,
+                                dirt * 0.88
+                                    + interiorDecay * 0.44,
                                 0,
-                                0.62
+                                1
                             ),
                             0,
+                            scuff * 0.24,
+                            0,
+                            interiorDecay,
+                            profile
+                        )
+                    elseif profile == "fabric"
+                        or profile == "rubber"
+                        or profile == "wood"
+                        or profile == "plastic"
+                        or profile == "panel"
+                    then
+                        applyWeathering(
+                            prop,
                             math.Clamp(
-                                scuff * 0.35
-                                    + interiorDecay * 0.16,
+                                dirt * 0.54
+                                    + interiorDecay * 0.34,
                                 0,
-                                0.45
-                            )
+                                1
+                            ),
+                            0,
+                            scuff * 0.28,
+                            0,
+                            interiorDecay,
+                            profile
+                        )
+                    elseif profile == "panel_metal" then
+                        applyWeathering(
+                            prop,
+                            math.Clamp(
+                                dirt * 0.56
+                                    + interiorDecay * 0.26,
+                                0,
+                                1
+                            ),
+                            0,
+                            scuff * 0.42,
+                            math.max(
+                                corrosion * 0.72,
+                                train:GetNW2Float(
+                                    "MEX.Damage.PanelCorrosion",
+                                    0
+                                )
+                            ),
+                            interiorDecay,
+                            profile
+                        )
+                    elseif profile == "metal" then
+                        applyWeathering(
+                            prop,
+                            dirt * 0.72,
+                            growth * 0.06,
+                            scuff * 0.72,
+                            corrosion,
+                            interiorDecay * 0.55,
+                            profile
+                        )
+                    elseif profile == "interior" then
+                        applyWeathering(
+                            prop,
+                            math.Clamp(
+                                dirt * 0.48
+                                    + interiorDecay * 0.30,
+                                0,
+                                1
+                            ),
+                            0,
+                            scuff * 0.34,
+                            corrosion * 0.16,
+                            interiorDecay,
+                            profile
+                        )
+                    elseif ModelLooksStructural(
+                        tostring(name or ""),
+                        prop:GetModel() or ""
+                    ) then
+                        applyWeathering(
+                            prop,
+                            dirt * 0.72,
+                            growth * 0.05,
+                            scuff * 0.60,
+                            corrosion * 0.70,
+                            interiorDecay * 0.32,
+                            "metal"
                         )
                     end
                 end
@@ -21345,6 +21858,12 @@ if CLIENT then
             Color(155, 157, 151, 126),
             Color(177, 174, 163, 112),
             Color(126, 130, 128, 116),
+        },
+        mold = {
+            Color(43, 52, 37, 122),
+            Color(54, 59, 39, 116),
+            Color(66, 62, 43, 106),
+            Color(35, 43, 33, 112),
         },
     }
 
@@ -22154,6 +22673,483 @@ if CLIENT then
         end
     end
 
+    local function BuildInteriorNeglectPatches(
+        prop,
+        profile,
+        name
+    )
+        if not IsValid(prop) then
+            return {}
+        end
+
+        local key =
+            tostring(profile)
+            .. "|"
+            .. tostring(name or "")
+            .. "|"
+            .. tostring(prop:GetModel() or "")
+
+        if prop.MEXDamageInteriorNeglectKey
+                == key
+            and istable(
+                prop.MEXDamageInteriorNeglectPatches
+            )
+        then
+            return prop.MEXDamageInteriorNeglectPatches
+        end
+
+        if profile == "glass"
+            or profile == "light_lens"
+            or profile == "generic"
+        then
+            prop.MEXDamageInteriorNeglectKey =
+                key
+            prop.MEXDamageInteriorNeglectPatches =
+                {}
+            return {}
+        end
+
+        local mins = prop:OBBMins()
+        local maxs = prop:OBBMaxs()
+        local size = maxs - mins
+        local sx = math.max(math.abs(size.x), 0.5)
+        local sy = math.max(math.abs(size.y), 0.5)
+        local sz = math.max(math.abs(size.z), 0.5)
+        local seed =
+            "MEXInteriorV1:"
+            .. tostring(prop:EntIndex())
+            .. ":"
+            .. key
+        local count =
+            profile == "floor"
+                and 14
+                or (
+                    profile == "fabric"
+                    and 9
+                    or (
+                        profile == "panel_metal"
+                        and 8
+                        or 6
+                    )
+                )
+        local patches = {}
+
+        for index = 1, count do
+            local patchSeed =
+                seed
+                .. ":"
+                .. tostring(index)
+            local normal
+            local pos
+            local faceU
+            local faceV
+
+            if profile == "floor" then
+                normal = Vector(0, 0, 1)
+                pos = Vector(
+                    Lerp(
+                        util.SharedRandom(
+                            patchSeed .. ":x",
+                            0.07,
+                            0.93,
+                            index
+                        ),
+                        mins.x,
+                        maxs.x
+                    ),
+                    Lerp(
+                        util.SharedRandom(
+                            patchSeed .. ":y",
+                            0.07,
+                            0.93,
+                            index
+                        ),
+                        mins.y,
+                        maxs.y
+                    ),
+                    maxs.z
+                )
+                faceU = sx
+                faceV = sy
+            else
+                local areaX = sy * sz
+                local areaY = sx * sz
+                local areaZ = sx * sy
+                local totalArea =
+                    math.max(
+                        areaX + areaY + areaZ,
+                        0.01
+                    )
+                local roll =
+                    util.SharedRandom(
+                        patchSeed .. ":face",
+                        0,
+                        totalArea,
+                        index
+                    )
+                local sign =
+                    util.SharedRandom(
+                        patchSeed .. ":sign",
+                        0,
+                        1,
+                        index
+                    ) < 0.5
+                    and -1
+                    or 1
+
+                if roll < areaX then
+                    normal = Vector(sign, 0, 0)
+                    pos = Vector(
+                        sign < 0
+                            and mins.x
+                            or maxs.x,
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":fy",
+                                0.10,
+                                0.90,
+                                index
+                            ),
+                            mins.y,
+                            maxs.y
+                        ),
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":fz",
+                                0.10,
+                                0.90,
+                                index
+                            ),
+                            mins.z,
+                            maxs.z
+                        )
+                    )
+                    faceU = sy
+                    faceV = sz
+                elseif roll < areaX + areaY then
+                    normal = Vector(0, sign, 0)
+                    pos = Vector(
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":fx",
+                                0.10,
+                                0.90,
+                                index
+                            ),
+                            mins.x,
+                            maxs.x
+                        ),
+                        sign < 0
+                            and mins.y
+                            or maxs.y,
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":fz",
+                                0.10,
+                                0.90,
+                                index
+                            ),
+                            mins.z,
+                            maxs.z
+                        )
+                    )
+                    faceU = sx
+                    faceV = sz
+                else
+                    normal = Vector(0, 0, sign)
+                    pos = Vector(
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":fx",
+                                0.10,
+                                0.90,
+                                index
+                            ),
+                            mins.x,
+                            maxs.x
+                        ),
+                        Lerp(
+                            util.SharedRandom(
+                                patchSeed .. ":fy",
+                                0.10,
+                                0.90,
+                                index
+                            ),
+                            mins.y,
+                            maxs.y
+                        ),
+                        sign < 0
+                            and mins.z
+                            or maxs.z
+                    )
+                    faceU = sx
+                    faceV = sy
+                end
+            end
+
+            local kindRoll =
+                util.SharedRandom(
+                    patchSeed .. ":kind",
+                    0,
+                    1,
+                    index
+                )
+            local kind
+
+            if profile == "panel_metal"
+                or profile == "metal"
+            then
+                kind =
+                    kindRoll < 0.58
+                    and "rust"
+                    or "dirt"
+            elseif profile == "floor"
+                or profile == "fabric"
+            then
+                kind =
+                    kindRoll < (
+                        profile == "floor"
+                        and 0.38
+                        or 0.48
+                    )
+                    and "mold"
+                    or "dirt"
+            else
+                kind =
+                    kindRoll < 0.18
+                    and "mold"
+                    or "dirt"
+            end
+
+            patches[#patches + 1] = {
+                kind = kind,
+                seed = patchSeed,
+                pos = pos,
+                normal = normal,
+                width =
+                    math.Clamp(
+                        faceU
+                            * util.SharedRandom(
+                                patchSeed .. ":w",
+                                0.08,
+                                profile == "floor"
+                                    and 0.28
+                                    or 0.22,
+                                index
+                            ),
+                        1.2,
+                        profile == "floor"
+                            and 34
+                            or 18
+                    ),
+                height =
+                    math.Clamp(
+                        faceV
+                            * util.SharedRandom(
+                                patchSeed .. ":h",
+                                0.08,
+                                profile == "floor"
+                                    and 0.25
+                                    or 0.22,
+                                index
+                            ),
+                        1.0,
+                        profile == "floor"
+                            and 28
+                            or 16
+                    ),
+                rotation =
+                    util.SharedRandom(
+                        patchSeed .. ":rot",
+                        -38,
+                        38,
+                        index
+                    ),
+                threshold =
+                    util.SharedRandom(
+                        patchSeed .. ":threshold",
+                        kind == "rust"
+                            and 0.16
+                            or 0.10,
+                        0.91,
+                        index
+                    ),
+            }
+        end
+
+        prop.MEXDamageInteriorNeglectKey =
+            key
+        prop.MEXDamageInteriorNeglectPatches =
+            patches
+
+        return patches
+    end
+
+    function MEXD.DrawInteriorNeglectOverlay(
+        train
+    )
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        local decay =
+            train:GetNW2Float(
+                "MEX.Damage.InteriorDecay",
+                0
+            )
+        local corrosion =
+            train:GetNW2Float(
+                "MEX.Damage.CorrosionLevel",
+                0
+            )
+        local panelCorrosion =
+            train:GetNW2Float(
+                "MEX.Damage.PanelCorrosion",
+                0
+            )
+        local dirt =
+            train:GetNW2Float(
+                "MEX.Damage.DirtLevel",
+                0
+            )
+
+        if decay <= 0.025
+            and corrosion <= 0.08
+        then
+            return
+        end
+
+        local eye = EyePos()
+
+        if isvector(eye)
+            and eye:DistToSqr(
+                train:WorldSpaceCenter()
+            ) > 2300 * 2300
+        then
+            return
+        end
+
+        for name, prop in pairs(
+            train.ClientEnts or {}
+        ) do
+            if not IsValid(prop) then
+                continue
+            end
+
+            local profile =
+                MEXD.ClassifyNeglectMaterial(
+                    name,
+                    prop
+                )
+
+            if profile == "glass"
+                or profile == "light_lens"
+                or profile == "generic"
+            then
+                continue
+            end
+
+            local patches =
+                BuildInteriorNeglectPatches(
+                    prop,
+                    profile,
+                    name
+                )
+
+            for _, patch in ipairs(
+                patches or {}
+            ) do
+                local level
+
+                if patch.kind == "rust" then
+                    level =
+                        profile == "panel_metal"
+                        and math.max(
+                            panelCorrosion,
+                            corrosion * 0.72
+                        )
+                        or corrosion
+                elseif patch.kind == "mold" then
+                    level =
+                        math.Clamp(
+                            decay * 0.94
+                                + dirt * 0.12,
+                            0,
+                            1
+                        )
+                else
+                    level =
+                        math.Clamp(
+                            math.max(
+                                decay * 0.88,
+                                dirt * 0.62
+                            ),
+                            0,
+                            1
+                        )
+                end
+
+                local threshold =
+                    tonumber(patch.threshold)
+                    or 1
+
+                if level < threshold then
+                    continue
+                end
+
+                local maturity =
+                    math.Clamp(
+                        (
+                            level - threshold
+                        ) / math.max(
+                            1 - threshold,
+                            0.18
+                        ),
+                        0,
+                        1
+                    )
+
+                if patch.kind == "rust" then
+                    DrawWeatherCluster(
+                        prop,
+                        patch,
+                        maturity,
+                        WEATHER_COLORS.rust,
+                        profile == "panel_metal"
+                            and 7
+                            or 5,
+                        0.74,
+                        false
+                    )
+                elseif patch.kind == "mold" then
+                    DrawWeatherCluster(
+                        prop,
+                        patch,
+                        maturity,
+                        WEATHER_COLORS.mold,
+                        profile == "floor"
+                            and 7
+                            or 5,
+                        0.62,
+                        false
+                    )
+                else
+                    DrawWeatherCluster(
+                        prop,
+                        patch,
+                        maturity,
+                        WEATHER_COLORS.dirt,
+                        profile == "floor"
+                            and 7
+                            or 4,
+                        0.55,
+                        false
+                    )
+                end
+            end
+        end
+    end
+
     function MEXD.BuildGrowthOverlayPatches(
         train
     )
@@ -22503,6 +23499,15 @@ if CLIENT then
                     end
                 end
 
+                if not roof
+                    and MEXD.GrowthPatchNearOpening(
+                        train,
+                        pos
+                    )
+                then
+                    continue
+                end
+
                 if kind == "rust" then
                     width =
                         util.SharedRandom(
@@ -22812,6 +23817,9 @@ if CLIENT then
             ) do
                 if IsSubwayTrain(train) then
                     MEXD.DrawGrowthOverlay(
+                        train
+                    )
+                    MEXD.DrawInteriorNeglectOverlay(
                         train
                     )
                 end
