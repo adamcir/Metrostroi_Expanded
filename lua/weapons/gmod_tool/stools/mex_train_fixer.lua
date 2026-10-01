@@ -318,11 +318,6 @@ local function ServiceAnchors(train)
             maxs.y - width * 0.10,
             mins.z + height * 0.16
         ),
-        grkv = Vector(
-            center.x + length * 0.12,
-            mins.y + width * 0.10,
-            mins.z + height * 0.16
-        ),
         electrical = Vector(
             center.x,
             mins.y + width * 0.12,
@@ -343,12 +338,6 @@ local function RayServiceTarget(
             target = "battery",
             label = "Battery service point",
             point = anchors.battery,
-            radius = 78,
-        },
-        {
-            target = "grkv",
-            label = "GRKV / rheostat controller service point",
-            point = anchors.grkv,
             radius = 78,
         },
         {
@@ -752,7 +741,7 @@ function TOOL.BuildCPanel(panel)
         "Detached debris, bogeys and couplers are repaired individually."
     )
     panel:Help(
-        "Battery, GRKV and hidden electrical equipment have small service points on the lower underframe."
+        "Battery and hidden electrical equipment have small service points on the lower underframe. GRKV is repaired only by aiming at the GRKV itself."
     )
     panel:Help(
         "Whole-wagon, consist and map-wide repairs are available only in Admin Train Fixer."
