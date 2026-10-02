@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.20.2"
+MEXD.Version = "0.20.3"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -21950,7 +21950,7 @@ if CLIENT then
     MEXD.CorrosionOverlayMaterial =
         MEXD.WeatherOverlayMaterial
 
-    local WEATHER_OVERLAY_VERSION = 4
+    local WEATHER_OVERLAY_VERSION = 5
 
     local WEATHER_COLORS = {
         moss = {
@@ -22126,18 +22126,77 @@ if CLIENT then
         local tangentU
         local tangentV
 
-        if math.abs(normal.z) > 0.65 then
-            -- Roof/floor: longitudinal x and transverse y.
-            tangentU = Vector(1, 0, 0)
-            tangentV = Vector(0, 1, 0)
-        elseif math.abs(normal.y) > 0.65 then
-            -- Wagon side: longitudinal x and vertical z.
-            tangentU = Vector(1, 0, 0)
-            tangentV = Vector(0, 0, 1)
-        else
-            -- Cab/rear face: transverse y and vertical z.
-            tangentU = Vector(0, 1, 0)
-            tangentV = Vector(0, 0, 1)
+        -- Render-mesh weather patches carry the tangent plane of the actual
+        -- visible triangle. This is the important difference from the old OBB
+        -- implementation: cards now lie on the model skin instead of a
+        -- collision/bounding-box face.
+        if isvector(patch.tangentU)
+            and patch.tangentU:LengthSqr() > 0.0001
+        then
+            tangentU = Vector(
+                patch.tangentU.x,
+                patch.tangentU.y,
+                patch.tangentU.z
+            )
+
+            tangentU =
+                tangentU
+                - normal
+                    * tangentU:Dot(normal)
+
+            if tangentU:LengthSqr() > 0.0001 then
+                tangentU:Normalize()
+            else
+                tangentU = nil
+            end
+        end
+
+        if tangentU
+            and isvector(patch.tangentV)
+            and patch.tangentV:LengthSqr() > 0.0001
+        then
+            tangentV = Vector(
+                patch.tangentV.x,
+                patch.tangentV.y,
+                patch.tangentV.z
+            )
+
+            tangentV =
+                tangentV
+                - normal
+                    * tangentV:Dot(normal)
+                - tangentU
+                    * tangentV:Dot(tangentU)
+
+            if tangentV:LengthSqr() > 0.0001 then
+                tangentV:Normalize()
+            else
+                tangentV = nil
+            end
+        end
+
+        if tangentU and not tangentV then
+            tangentV =
+                normal:Cross(tangentU)
+
+            if tangentV:LengthSqr() > 0.0001 then
+                tangentV:Normalize()
+            else
+                tangentV = nil
+            end
+        end
+
+        if not tangentU or not tangentV then
+            if math.abs(normal.z) > 0.65 then
+                tangentU = Vector(1, 0, 0)
+                tangentV = Vector(0, 1, 0)
+            elseif math.abs(normal.y) > 0.65 then
+                tangentU = Vector(1, 0, 0)
+                tangentV = Vector(0, 0, 1)
+            else
+                tangentU = Vector(0, 1, 0)
+                tangentV = Vector(0, 0, 1)
+            end
         end
 
         local worldPos =
@@ -23274,6 +23333,760 @@ if CLIENT then
         end
     end
 
+    ---------------------------------------------------------------------------
+    -- Visible render-surface weather placement
+    --
+    -- Do not use OBB/physics collision faces here. Many Metrostroi wagons have
+    -- deliberately simple collision boxes that sit centimetres away from the
+    -- curved roof/body. Weather must be anchored to the MDL render triangles.
+    ---------------------------------------------------------------------------
+
+    local WEATHER_SURFACE_CACHE = {}
+
+    local function WeatherMaterialProfile(materialName)
+        local text =
+            string.lower(
+                tostring(materialName or "")
+            )
+
+        local function hasAny(words)
+            for _, word in ipairs(words) do
+                if string.find(
+                    text,
+                    word,
+                    1,
+                    true
+                ) then
+                    return true
+                end
+            end
+
+            return false
+        end
+
+        if hasAny({
+            "glass", "window", "windscreen", "windshield",
+            "stekl", "steklo", "lens", "transparent",
+        }) then
+            return "glass"
+        end
+
+        if hasAny({
+            "nodraw", "invisible", "shadow", "collision",
+        }) then
+            return "hidden"
+        end
+
+        if hasAny({
+            "seat", "salon", "interior", "cabine",
+            "dashboard", "panel", "floor", "linoleum",
+            "carpet", "upholstery", "fabric", "cloth",
+        }) then
+            return "interior"
+        end
+
+        if hasAny({
+            "rubber", "gasket", "seal", "hose",
+            "plastic", "bakelite", "wood", "veneer",
+        }) then
+            return "nonmetal"
+        end
+
+        if hasAny({
+            "metal", "steel", "iron", "body", "shell",
+            "roof", "exterior", "wagon", "vagon",
+            "train", "carbody", "paint",
+        }) then
+            return "metal"
+        end
+
+        -- Workshop trains often use opaque material names such as
+        -- "81-717_blue". Generic opaque exterior triangles are still valid
+        -- painted metal unless their name matched an exclusion above.
+        return "generic"
+    end
+
+    local function WeatherBodygroupKey(ent)
+        if not IsValid(ent) then
+            return "0"
+        end
+
+        local groups = ent:GetBodyGroups()
+        if not istable(groups)
+            or #groups == 0
+        then
+            return "0"
+        end
+
+        local maxID = 0
+        for _, group in ipairs(groups) do
+            if istable(group) then
+                maxID =
+                    math.max(
+                        maxID,
+                        tonumber(group.id) or 0
+                    )
+            end
+        end
+
+        local values = {}
+        for id = 0, maxID do
+            values[#values + 1] =
+                tostring(
+                    math.Clamp(
+                        ent:GetBodygroup(id) or 0,
+                        0,
+                        9
+                    )
+                )
+        end
+
+        return table.concat(values)
+    end
+
+    local function NewWeatherSurfaceGroup()
+        return {
+            items = {},
+            area = 0,
+        }
+    end
+
+    local function AddWeatherSurface(
+        group,
+        item
+    )
+        if not istable(group)
+            or not istable(item)
+        then
+            return
+        end
+
+        local area =
+            math.max(
+                tonumber(item.area) or 0,
+                0.001
+            )
+
+        group.items[#group.items + 1] =
+            item
+        group.area =
+            group.area + area
+    end
+
+    local function BuildWeatherRenderSurfaceCache(
+        train
+    )
+        if not IsSubwayTrain(train)
+            or not util
+            or not isfunction(
+                util.GetModelMeshes
+            )
+        then
+            return nil
+        end
+
+        local model =
+            train:GetModel()
+
+        if not isstring(model)
+            or model == ""
+        then
+            return nil
+        end
+
+        local skin =
+            train:GetSkin() or 0
+        local bodygroups =
+            WeatherBodygroupKey(train)
+        local cacheKey =
+            model
+            .. "|"
+            .. tostring(skin)
+            .. "|"
+            .. tostring(bodygroups)
+
+        local cached =
+            WEATHER_SURFACE_CACHE[
+                cacheKey
+            ]
+
+        if istable(cached) then
+            return cached
+        end
+
+        local ok, meshes =
+            pcall(
+                util.GetModelMeshes,
+                model,
+                0,
+                bodygroups,
+                skin
+            )
+
+        if not ok
+            or not istable(meshes)
+            or #meshes == 0
+        then
+            ok, meshes =
+                pcall(
+                    util.GetModelMeshes,
+                    model,
+                    0,
+                    0,
+                    skin
+                )
+        end
+
+        if not ok
+            or not istable(meshes)
+            or #meshes == 0
+        then
+            WEATHER_SURFACE_CACHE[
+                cacheKey
+            ] = false
+            return nil
+        end
+
+        local raw = {}
+        local mins =
+            Vector(
+                math.huge,
+                math.huge,
+                math.huge
+            )
+        local maxs =
+            Vector(
+                -math.huge,
+                -math.huge,
+                -math.huge
+            )
+
+        for _, meshData in ipairs(
+            meshes
+        ) do
+            local triangles =
+                meshData.triangles
+            local materialName =
+                tostring(
+                    meshData.material
+                    or ""
+                )
+            local profile =
+                WeatherMaterialProfile(
+                    materialName
+                )
+
+            if profile == "hidden"
+                or not istable(triangles)
+                or #triangles < 3
+            then
+                continue
+            end
+
+            for i = 1, #triangles - 2, 3 do
+                local va =
+                    triangles[i]
+                local vb =
+                    triangles[i + 1]
+                local vc =
+                    triangles[i + 2]
+
+                if not istable(va)
+                    or not istable(vb)
+                    or not istable(vc)
+                    or not isvector(va.pos)
+                    or not isvector(vb.pos)
+                    or not isvector(vc.pos)
+                then
+                    continue
+                end
+
+                local a = va.pos
+                local b = vb.pos
+                local c = vc.pos
+                local edge1 = b - a
+                local edge2 = c - a
+                local cross =
+                    edge1:Cross(edge2)
+                local crossLength =
+                    cross:Length()
+
+                if crossLength <= 0.02 then
+                    continue
+                end
+
+                local normal =
+                    Vector(0, 0, 0)
+                local normalCount = 0
+
+                for _, vertex in ipairs({
+                    va, vb, vc,
+                }) do
+                    if isvector(
+                        vertex.normal
+                    ) then
+                        normal =
+                            normal
+                            + vertex.normal
+                        normalCount =
+                            normalCount + 1
+                    end
+                end
+
+                if normalCount > 0
+                    and normal:LengthSqr()
+                        > 0.0001
+                then
+                    normal:Normalize()
+                else
+                    normal = cross
+                    normal:Normalize()
+                end
+
+                local tangent =
+                    edge1:LengthSqr()
+                        >= edge2:LengthSqr()
+                        and edge1
+                        or edge2
+
+                tangent =
+                    tangent
+                    - normal
+                        * tangent:Dot(normal)
+
+                if tangent:LengthSqr()
+                    <= 0.0001
+                then
+                    continue
+                end
+
+                tangent:Normalize()
+
+                local tangentV =
+                    normal:Cross(tangent)
+
+                if tangentV:LengthSqr()
+                    <= 0.0001
+                then
+                    continue
+                end
+
+                tangentV:Normalize()
+
+                local center =
+                    (a + b + c) / 3
+                local area =
+                    crossLength * 0.5
+
+                raw[#raw + 1] = {
+                    a = Vector(
+                        a.x,
+                        a.y,
+                        a.z
+                    ),
+                    b = Vector(
+                        b.x,
+                        b.y,
+                        b.z
+                    ),
+                    c = Vector(
+                        c.x,
+                        c.y,
+                        c.z
+                    ),
+                    na =
+                        isvector(va.normal)
+                        and Vector(
+                            va.normal.x,
+                            va.normal.y,
+                            va.normal.z
+                        )
+                        or nil,
+                    nb =
+                        isvector(vb.normal)
+                        and Vector(
+                            vb.normal.x,
+                            vb.normal.y,
+                            vb.normal.z
+                        )
+                        or nil,
+                    nc =
+                        isvector(vc.normal)
+                        and Vector(
+                            vc.normal.x,
+                            vc.normal.y,
+                            vc.normal.z
+                        )
+                        or nil,
+                    normal = normal,
+                    tangentU = tangent,
+                    tangentV = tangentV,
+                    center = center,
+                    area = area,
+                    material =
+                        materialName,
+                    profile = profile,
+                }
+
+                for _, p in ipairs({
+                    a, b, c,
+                }) do
+                    mins.x =
+                        math.min(
+                            mins.x,
+                            p.x
+                        )
+                    mins.y =
+                        math.min(
+                            mins.y,
+                            p.y
+                        )
+                    mins.z =
+                        math.min(
+                            mins.z,
+                            p.z
+                        )
+                    maxs.x =
+                        math.max(
+                            maxs.x,
+                            p.x
+                        )
+                    maxs.y =
+                        math.max(
+                            maxs.y,
+                            p.y
+                        )
+                    maxs.z =
+                        math.max(
+                            maxs.z,
+                            p.z
+                        )
+                end
+            end
+        end
+
+        if #raw == 0
+            or mins.x == math.huge
+        then
+            WEATHER_SURFACE_CACHE[
+                cacheKey
+            ] = false
+            return nil
+        end
+
+        local center =
+            (mins + maxs) * 0.5
+        local half =
+            (maxs - mins) * 0.5
+
+        half.x =
+            math.max(
+                math.abs(half.x),
+                1
+            )
+        half.y =
+            math.max(
+                math.abs(half.y),
+                1
+            )
+        half.z =
+            math.max(
+                math.abs(half.z),
+                1
+            )
+
+        local result = {
+            roof =
+                NewWeatherSurfaceGroup(),
+            side =
+                NewWeatherSurfaceGroup(),
+            ending =
+                NewWeatherSurfaceGroup(),
+            metalRoof =
+                NewWeatherSurfaceGroup(),
+            metalSide =
+                NewWeatherSurfaceGroup(),
+            metalEnd =
+                NewWeatherSurfaceGroup(),
+            mins = mins,
+            maxs = maxs,
+        }
+
+        for _, tri in ipairs(raw) do
+            local p = tri.center
+            local n = tri.normal
+            local nx =
+                (p.x - center.x)
+                / half.x
+            local ny =
+                (p.y - center.y)
+                / half.y
+            local nz =
+                (p.z - center.z)
+                / half.z
+            local opaqueExterior =
+                tri.profile ~= "glass"
+                and tri.profile
+                    ~= "interior"
+                and tri.profile
+                    ~= "nonmetal"
+            local rustable =
+                tri.profile == "metal"
+                or tri.profile
+                    == "generic"
+
+            -- The bounds are used only to decide which *visible triangles*
+            -- belong to roof/side/end. The patch position itself always comes
+            -- from the triangle, never the OBB/collision hull.
+            local roof =
+                n.z > 0.32
+                and nz > 0.48
+            local side =
+                math.abs(n.y) > 0.30
+                and math.abs(ny) > 0.48
+                and nz > -0.60
+            local ending =
+                math.abs(n.x) > 0.30
+                and math.abs(nx) > 0.68
+                and nz > -0.60
+
+            if opaqueExterior and roof then
+                AddWeatherSurface(
+                    result.roof,
+                    tri
+                )
+
+                if rustable then
+                    AddWeatherSurface(
+                        result.metalRoof,
+                        tri
+                    )
+                end
+            end
+
+            if opaqueExterior and side then
+                AddWeatherSurface(
+                    result.side,
+                    tri
+                )
+
+                if rustable then
+                    AddWeatherSurface(
+                        result.metalSide,
+                        tri
+                    )
+                end
+            end
+
+            if opaqueExterior and ending then
+                AddWeatherSurface(
+                    result.ending,
+                    tri
+                )
+
+                if rustable then
+                    AddWeatherSurface(
+                        result.metalEnd,
+                        tri
+                    )
+                end
+            end
+        end
+
+        WEATHER_SURFACE_CACHE[
+            cacheKey
+        ] = result
+
+        return result
+    end
+
+    local function PickWeatherTriangle(
+        group,
+        seed,
+        index
+    )
+        if not istable(group)
+            or not istable(group.items)
+            or #group.items == 0
+        then
+            return nil
+        end
+
+        local total =
+            math.max(
+                tonumber(group.area) or 0,
+                0.001
+            )
+        local target =
+            util.SharedRandom(
+                tostring(seed)
+                    .. ":triangle",
+                0,
+                total,
+                tonumber(index) or 0
+            )
+        local accumulated = 0
+
+        for _, item in ipairs(
+            group.items
+        ) do
+            accumulated =
+                accumulated
+                + math.max(
+                    tonumber(item.area) or 0,
+                    0.001
+                )
+
+            if accumulated >= target then
+                return item
+            end
+        end
+
+        return group.items[
+            #group.items
+        ]
+    end
+
+    local function PointOnWeatherTriangle(
+        tri,
+        seed,
+        index
+    )
+        if not istable(tri)
+            or not isvector(tri.a)
+            or not isvector(tri.b)
+            or not isvector(tri.c)
+        then
+            return nil
+        end
+
+        local u =
+            util.SharedRandom(
+                tostring(seed) .. ":u",
+                0.08,
+                0.92,
+                tonumber(index) or 0
+            )
+        local v =
+            util.SharedRandom(
+                tostring(seed) .. ":v",
+                0.08,
+                0.92,
+                (tonumber(index) or 0)
+                    + 913
+            )
+
+        if u + v > 1 then
+            u = 1 - u
+            v = 1 - v
+        end
+
+        local w =
+            1 - u - v
+        local pos =
+            tri.a * w
+            + tri.b * u
+            + tri.c * v
+        local normal =
+            Vector(
+                tri.normal.x,
+                tri.normal.y,
+                tri.normal.z
+            )
+
+        if isvector(tri.na)
+            and isvector(tri.nb)
+            and isvector(tri.nc)
+        then
+            local smooth =
+                tri.na * w
+                + tri.nb * u
+                + tri.nc * v
+
+            if smooth:LengthSqr()
+                > 0.0001
+            then
+                smooth:Normalize()
+                normal = smooth
+            end
+        end
+
+        if normal:LengthSqr()
+            <= 0.0001
+        then
+            return nil
+        end
+
+        normal:Normalize()
+
+        local tangentU =
+            Vector(
+                tri.tangentU.x,
+                tri.tangentU.y,
+                tri.tangentU.z
+            )
+        tangentU =
+            tangentU
+            - normal
+                * tangentU:Dot(normal)
+
+        if tangentU:LengthSqr()
+            <= 0.0001
+        then
+            return nil
+        end
+
+        tangentU:Normalize()
+
+        local tangentV =
+            normal:Cross(tangentU)
+
+        if tangentV:LengthSqr()
+            <= 0.0001
+        then
+            return nil
+        end
+
+        tangentV:Normalize()
+
+        return pos,
+            normal,
+            tangentU,
+            tangentV
+    end
+
+    local function ChooseWeatherSurfaceGroup(
+        surfaces,
+        kind,
+        surfaceRoll
+    )
+        if not istable(surfaces) then
+            return nil
+        end
+
+        if kind == "grass" then
+            return surfaces.roof
+        elseif kind == "moss" then
+            if surfaceRoll < 0.66 then
+                return surfaces.roof
+            end
+
+            return surfaces.side
+        elseif kind == "rust"
+            or kind == "chip"
+        then
+            if surfaceRoll < 0.25 then
+                return surfaces.metalRoof
+            elseif surfaceRoll > 0.91 then
+                return surfaces.metalEnd
+            end
+
+            return surfaces.metalSide
+        end
+
+        return surfaces.side
+    end
+
     function MEXD.BuildGrowthOverlayPatches(
         train
     )
@@ -23281,17 +24094,38 @@ if CLIENT then
             return {}
         end
 
-        local mins = train:OBBMins()
-        local maxs = train:OBBMaxs()
-        local span = maxs - mins
+        local surfaces =
+            BuildWeatherRenderSurfaceCache(
+                train
+            )
+
+        -- Deliberately do not fall back to OBB/physics boxes. If a workshop
+        -- model cannot expose its render mesh, hiding weather is preferable to
+        -- visibly floating grass on a collision cuboid.
+        if not istable(surfaces) then
+            train.MEXDamageGrowthOverlayPatches =
+                {}
+            train.MEXDamageGrowthOverlayModel =
+                train:GetModel()
+            train.MEXDamageGrowthOverlaySkin =
+                train:GetSkin() or 0
+            train.MEXDamageGrowthOverlayBodygroups =
+                WeatherBodygroupKey(train)
+            train.MEXDamageGrowthOverlayVersion =
+                WEATHER_OVERLAY_VERSION
+            return {}
+        end
+
         local seed =
-            "MEXWeatherV4:"
+            "MEXWeatherV5:"
             .. tostring(train:EntIndex())
             .. ":"
-            .. tostring(train:GetModel() or "")
+            .. tostring(
+                train:GetModel() or ""
+            )
         local patches = {}
 
-        for index = 1, 168 do
+        for index = 1, 176 do
             local patchSeed =
                 seed
                 .. ":"
@@ -23324,28 +24158,77 @@ if CLIENT then
                     1,
                     index
                 )
-            local side =
-                util.SharedRandom(
-                    patchSeed .. ":side",
-                    0,
-                    1,
-                    index
-                ) < 0.5
-                and -1
-                or 1
-            local x =
-                Lerp(
-                    util.SharedRandom(
-                        patchSeed .. ":x",
-                        0.035,
-                        0.965,
-                        index
-                    ),
-                    mins.x,
-                    maxs.x
+            local group =
+                ChooseWeatherSurfaceGroup(
+                    surfaces,
+                    kind,
+                    surfaceRoll
                 )
-            local pos
-            local normal
+
+            -- A model can have no explicitly rustable material on one face.
+            -- Fall back only to another *render triangle group*, never to OBB.
+            if not istable(group)
+                or not istable(group.items)
+                or #group.items == 0
+            then
+                if kind == "rust"
+                    or kind == "chip"
+                then
+                    group =
+                        surfaceRoll < 0.28
+                        and surfaces.roof
+                        or (
+                            surfaceRoll > 0.91
+                            and surfaces.ending
+                            or surfaces.side
+                        )
+                elseif kind == "grass"
+                    or kind == "moss"
+                then
+                    group =
+                        #surfaces.roof.items > 0
+                        and surfaces.roof
+                        or surfaces.side
+                else
+                    group = surfaces.side
+                end
+            end
+
+            local tri =
+                PickWeatherTriangle(
+                    group,
+                    patchSeed,
+                    index
+                )
+
+            if not tri then
+                continue
+            end
+
+            -- Never rust/vegetate a material recognized as glass/interior even
+            -- if a strange model layout placed it in an exterior triangle set.
+            if tri.profile == "glass"
+                or tri.profile == "interior"
+                or tri.profile == "nonmetal"
+                or tri.profile == "hidden"
+            then
+                continue
+            end
+
+            local pos,
+                normal,
+                tangentU,
+                tangentV =
+                PointOnWeatherTriangle(
+                    tri,
+                    patchSeed,
+                    index
+                )
+
+            if not pos then
+                continue
+            end
+
             local width
             local height
             local threshold
@@ -23356,387 +24239,138 @@ if CLIENT then
                     28,
                     index
                 )
+            local surfaceSize =
+                math.sqrt(
+                    math.max(
+                        tonumber(tri.area)
+                            or 1,
+                        1
+                    )
+                )
 
             if kind == "grass" then
-                -- Tall growth appears only on upward-facing places where soil,
-                -- leaves and standing water could realistically collect.
-                pos = Vector(
-                    x,
-                    Lerp(
-                        util.SharedRandom(
-                            patchSeed .. ":grass-y",
-                            0.10,
-                            0.90,
-                            index
-                        ),
-                        mins.y,
-                        maxs.y
-                    ),
-                    maxs.z
-                )
-                normal = Vector(0, 0, 1)
+                -- Grass requires a genuinely upward-facing visible polygon.
+                if normal.z < 0.48 then
+                    continue
+                end
+
                 width =
                     util.SharedRandom(
                         patchSeed .. ":grass-w",
-                        12,
-                        math.max(
-                            22,
-                            math.min(
-                                38,
-                                span.y * 0.30
-                            )
-                        ),
+                        10,
+                        27,
                         index
                     )
                 height =
                     util.SharedRandom(
-                        patchSeed .. ":grass-area-h",
-                        8,
-                        24,
+                        patchSeed .. ":grass-h",
+                        7,
+                        19,
                         index
                     )
                 threshold =
                     util.SharedRandom(
-                        patchSeed .. ":grass-threshold",
+                        patchSeed
+                            .. ":grass-threshold",
                         0.36,
                         0.95,
                         index
                     )
             elseif kind == "moss" then
-                if surfaceRoll < 0.60 then
-                    pos = Vector(
-                        x,
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":moss-roof-y",
-                                0.06,
-                                0.94,
-                                index
-                            ),
-                            mins.y,
-                            maxs.y
-                        ),
-                        maxs.z
-                    )
-                    normal = Vector(0, 0, 1)
-                else
-                    local upper =
-                        util.SharedRandom(
-                            patchSeed .. ":moss-upper",
-                            0,
-                            1,
-                            index
-                        ) < 0.20
-                    local zFraction =
-                        upper
-                        and util.SharedRandom(
-                            patchSeed .. ":moss-upper-z",
-                            0.84,
-                            0.95,
-                            index
-                        )
-                        or util.SharedRandom(
-                            patchSeed .. ":moss-lower-z",
-                            0.055,
-                            0.235,
-                            index
-                        )
-
-                    pos = Vector(
-                        x,
-                        side < 0
-                            and mins.y
-                            or maxs.y,
-                        Lerp(
-                            zFraction,
-                            mins.z,
-                            maxs.z
-                        )
-                    )
-                    normal = Vector(
-                        0,
-                        side,
-                        0
-                    )
-
-                    if MEXD.GrowthPatchNearOpening(
-                        train,
-                        pos
-                    ) then
-                        continue
-                    end
-                end
-
                 width =
                     util.SharedRandom(
                         patchSeed .. ":moss-w",
-                        7,
-                        29,
+                        6,
+                        23,
                         index
                     )
                 height =
                     util.SharedRandom(
                         patchSeed .. ":moss-h",
                         4,
-                        16,
+                        14,
                         index
                     )
                 threshold =
                     util.SharedRandom(
-                        patchSeed .. ":moss-threshold",
+                        patchSeed
+                            .. ":moss-threshold",
                         0.07,
                         0.91,
                         index
                     )
-            elseif kind == "rust"
-                or kind == "chip"
-            then
-                local endFace =
-                    surfaceRoll > 0.91
-                local roof =
-                    not endFace
-                    and surfaceRoll < (
-                        kind == "rust"
-                        and 0.24
-                        or 0.13
-                    )
-
-                if roof then
-                    pos = Vector(
-                        x,
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":metal-roof-y",
-                                0.05,
-                                0.95,
-                                index
-                            ),
-                            mins.y,
-                            maxs.y
-                        ),
-                        maxs.z
-                    )
-                    normal = Vector(0, 0, 1)
-                elseif endFace then
-                    local front =
-                        util.SharedRandom(
-                            patchSeed .. ":end",
-                            0,
-                            1,
-                            index
-                        ) < 0.5
-                    local zFraction =
-                        util.SharedRandom(
-                            patchSeed .. ":end-z",
-                            0.07,
-                            0.82,
-                            index
-                        )
-
-                    pos = Vector(
-                        front
-                            and maxs.x
-                            or mins.x,
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":end-y",
-                                0.12,
-                                0.88,
-                                index
-                            ),
-                            mins.y,
-                            maxs.y
-                        ),
-                        Lerp(
-                            zFraction,
-                            mins.z,
-                            maxs.z
-                        )
-                    )
-                    normal = Vector(
-                        front and 1 or -1,
-                        0,
-                        0
-                    )
-                else
-                    local zoneRoll =
-                        util.SharedRandom(
-                            patchSeed .. ":metal-zone",
-                            0,
-                            1,
-                            index
-                        )
-                    local zFraction
-
-                    if zoneRoll < 0.52 then
-                        zFraction =
-                            util.SharedRandom(
-                                patchSeed .. ":metal-low-z",
-                                0.055,
-                                0.29,
-                                index
-                            )
-                    elseif zoneRoll < 0.82 then
-                        zFraction =
-                            util.SharedRandom(
-                                patchSeed .. ":metal-high-z",
-                                0.80,
-                                0.955,
-                                index
-                            )
-                    else
-                        zFraction =
-                            util.SharedRandom(
-                                patchSeed .. ":metal-mid-z",
-                                0.30,
-                                0.76,
-                                index
-                            )
-                    end
-
-                    pos = Vector(
-                        x,
-                        side < 0
-                            and mins.y
-                            or maxs.y,
-                        Lerp(
-                            zFraction,
-                            mins.z,
-                            maxs.z
-                        )
-                    )
-                    normal = Vector(
-                        0,
-                        side,
-                        0
-                    )
-
-                    -- Mid-body paint damage must not become a card across a
-                    -- window or door opening.
-                    if zoneRoll >= 0.82
-                        and MEXD.GrowthPatchNearOpening(
-                            train,
-                            pos
-                        )
-                    then
-                        continue
-                    end
-                end
-
-                if not roof
-                    and MEXD.GrowthPatchNearOpening(
-                        train,
-                        pos
-                    )
-                then
-                    continue
-                end
-
-                if kind == "rust" then
-                    width =
-                        util.SharedRandom(
-                            patchSeed .. ":rust-w",
-                            5,
-                            23,
-                            index
-                        )
-                    height =
-                        util.SharedRandom(
-                            patchSeed .. ":rust-h",
-                            3,
-                            13,
-                            index
-                        )
-                    threshold =
-                        util.SharedRandom(
-                            patchSeed .. ":rust-threshold",
-                            0.10,
-                            0.96,
-                            index
-                        )
-                else
-                    width =
-                        util.SharedRandom(
-                            patchSeed .. ":chip-w",
-                            4,
-                            17,
-                            index
-                        )
-                    height =
-                        util.SharedRandom(
-                            patchSeed .. ":chip-h",
-                            2,
-                            9,
-                            index
-                        )
-                    threshold =
-                        util.SharedRandom(
-                            patchSeed .. ":chip-threshold",
-                            0.14,
-                            0.95,
-                            index
-                        )
-                    rotation =
-                        util.SharedRandom(
-                            patchSeed .. ":chip-r",
-                            -16,
-                            16,
-                            index
-                        )
-                end
-            else
-                -- Runoff/dirt concentrates beneath roof edges and around the
-                -- lower body.  This breaks up the "uniformly tinted wagon"
-                -- look without painting over windows.
-                local zFraction =
+            elseif kind == "rust" then
+                width =
                     util.SharedRandom(
-                        patchSeed .. ":dirt-z",
-                        0.10,
-                        0.72,
+                        patchSeed .. ":rust-w",
+                        5,
+                        19,
                         index
                     )
-
-                pos = Vector(
-                    x,
-                    side < 0
-                        and mins.y
-                        or maxs.y,
-                    Lerp(
-                        zFraction,
-                        mins.z,
-                        maxs.z
+                height =
+                    util.SharedRandom(
+                        patchSeed .. ":rust-h",
+                        3,
+                        11,
+                        index
                     )
-                )
-                normal = Vector(
-                    0,
-                    side,
-                    0
-                )
-
-                if MEXD.GrowthPatchNearOpening(
-                    train,
-                    pos
-                ) then
-                    continue
-                end
-
+                threshold =
+                    util.SharedRandom(
+                        patchSeed
+                            .. ":rust-threshold",
+                        0.10,
+                        0.96,
+                        index
+                    )
+            elseif kind == "chip" then
+                width =
+                    util.SharedRandom(
+                        patchSeed .. ":chip-w",
+                        4,
+                        15,
+                        index
+                    )
+                height =
+                    util.SharedRandom(
+                        patchSeed .. ":chip-h",
+                        2,
+                        8,
+                        index
+                    )
+                threshold =
+                    util.SharedRandom(
+                        patchSeed
+                            .. ":chip-threshold",
+                        0.14,
+                        0.95,
+                        index
+                    )
+                rotation =
+                    util.SharedRandom(
+                        patchSeed .. ":chip-r",
+                        -16,
+                        16,
+                        index
+                    )
+            else
                 width =
                     util.SharedRandom(
                         patchSeed .. ":dirt-w",
-                        8,
-                        26,
+                        6,
+                        18,
                         index
                     )
                 height =
                     util.SharedRandom(
                         patchSeed .. ":dirt-h",
-                        9,
-                        31,
+                        8,
+                        25,
                         index
                     )
                 threshold =
                     util.SharedRandom(
-                        patchSeed .. ":dirt-threshold",
+                        patchSeed
+                            .. ":dirt-threshold",
                         0.05,
                         0.90,
                         index
@@ -23744,15 +24378,39 @@ if CLIENT then
                 rotation = 0
             end
 
+            -- On highly tessellated/curved surfaces keep each cluster local to
+            -- its triangle neighbourhood; this prevents a flat card bridging
+            -- across the air next to a rounded roof.
+            local localLimit =
+                math.Clamp(
+                    surfaceSize * 2.4,
+                    5,
+                    24
+                )
+            width =
+                math.min(
+                    width,
+                    localLimit
+                )
+            height =
+                math.min(
+                    height,
+                    localLimit
+                )
+
             patches[#patches + 1] = {
                 kind = kind,
                 pos = pos,
                 normal = normal,
+                tangentU = tangentU,
+                tangentV = tangentV,
                 width = width,
                 height = height,
                 rotation = rotation,
                 threshold = threshold,
                 seed = patchSeed,
+                material =
+                    tri.material,
             }
         end
 
@@ -23760,6 +24418,10 @@ if CLIENT then
             patches
         train.MEXDamageGrowthOverlayModel =
             train:GetModel()
+        train.MEXDamageGrowthOverlaySkin =
+            train:GetSkin() or 0
+        train.MEXDamageGrowthOverlayBodygroups =
+            WeatherBodygroupKey(train)
         train.MEXDamageGrowthOverlayVersion =
             WEATHER_OVERLAY_VERSION
 
@@ -23833,6 +24495,10 @@ if CLIENT then
         if not istable(patches)
             or train.MEXDamageGrowthOverlayModel
                 ~= train:GetModel()
+            or train.MEXDamageGrowthOverlaySkin
+                ~= (train:GetSkin() or 0)
+            or train.MEXDamageGrowthOverlayBodygroups
+                ~= WeatherBodygroupKey(train)
             or train.MEXDamageGrowthOverlayVersion
                 ~= WEATHER_OVERLAY_VERSION
         then
