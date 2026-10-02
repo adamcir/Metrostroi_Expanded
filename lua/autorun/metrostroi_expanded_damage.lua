@@ -20002,6 +20002,192 @@ if CLIENT then
         return requested
     end
 
+    function MEXD.UpdateClientNeglectBreakaway(
+        train
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.ClientEnts)
+        then
+            return
+        end
+
+        local level =
+            train:GetNW2Float(
+                "MEX.Damage.NeglectLevel",
+                0
+            )
+
+        if level < 0.94 then
+            train.MEXDamageNeglectClientStage = 0
+            return
+        end
+
+        local stage =
+            level >= 0.985
+            and 2
+            or 1
+
+        if (
+            train.MEXDamageNeglectClientStage
+            or 0
+        ) >= stage
+        then
+            return
+        end
+
+        train.MEXDamageNeglectClientStage =
+            stage
+
+        local panelMap =
+            train.MEXDamageV4PanelProps
+            or BuildPanelPropMap(train)
+        local state =
+            BuildDamageState(train)
+        local candidates = {}
+
+        for name, prop in pairs(
+            train.ClientEnts
+        ) do
+            if not IsValid(prop)
+                or (
+                    train.MEXDamageV4ServerDetached
+                    and train.MEXDamageV4ServerDetached[name]
+                )
+                or (
+                    prop.GetNoDraw
+                    and prop:GetNoDraw()
+                )
+            then
+                continue
+            end
+
+            local cached =
+                CacheClientProp(
+                    train,
+                    name,
+                    prop
+                )
+            local panelName =
+                panelMap[name]
+            local control =
+                IsSmallControlComponent(
+                    name,
+                    cached,
+                    panelName
+                )
+            local breakaway =
+                IsGeneralBreakawayComponent(
+                    name,
+                    cached,
+                    panelName
+                )
+            local door =
+                IsDoorComponent(
+                    name,
+                    cached
+                )
+            local glass =
+                IsGlassComponent(
+                    name,
+                    cached
+                )
+            local largest =
+                math.max(
+                    math.abs(cached.size.x),
+                    math.abs(cached.size.y),
+                    math.abs(cached.size.z)
+                )
+
+            if not door
+                and not glass
+                and (
+                    control
+                    or (
+                        stage >= 2
+                        and breakaway
+                        and largest <= 76
+                    )
+                )
+            then
+                candidates[#candidates + 1] = {
+                    name = name,
+                    prop = prop,
+                    cached = cached,
+                    panelName = panelName,
+                    control = control,
+                    score =
+                        (control and 0 or 1)
+                        + StableFraction(
+                            tostring(name)
+                        ),
+                }
+            end
+        end
+
+        table.sort(
+            candidates,
+            function(a, b)
+                return a.score < b.score
+            end
+        )
+
+        local limit =
+            stage == 1
+            and 5
+            or 14
+        local requested = 0
+
+        for _, item in ipairs(candidates) do
+            if requested >= limit then
+                break
+            end
+
+            if RequestServerDetach(
+                train,
+                item.name,
+                item.prop,
+                item.cached,
+                state,
+                item.panelName,
+                false,
+                item.control
+            ) then
+                requested =
+                    requested + 1
+                ClearClientPropRenderTransform(
+                    item.prop
+                )
+            end
+        end
+    end
+
+    hook.Add(
+        "Think",
+        "MEX.Damage.ClientNeglectBreakaway",
+        function()
+            if (
+                MEXD._nextClientNeglectBreakaway
+                or 0
+            ) > CurTime()
+            then
+                return
+            end
+
+            MEXD._nextClientNeglectBreakaway =
+                CurTime() + 0.75
+
+            for _, train in ipairs(
+                ents.GetAll()
+            ) do
+                if IsSubwayTrain(train) then
+                    MEXD.UpdateClientNeglectBreakaway(
+                        train
+                    )
+                end
+            end
+        end
+    )
+
     local function ComponentCandidateRadius(cached, isDoor, isControl)
         local s = cached.size
         local largest = math.max(math.abs(s.x), math.abs(s.y), math.abs(s.z))
@@ -25790,7 +25976,28 @@ if CLIENT then
                 nz > 0.48
                 and normal.z < -0.22
 
-            if inwardSide
+            local explicitlyInterior =
+                tri.materialProfile == "interior"
+                or tri.materialProfile == "floor"
+                or (
+                    tri.materialProfile == "generic"
+                    and math.abs(nx) < 0.94
+                    and math.abs(ny) < 0.94
+                    and nz > -0.52
+                    and nz < 0.92
+                    and (
+                        inwardSide
+                        or inwardEnd
+                        or ceiling
+                        or (
+                            normal.z > 0.42
+                            and nz < -0.08
+                        )
+                    )
+                )
+
+            if explicitlyInterior
+                or inwardSide
                 or inwardEnd
                 or ceiling
             then
@@ -25925,6 +26132,63 @@ if CLIENT then
         return patches
     end
 
+    function MEXD.GetNeglectControlCleanFactor(
+        train,
+        name,
+        prop
+    )
+        if not IsSubwayTrain(train)
+            or not IsValid(prop)
+        then
+            return 0
+        end
+
+        local panelMap =
+            train.MEXDamageV4PanelProps
+            or BuildPanelPropMap(train)
+        local cached =
+            CacheClientProp(
+                train,
+                name,
+                prop
+            )
+        local panelName =
+            panelMap
+            and panelMap[name]
+            or nil
+        local buttons =
+            GetButtonIDsForProp(
+                train,
+                panelName,
+                name,
+                cached
+            )
+
+        for _, id in ipairs(buttons or {}) do
+            local key =
+                tostring(
+                    util.CRC(
+                        string.lower(
+                            tostring(id):gsub(
+                                "^.+:",
+                                ""
+                            )
+                        )
+                    )
+                )
+
+            if train:GetNW2Bool(
+                "MEX.Damage.CleanControl."
+                    .. key,
+                false
+            ) then
+                return 1
+            end
+        end
+
+        return 0
+    end
+
     function MEXD.DrawInteriorNeglectOverlay(
         train
     )
@@ -25956,6 +26220,33 @@ if CLIENT then
             train:GetNW2Float(
                 "MEX.Damage.OvergrowthLevel",
                 0
+            )
+        local floorClean =
+            math.Clamp(
+                train:GetNW2Float(
+                    "MEX.Damage.CleanFloor",
+                    0
+                ),
+                0,
+                1
+            )
+        local interiorClean =
+            math.Clamp(
+                train:GetNW2Float(
+                    "MEX.Damage.CleanInterior",
+                    0
+                ),
+                0,
+                1
+            )
+        local panelClean =
+            math.Clamp(
+                train:GetNW2Float(
+                    "MEX.Damage.CleanPanel",
+                    0
+                ),
+                0,
+                1
             )
 
         if decay <= 0.025
@@ -26008,24 +26299,30 @@ if CLIENT then
                 train
             ) or {}
         ) do
+            local floorDecay =
+                decay * (1 - floorClean)
+            local floorDirt =
+                dirt * (1 - floorClean)
+            local floorGrowth =
+                growth * (1 - floorClean)
             local level
 
             if patch.kind == "moss" then
                 level =
                     math.Clamp(
                         math.max(
-                            growth * 0.98,
-                            decay * 0.80
+                            floorGrowth * 0.98,
+                            floorDecay * 0.80
                         )
-                            + dirt * 0.10,
+                            + floorDirt * 0.10,
                         0,
                         1
                     )
             elseif patch.kind == "mold" then
                 level =
                     math.Clamp(
-                        decay
-                            + dirt * 0.22,
+                        floorDecay
+                            + floorDirt * 0.22,
                         0,
                         1
                     )
@@ -26033,8 +26330,8 @@ if CLIENT then
                 level =
                     math.Clamp(
                         math.max(
-                            decay * 0.94,
-                            dirt * 0.86
+                            floorDecay * 0.94,
+                            floorDirt * 0.86
                         ),
                         0,
                         1
@@ -26094,26 +26391,34 @@ if CLIENT then
                 train
             ) or {}
         ) do
+            local bodyDecay =
+                decay * (1 - interiorClean)
+            local bodyDirt =
+                dirt * (1 - interiorClean)
+            local bodyGrowth =
+                growth * (1 - interiorClean)
+            local bodyCorrosion =
+                corrosion * (1 - interiorClean)
             local level
 
             if patch.kind == "rust" then
-                level = corrosion
+                level = bodyCorrosion
             elseif patch.kind == "moss" then
                 level =
                     math.Clamp(
                         math.max(
-                            decay * 0.82,
-                            growth * 0.96
+                            bodyDecay * 0.82,
+                            bodyGrowth * 0.96
                         )
-                        + dirt * 0.10,
+                        + bodyDirt * 0.10,
                         0,
                         1
                     )
             else
                 level =
                     math.Clamp(
-                        decay * 0.98
-                            + dirt * 0.22,
+                        bodyDecay * 0.98
+                            + bodyDirt * 0.22,
                         0,
                         1
                     )
@@ -26204,6 +26509,41 @@ if CLIENT then
                     profile,
                     name
                 )
+            local propClean =
+                MEXD.GetNeglectControlCleanFactor(
+                    train,
+                    name,
+                    prop
+                )
+            local surfaceClean
+
+            if profile == "panel_metal"
+                or profile == "panel"
+            then
+                surfaceClean =
+                    math.max(
+                        panelClean,
+                        propClean
+                    )
+            else
+                surfaceClean =
+                    math.max(
+                        interiorClean,
+                        propClean
+                    )
+            end
+
+            local propDecay =
+                decay * (1 - surfaceClean)
+            local propDirt =
+                dirt * (1 - surfaceClean)
+            local propGrowth =
+                growth * (1 - surfaceClean)
+            local propCorrosion =
+                corrosion * (1 - surfaceClean)
+            local propPanelCorrosion =
+                panelCorrosion
+                    * (1 - surfaceClean)
 
             for _, patch in ipairs(
                 patches or {}
@@ -26214,26 +26554,26 @@ if CLIENT then
                     level =
                         profile == "panel_metal"
                         and math.max(
-                            panelCorrosion,
-                            corrosion * 0.76
+                            propPanelCorrosion,
+                            propCorrosion * 0.76
                         )
-                        or corrosion
+                        or propCorrosion
                 elseif patch.kind == "moss" then
                     level =
                         math.Clamp(
                             math.max(
-                                growth * 0.95,
-                                decay * 0.78
+                                propGrowth * 0.95,
+                                propDecay * 0.78
                             )
-                                + dirt * 0.08,
+                                + propDirt * 0.08,
                             0,
                             1
                         )
                 elseif patch.kind == "mold" then
                     level =
                         math.Clamp(
-                            decay
-                                + dirt * 0.14,
+                            propDecay
+                                + propDirt * 0.14,
                             0,
                             1
                         )
@@ -26241,8 +26581,8 @@ if CLIENT then
                     level =
                         math.Clamp(
                             math.max(
-                                decay * 0.92,
-                                dirt * 0.72
+                                propDecay * 0.92,
+                                propDirt * 0.72
                             ),
                             0,
                             1
