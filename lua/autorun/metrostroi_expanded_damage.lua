@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.21.2"
+MEXD.Version = "0.21.3"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -13592,12 +13592,12 @@ if SERVER then
         train:SetNW2Int("MEX.Damage.FailedIndicatorCount", 0)
     end
 
-    local function SetBoolSetting(convar, enabled)
+    function MEXD.SetBoolSetting(convar, enabled)
         if not convar then return end
         convar:SetBool(enabled == true)
     end
 
-    local function SetScaleSetting(convar, value)
+    function MEXD.SetScaleSetting(convar, value)
         if not convar then return end
         convar:SetFloat(math.Clamp(tonumber(value) or 1, 0.1, 3.0))
     end
@@ -13606,10 +13606,10 @@ if SERVER then
         if IsValid(ply) and not ply:IsAdmin() then return end
 
         local enabled = tobool(args[1])
-        SetBoolSetting(damageEnabledConVar, enabled)
+        MEXD.SetBoolSetting(damageEnabledConVar, enabled)
 
         if not enabled then
-            SetBoolSetting(deformationEnabledConVar, false)
+            MEXD.SetBoolSetting(deformationEnabledConVar, false)
         end
     end)
 
@@ -13619,31 +13619,31 @@ if SERVER then
         local enabled = tobool(args[1])
 
         if enabled and not MEXD.IsPhysicalDamageEnabled() then
-            SetBoolSetting(deformationEnabledConVar, false)
+            MEXD.SetBoolSetting(deformationEnabledConVar, false)
             return
         end
 
-        SetBoolSetting(deformationEnabledConVar, enabled)
+        MEXD.SetBoolSetting(deformationEnabledConVar, enabled)
     end)
 
     concommand.Add("mex_damage_set_electrical_enabled", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetBoolSetting(electricalEnabledConVar, tobool(args[1]))
+        MEXD.SetBoolSetting(electricalEnabledConVar, tobool(args[1]))
     end)
 
     concommand.Add("mex_damage_set_physical_scale", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetScaleSetting(damageScaleConVar, args[1])
+        MEXD.SetScaleSetting(damageScaleConVar, args[1])
     end)
 
     concommand.Add("mex_damage_set_deformation_scale", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetScaleSetting(deformationScaleConVar, args[1])
+        MEXD.SetScaleSetting(deformationScaleConVar, args[1])
     end)
 
     concommand.Add("mex_damage_set_electrical_scale", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetScaleSetting(electricalScaleConVar, args[1])
+        MEXD.SetScaleSetting(electricalScaleConVar, args[1])
     end)
 
     concommand.Add("mex_damage_set_neglect_enabled", function(ply, _, args)
@@ -13658,13 +13658,13 @@ if SERVER then
 
     concommand.Add("mex_damage_set_neglect_scale", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
-        SetScaleSetting(
+        MEXD.SetScaleSetting(
             MEXD.NeglectScaleConVar,
             args[1]
         )
     end)
 
-    local function ResolveNeglectCommandTrain(ply)
+    function MEXD.ResolveNeglectCommandTrain(ply)
         if not IsValid(ply)
             or not ply:IsPlayer()
         then
@@ -13721,7 +13721,7 @@ if SERVER then
             end
 
             local train =
-                ResolveNeglectCommandTrain(
+                MEXD.ResolveNeglectCommandTrain(
                     ply
                 )
 
@@ -13757,7 +13757,7 @@ if SERVER then
         DAMAGE_ENABLED_CVAR_NAME,
         function(_, _, newValue)
             if tobool(newValue) then return end
-            SetBoolSetting(deformationEnabledConVar, false)
+            MEXD.SetBoolSetting(deformationEnabledConVar, false)
         end,
         "MEX.Damage.Settings.PhysicalEnabled"
     )
@@ -15666,7 +15666,7 @@ if SERVER then
         end)
     end)
 
-    local function GetAimedTrain(ply)
+    function MEXD.GetAimedTrain(ply)
         if not IsValid(ply) then return nil end
         local tr = ply:GetEyeTrace()
         if not tr or not IsSubwayTrain(tr.Entity) then return nil end
@@ -15681,7 +15681,7 @@ if SERVER then
             return
         end
 
-        local train = GetAimedTrain(ply)
+        local train = MEXD.GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
@@ -15720,7 +15720,7 @@ if SERVER then
             return
         end
 
-        local train = GetAimedTrain(ply)
+        local train = MEXD.GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
@@ -15764,7 +15764,7 @@ if SERVER then
     concommand.Add("mex_damage_reset", function(ply)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
-        local train = GetAimedTrain(ply)
+        local train = MEXD.GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
@@ -15777,7 +15777,7 @@ if SERVER then
     concommand.Add("mex_damage_status", function(ply)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
-        local train = GetAimedTrain(ply)
+        local train = MEXD.GetAimedTrain(ply)
         if not IsValid(train) then
             print("[Metrostroi Expanded/Damage] Aim at a Metrostroi train.")
             return
