@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.7"
+MEXD.Version = "0.22.8"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -22748,7 +22748,8 @@ if CLIENT then
         local model =
             tostring(ent:GetModel() or "")
         local cacheKey =
-            tostring(name or "")
+            "v2|"
+            .. tostring(name or "")
             .. "|"
             .. model
 
@@ -23783,8 +23784,7 @@ if CLIENT then
                 GetRenderTarget(
                     rtName,
                     size,
-                    size,
-                    false
+                    size
                 )
 
             if rt then
@@ -23939,16 +23939,13 @@ if CLIENT then
             end
         end
 
+        local oxideMaterial =
+            MEXD.InteriorDamageTextureMaterials
+            and MEXD.InteriorDamageTextureMaterials.oxidation
+
         MEXD.InteriorDamageTextureMaterialsReady =
-            IsValid(
-                MEXD.InteriorDamageTextureMaterials
-                    and MEXD.InteriorDamageTextureMaterials.oxidation
-            )
-            or (
-                MEXD.InteriorDamageTextureMaterials
-                and MEXD.InteriorDamageTextureMaterials.oxidation
-                and not MEXD.InteriorDamageTextureMaterials.oxidation:IsError()
-            )
+            oxideMaterial ~= nil
+            and not oxideMaterial:IsError()
 
         return MEXD.InteriorDamageTextureMaterialsReady
             == true
@@ -25904,9 +25901,7 @@ if CLIENT then
             0.205
         )
 
-        if maturity >= 0.62
-            and MEXD.TakeWeatherQuadBudget(1)
-        then
+        if maturity >= 0.62 then
             render.SetMaterial(material)
 
             local width =
