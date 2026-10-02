@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.9"
+MEXD.Version = "0.23.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -25874,13 +25874,22 @@ if CLIENT then
             scale = 1.10
         end
 
+        local extreme =
+            math.Clamp(
+                (maturity - 0.72) / 0.28,
+                0,
+                1
+            )
         local alpha =
             math.Clamp(
                 118
-                    + maturity * 126,
+                    + maturity * 126
+                    + extreme * 10,
                 0,
-                244
+                252
             )
+        local extremeScale =
+            1 + extreme * 0.34
 
         DrawWeatherSurfaceRect(
             worldPos,
@@ -25889,8 +25898,12 @@ if CLIENT then
             worldV,
             0,
             0,
-            (patch.width or 10) * scale,
-            (patch.height or 8) * scale,
+            (patch.width or 10)
+                * scale
+                * extremeScale,
+            (patch.height or 8)
+                * scale
+                * extremeScale,
             patch.rotation or 0,
             Color(
                 255,
@@ -25963,6 +25976,66 @@ if CLIENT then
                     math.floor(alpha * 0.58)
                 ),
                 0.214
+            )
+        end
+
+        if extreme >= 0.72 then
+            render.SetMaterial(material)
+
+            DrawWeatherSurfaceRect(
+                worldPos,
+                worldNormal,
+                worldU,
+                worldV,
+                WeatherPatchRandom(
+                    patch,
+                    "texture-heavy-u",
+                    -0.25,
+                    0.25,
+                    2
+                )
+                    * (patch.width or 10),
+                WeatherPatchRandom(
+                    patch,
+                    "texture-heavy-v",
+                    -0.25,
+                    0.25,
+                    2
+                )
+                    * (patch.height or 8),
+                (patch.width or 10)
+                    * scale
+                    * WeatherPatchRandom(
+                        patch,
+                        "texture-heavy-w",
+                        0.58,
+                        0.92,
+                        2
+                    ),
+                (patch.height or 8)
+                    * scale
+                    * WeatherPatchRandom(
+                        patch,
+                        "texture-heavy-h",
+                        0.54,
+                        0.88,
+                        2
+                    ),
+                (patch.rotation or 0)
+                    + WeatherPatchRandom(
+                        patch,
+                        "texture-heavy-r",
+                        -48,
+                        48,
+                        2
+                    ),
+                Color(
+                    255,
+                    255,
+                    255,
+                    math.floor(alpha * 0.48)
+                ),
+                0.221
             )
         end
 
@@ -26203,14 +26276,14 @@ if CLIENT then
         elseif profile == "fabric" then
             count = 6
         elseif profile == "interior" then
-            count = 12
+            count = 20
         elseif profile == "wood"
             or profile == "plastic"
             or profile == "rubber"
         then
-            count = 8
+            count = 12
         else
-            count = 6
+            count = 8
         end
 
         local patches = {}
@@ -26446,7 +26519,14 @@ if CLIENT then
                         index
                     ),
                 threshold =
-                    util.SharedRandom(
+                    index > 12
+                    and util.SharedRandom(
+                        patchSeed .. ":threshold-extreme",
+                        0.84,
+                        0.97,
+                        index
+                    )
+                    or util.SharedRandom(
                         patchSeed .. ":threshold",
                         (
                             kind == "oxidation"
@@ -26597,7 +26677,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 44 do
+        for index = 1, 68 do
             local patchSeed =
                 seed
                 .. ":"
@@ -26705,7 +26785,14 @@ if CLIENT then
                         index
                     ),
                 threshold =
-                    util.SharedRandom(
+                    index > 44
+                    and util.SharedRandom(
+                        patchSeed .. ":threshold-extreme",
+                        0.84,
+                        0.98,
+                        index
+                    )
+                    or util.SharedRandom(
                         patchSeed .. ":threshold",
                         kind == "grass"
                             and 0.28
@@ -26881,7 +26968,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 58 do
+        for index = 1, 92 do
             local patchSeed =
                 seed
                 .. ":"
@@ -27013,7 +27100,14 @@ if CLIENT then
                         index
                     ),
                 threshold =
-                    util.SharedRandom(
+                    index > 58
+                    and util.SharedRandom(
+                        patchSeed .. ":threshold-extreme",
+                        0.83,
+                        0.98,
+                        index
+                    )
+                    or util.SharedRandom(
                         patchSeed .. ":threshold",
                         kind == "vine"
                             and 0.24
@@ -27188,10 +27282,28 @@ if CLIENT then
         local quality =
             MEXD.GetWeatherRenderQuality()
 
+        local extremeNeglect =
+            math.Clamp(
+                (
+                    math.max(
+                        decay,
+                        dirt,
+                        growth,
+                        corrosion
+                    ) - 0.82
+                ) / 0.18,
+                0,
+                1
+            )
+
         MEXD._weatherDrawDetail =
             inside
             and math.Clamp(
-                quality * 0.95,
+                quality
+                    * (
+                        0.95
+                        + extremeNeglect * 0.18
+                    ),
                 0.30,
                 1.0
             )
