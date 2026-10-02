@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.2"
+MEXD.Version = "0.22.3"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -10672,6 +10672,7 @@ if SERVER then
         train.MEXDamageNeglectIdleSeconds = 0
         train.MEXDamageNeglectLastActive = CurTime()
         train.MEXDamageNextNeglectFault = nil
+        train.MEXDamageNextNeglectBreakaway = nil
         train.MEXDamageExtremeNeglectApplied = nil
         train.MEXDamageWeatherExposed = nil
         train.MEXDamageWeatherProbeAt = nil
@@ -11196,6 +11197,148 @@ if SERVER then
         return true
     end
 
+    -- Corrosion can eventually destroy the fasteners which hold small cab and
+    -- saloon components in place. The actual component selection remains
+    -- client-side because Metrostroi ClientEnts only exist there; these broad,
+    -- low-energy local impacts reuse the normal authoritative detach path.
+    function MEXD.TriggerNeglectBreakaway(
+        train,
+        level,
+        extreme
+    )
+        if not IsSubwayTrain(train)
+            or not MEXD.IsPhysicalDamageEnabled()
+        then
+            return false
+        end
+
+        level =
+            math.Clamp(
+                tonumber(level) or 0,
+                0,
+                1
+            )
+
+        if level < 0.58 then
+            return false
+        end
+
+        local now = CurTime()
+
+        if not extreme
+            and (
+                train.MEXDamageNextNeglectBreakaway
+                or 0
+            ) > now
+        then
+            return false
+        end
+
+        train.MEXDamageNextNeglectBreakaway =
+            now
+            + Lerp(
+                level,
+                95,
+                24
+            )
+            * math.Rand(0.78, 1.24)
+
+        local mins =
+            train:OBBMins()
+        local maxs =
+            train:OBBMaxs()
+
+        if not isvector(mins)
+            or not isvector(maxs)
+        then
+            return false
+        end
+
+        local span =
+            maxs - mins
+        local fractions
+
+        if extreme then
+            fractions = {
+                0.10,
+                0.29,
+                0.50,
+                0.71,
+                0.90,
+            }
+        else
+            fractions = {
+                math.Rand(0.12, 0.88),
+            }
+        end
+
+        local radius =
+            extreme
+            and 235
+            or 165
+        local power =
+            extreme
+            and (
+                0.58
+                + level * 0.30
+            )
+            or (
+                0.28
+                + level * 0.24
+            )
+        local maxDetach =
+            extreme
+            and math.Clamp(
+                math.floor(
+                    2 + level * 5
+                ),
+                3,
+                7
+            )
+            or 1
+
+        for _, fraction in ipairs(
+            fractions
+        ) do
+            local localPos =
+                Vector(
+                    mins.x
+                        + span.x * fraction,
+                    (
+                        mins.y + maxs.y
+                    ) * 0.5,
+                    mins.z
+                        + span.z
+                            * math.Rand(
+                                0.42,
+                                0.68
+                            )
+                )
+            local impulse =
+                -train:GetUp()
+                    * math.Rand(7, 15)
+                + train:GetRight()
+                    * math.Rand(-8, 8)
+                + train:GetForward()
+                    * math.Rand(-4, 4)
+
+            SendComponentImpact(
+                train,
+                train:LocalToWorld(
+                    localPos
+                ),
+                power,
+                radius,
+                maxDetach,
+                "neglect",
+                impulse,
+                false
+            )
+        end
+
+        return true
+    end
+
     function MEXD.ApplyExtremeNeglectFailures(
         train,
         level
@@ -11311,9 +11454,10 @@ if SERVER then
             )
         )
 
-        -- A large fraction of hidden relay/contact circuits seize open. Panel
-        -- switches themselves remain physical objects and can still be repaired
-        -- individually by the Train Fixer.
+        -- A large fraction of hidden relay/contact circuits seize open. At
+        -- extreme neglect some visible controls/fixtures can also lose their
+        -- corroded fasteners and become real physics debris; detached controls
+        -- are still repairable individually by the Train Fixer.
         if MEXD.IsElectricalDamageEnabled()
             and istable(train.Systems)
         then
@@ -11413,6 +11557,14 @@ if SERVER then
                 0.42 + severity * 0.48
             )
         )
+
+        if level >= 0.94 then
+            MEXD.TriggerNeglectBreakaway(
+                train,
+                level,
+                true
+            )
+        end
 
         if level >= 0.985 then
             train.MEXDamageExtremeNeglectApplied =
@@ -11646,6 +11798,28 @@ if SERVER then
                 0.8
             )
             * math.Rand(0.80, 1.35)
+
+        -- Before the wagon reaches the final "wreck" state, corrosion can
+        -- already let an occasional small mounted component fall off. The
+        -- longer cooldown in TriggerNeglectBreakaway keeps this gradual during
+        -- natural weathering instead of turning one rain shower into an
+        -- explosion of props.
+        if weatheringActive
+            and MEXD.IsPhysicalDamageEnabled()
+            and level > 0.58
+            and math.Rand(0, 1)
+                < (
+                    0.008
+                    + level * 0.030
+                )
+                    * MEXD.GetNeglectScale()
+        then
+            MEXD.TriggerNeglectBreakaway(
+                train,
+                level,
+                false
+            )
+        end
 
         -- Mechanical switchgear can rust solid even if electrical damage is
         -- disabled. At high neglect levels this gradually affects a large
@@ -23895,7 +24069,7 @@ if CLIENT then
     ---------------------------------------------------------------------------
 
     local INTERIOR_NEGLECT_MESH_CACHE = {}
-    local INTERIOR_NEGLECT_PATCH_VERSION = 4
+    local INTERIOR_NEGLECT_PATCH_VERSION = 5
 
     local function InteriorNeglectBodygroupKey(ent)
         if not IsValid(ent) then
@@ -24854,12 +25028,18 @@ if CLIENT then
         elseif maxDimension <= 20 then
             count = 2
         elseif profile == "floor" then
-            count = 8
+            count = 12
         elseif profile == "panel_metal"
             or profile == "metal"
         then
-            count = 4
+            count = 5
         elseif profile == "fabric" then
+            count = 4
+        elseif profile == "interior"
+            or profile == "wood"
+            or profile == "plastic"
+            or profile == "rubber"
+        then
             count = 3
         else
             count = 2
@@ -24919,25 +25099,41 @@ if CLIENT then
                     or materialProfile
                         == "generic"
 
+                if rustable
+                    and kindRoll < 0.50
+                then
+                    kind = "rust"
+                elseif kindRoll < 0.72 then
+                    kind = "moss"
+                else
+                    kind = "dirt"
+                end
+            elseif profile == "floor" then
+                if kindRoll < 0.42 then
+                    kind = "moss"
+                elseif kindRoll < 0.74 then
+                    kind = "mold"
+                else
+                    kind = "dirt"
+                end
+            elseif profile == "fabric" then
                 kind =
-                    rustable
-                    and kindRoll < 0.58
-                    and "rust"
-                    or "dirt"
-            elseif profile == "floor"
-                or profile == "fabric"
-            then
-                kind =
-                    kindRoll < (
-                        profile == "floor"
-                        and 0.46
-                        or 0.38
-                    )
+                    kindRoll < 0.56
                     and "mold"
                     or "dirt"
+            elseif profile == "interior"
+                or profile == "wood"
+            then
+                if kindRoll < 0.36 then
+                    kind = "moss"
+                elseif kindRoll < 0.66 then
+                    kind = "mold"
+                else
+                    kind = "dirt"
+                end
             else
                 kind =
-                    kindRoll < 0.18
+                    kindRoll < 0.22
                     and "mold"
                     or "dirt"
             end
@@ -24953,14 +25149,14 @@ if CLIENT then
             local maximumSize =
                 profile == "floor"
                 and math.Clamp(
-                    surfaceSize * 0.95,
-                    1.8,
-                    18
+                    surfaceSize * 1.10,
+                    2.2,
+                    22
                 )
                 or math.Clamp(
-                    surfaceSize * 0.72,
-                    0.28,
-                    4.8
+                    surfaceSize * 0.78,
+                    0.32,
+                    5.6
                 )
             local minimumSize =
                 profile == "floor"
@@ -25014,8 +25210,12 @@ if CLIENT then
                         patchSeed .. ":threshold",
                         kind == "rust"
                             and 0.16
-                            or 0.08,
-                        0.88,
+                            or (
+                                kind == "moss"
+                                and 0.12
+                                or 0.08
+                            ),
+                        0.84,
                         index
                     ),
                 material =
@@ -25142,7 +25342,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 20 do
+        for index = 1, 28 do
             local patchSeed =
                 seed
                 .. ":"
@@ -25186,15 +25386,22 @@ if CLIENT then
                     5.0,
                     40
                 )
-            local kind =
+            local kindRoll =
                 util.SharedRandom(
                     patchSeed .. ":kind",
                     0,
                     1,
                     index
-                ) < 0.48
-                and "mold"
-                or "dirt"
+                )
+            local kind
+
+            if kindRoll < 0.38 then
+                kind = "moss"
+            elseif kindRoll < 0.72 then
+                kind = "mold"
+            else
+                kind = "dirt"
+            end
 
             patches[#patches + 1] = {
                 kind = kind,
@@ -25229,8 +25436,8 @@ if CLIENT then
                 threshold =
                     util.SharedRandom(
                         patchSeed .. ":threshold",
-                        0.03,
-                        0.70,
+                        0.02,
+                        0.66,
                         index
                     ),
             }
@@ -25374,7 +25581,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 18 do
+        for index = 1, 32 do
             local patchSeed =
                 seed
                 .. ":"
@@ -25414,19 +25621,19 @@ if CLIENT then
             local rustable =
                 tri.materialProfile
                     == "metal"
-            local kind =
-                rustable
-                    and roll > 0.88
-                    and "rust"
-                    or (
-                        roll < 0.30
-                        and "moss"
-                        or (
-                            roll < 0.57
-                            and "mold"
-                            or "grime"
-                        )
-                    )
+            local kind
+
+            if rustable
+                and roll > 0.88
+            then
+                kind = "rust"
+            elseif roll < 0.45 then
+                kind = "moss"
+            elseif roll < 0.74 then
+                kind = "mold"
+            else
+                kind = "grime"
+            end
             local surfaceSize =
                 math.sqrt(
                     math.max(
@@ -25565,28 +25772,46 @@ if CLIENT then
                 0.52
             )
 
-        -- Baked passenger floor: large, low-count dark grime/mold stains.
+        -- Baked passenger floor: low-count patches anchored to the real floor
+        -- mesh. Very neglected cars also grow damp moss between seams and at
+        -- repeatedly wet areas instead of looking like a clean untouched floor.
         for _, patch in ipairs(
             BuildMainFloorNeglectPatches(
                 train
             ) or {}
         ) do
-            local level =
-                patch.kind == "mold"
-                and math.Clamp(
-                    decay
-                        + dirt * 0.22,
-                    0,
-                    1
-                )
-                or math.Clamp(
-                    math.max(
-                        decay * 0.94,
-                        dirt * 0.86
-                    ),
-                    0,
-                    1
-                )
+            local level
+
+            if patch.kind == "moss" then
+                level =
+                    math.Clamp(
+                        math.max(
+                            growth * 0.98,
+                            decay * 0.80
+                        )
+                            + dirt * 0.10,
+                        0,
+                        1
+                    )
+            elseif patch.kind == "mold" then
+                level =
+                    math.Clamp(
+                        decay
+                            + dirt * 0.22,
+                        0,
+                        1
+                    )
+            else
+                level =
+                    math.Clamp(
+                        math.max(
+                            decay * 0.94,
+                            dirt * 0.86
+                        ),
+                        0,
+                        1
+                    )
+            end
             local threshold =
                 tonumber(
                     patch.threshold
@@ -25612,13 +25837,23 @@ if CLIENT then
                 train,
                 patch,
                 maturity,
-                patch.kind == "mold"
-                    and WEATHER_COLORS.mold
-                    or WEATHER_COLORS.grime,
-                3,
-                patch.kind == "mold"
-                    and 0.78
-                    or 0.74,
+                patch.kind == "moss"
+                    and WEATHER_COLORS.moss
+                    or (
+                        patch.kind == "mold"
+                        and WEATHER_COLORS.mold
+                        or WEATHER_COLORS.grime
+                    ),
+                patch.kind == "moss"
+                    and 4
+                    or 3,
+                patch.kind == "moss"
+                    and 0.82
+                    or (
+                        patch.kind == "mold"
+                        and 0.78
+                        or 0.74
+                    ),
                 false
             )
         end
@@ -25756,6 +25991,17 @@ if CLIENT then
                             corrosion * 0.76
                         )
                         or corrosion
+                elseif patch.kind == "moss" then
+                    level =
+                        math.Clamp(
+                            math.max(
+                                growth * 0.95,
+                                decay * 0.78
+                            )
+                                + dirt * 0.08,
+                            0,
+                            1
+                        )
                 elseif patch.kind == "mold" then
                     level =
                         math.Clamp(
@@ -25804,16 +26050,28 @@ if CLIENT then
                     patch.kind == "rust"
                         and WEATHER_COLORS.rust
                         or (
-                            patch.kind == "mold"
-                            and WEATHER_COLORS.mold
-                            or WEATHER_COLORS.grime
+                            patch.kind == "moss"
+                            and WEATHER_COLORS.moss
+                            or (
+                                patch.kind == "mold"
+                                and WEATHER_COLORS.mold
+                                or WEATHER_COLORS.grime
+                            )
                         ),
                     profile == "floor"
-                        and 3
+                        and (
+                            patch.kind == "moss"
+                            and 4
+                            or 3
+                        )
                         or 2,
                     patch.kind == "rust"
                         and 0.62
-                        or 0.58,
+                        or (
+                            patch.kind == "moss"
+                            and 0.76
+                            or 0.58
+                        ),
                     false
                 )
             end
