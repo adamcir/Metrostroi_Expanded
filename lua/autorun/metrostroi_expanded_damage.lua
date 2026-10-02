@@ -6856,6 +6856,47 @@ if SERVER then
         end
     end
 
+    local function RestoreElectricalGhostChatter(
+        train
+    )
+        if not IsSubwayTrain(train)
+            or not istable(
+                train.MEXDamageElectricalGhostChatter
+            )
+        then
+            return
+        end
+
+        for systemName, data in pairs(
+            train.MEXDamageElectricalGhostChatter
+        ) do
+            local system =
+                train[systemName]
+
+            if istable(system)
+                and istable(data)
+                and isfunction(data.trigger)
+            then
+                pcall(
+                    data.trigger,
+                    system,
+                    "Set",
+                    tonumber(data.originalTarget)
+                        or tonumber(
+                            data.originalValue
+                        )
+                        or 0
+                )
+            end
+        end
+
+        train.MEXDamageElectricalGhostChatter = {}
+        train:SetNW2String(
+            "MEX.Damage.GhostRelay",
+            ""
+        )
+    end
+
     local function StartElectricalGhostChatter(
         train,
         intensity
@@ -7521,10 +7562,8 @@ if SERVER then
             train.MEXDamageImpactArcSeverity = 0
             train.MEXDamageNextImpactArc = nil
         train.MEXDamageNextElectricalGhost = nil
-        train.MEXDamageElectricalGhostChatter = {}
-        train:SetNW2String(
-            "MEX.Damage.GhostRelay",
-            ""
+        RestoreElectricalGhostChatter(
+            train
         )
             train:SetNW2Float(
                 "MEX.Damage.ThirdRailFloodSeconds",
@@ -13395,10 +13434,8 @@ if SERVER then
         train.MEXDamageImpactArcSeverity = 0
         train.MEXDamageNextImpactArc = nil
         train.MEXDamageNextElectricalGhost = nil
-        train.MEXDamageElectricalGhostChatter = {}
-        train:SetNW2String(
-            "MEX.Damage.GhostRelay",
-            ""
+        RestoreElectricalGhostChatter(
+            train
         )
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
@@ -13491,10 +13528,8 @@ if SERVER then
         train.MEXDamageImpactArcSeverity = 0
         train.MEXDamageNextImpactArc = nil
         train.MEXDamageNextElectricalGhost = nil
-        train.MEXDamageElectricalGhostChatter = {}
-        train:SetNW2String(
-            "MEX.Damage.GhostRelay",
-            ""
+        RestoreElectricalGhostChatter(
+            train
         )
 
         train:SetNW2Float("MEX.Damage.electrical", 0)
