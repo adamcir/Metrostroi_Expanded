@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.0"
+MEXD.Version = "0.22.1"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -23895,7 +23895,7 @@ if CLIENT then
     ---------------------------------------------------------------------------
 
     local INTERIOR_NEGLECT_MESH_CACHE = {}
-    local INTERIOR_NEGLECT_PATCH_VERSION = 2
+    local INTERIOR_NEGLECT_PATCH_VERSION = 3
 
     local function InteriorNeglectBodygroupKey(ent)
         if not IsValid(ent) then
