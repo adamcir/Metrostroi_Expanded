@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.4"
+MEXD.Version = "0.23.5"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -24305,75 +24305,180 @@ if CLIENT then
         end
     )
 
-    MEXD.GModRustOverlayMaterials = {
-        CreateMaterial(
-            "mex_damage_gmod_rust_tram_v1",
-            "UnlitGeneric",
-            {
-                ["$basetexture"] =
-                    "models/props_wasteland/metal_tram001a",
-                ["$vertexcolor"] = "1",
-                ["$vertexalpha"] = "1",
-                ["$translucent"] = "1",
-                ["$nocull"] = "1",
-            }
-        ),
-        CreateMaterial(
-            "mex_damage_gmod_rust_wall_v1",
-            "UnlitGeneric",
-            {
-                ["$basetexture"] =
-                    "models/props_debris/metalwall001a",
-                ["$vertexcolor"] = "1",
-                ["$vertexalpha"] = "1",
-                ["$translucent"] = "1",
-                ["$nocull"] = "1",
-            }
-        ),
-        CreateMaterial(
-            "mex_damage_gmod_rust_ladder_v1",
-            "UnlitGeneric",
-            {
-                ["$basetexture"] =
-                    "models/props_c17/metalladder003",
-                ["$vertexcolor"] = "1",
-                ["$vertexalpha"] = "1",
-                ["$translucent"] = "1",
-                ["$nocull"] = "1",
-            }
-        ),
-    }
-
+    MEXD.GModRustOverlayMaterials =
+        MEXD.GModRustOverlayMaterials
+        or {}
     MEXD.GModDirtOverlayMaterial =
-        CreateMaterial(
-            "mex_damage_gmod_dirt_v1",
-            "UnlitGeneric",
-            {
-                ["$basetexture"] =
-                    "models/props_wasteland/dirtwall001a",
-                ["$vertexcolor"] = "1",
-                ["$vertexalpha"] = "1",
-                ["$translucent"] = "1",
-                ["$nocull"] = "1",
-            }
-        )
+        MEXD.GModDirtOverlayMaterial
+        or nil
+    MEXD.GModDamageOverlayMaterialsReady =
+        false
+
+    function MEXD.ResolveSourceBaseTexture(
+        materialPath
+    )
+        if not isstring(materialPath)
+            or materialPath == ""
+        then
+            return nil
+        end
+
+        local source =
+            Material(materialPath)
+
+        if not source
+            or source:IsError()
+        then
+            return nil
+        end
+
+        local texture =
+            source:GetTexture(
+                "$basetexture"
+            )
+
+        if not texture then
+            return nil
+        end
+
+        local textureName =
+            tostring(
+                texture:GetName() or ""
+            )
+        local lower =
+            string.lower(textureName)
+
+        if textureName == ""
+            or string.find(
+                lower,
+                "error",
+                1,
+                true
+            )
+            or string.find(
+                lower,
+                "debugempty",
+                1,
+                true
+            )
+        then
+            return nil
+        end
+
+        return textureName
+    end
+
+    function MEXD.EnsureGModDamageOverlayMaterials()
+        if MEXD.GModDamageOverlayMaterialsReady
+        then
+            return true
+        end
+
+        MEXD.GModRustOverlayMaterials = {}
+
+        local rustCandidates = {
+            "models/props_wasteland/metal_tram001a",
+            "models/props_debris/metalwall001a",
+            "models/props_c17/furnituremetal001a",
+            "models/props_c17/metalladder003",
+            "models/props_wasteland/prison_celldoor001b",
+        }
+
+        for index, sourcePath in ipairs(
+            rustCandidates
+        ) do
+            local texture =
+                MEXD.ResolveSourceBaseTexture(
+                    sourcePath
+                )
+
+            if texture then
+                local material =
+                    CreateMaterial(
+                        "mex_damage_safe_rust_"
+                            .. tostring(index)
+                            .. "_v2",
+                        "UnlitGeneric",
+                        {
+                            ["$basetexture"] =
+                                texture,
+                            ["$vertexcolor"] = "1",
+                            ["$vertexalpha"] = "1",
+                            ["$translucent"] = "1",
+                            ["$nocull"] = "1",
+                        }
+                    )
+
+                if material
+                    and not material:IsError()
+                then
+                    MEXD.GModRustOverlayMaterials[
+                        #MEXD.GModRustOverlayMaterials
+                            + 1
+                    ] = material
+                end
+            end
+        end
+
+        local dirtCandidates = {
+            "models/props_wasteland/dirtwall001a",
+            "nature/dirtfloor001a",
+            "nature/blenddirtgrass001a",
+            "nature/blenddirtgrass006a",
+        }
+
+        MEXD.GModDirtOverlayMaterial = nil
+
+        for index, sourcePath in ipairs(
+            dirtCandidates
+        ) do
+            local texture =
+                MEXD.ResolveSourceBaseTexture(
+                    sourcePath
+                )
+
+            if texture then
+                local material =
+                    CreateMaterial(
+                        "mex_damage_safe_dirt_"
+                            .. tostring(index)
+                            .. "_v2",
+                        "UnlitGeneric",
+                        {
+                            ["$basetexture"] =
+                                texture,
+                            ["$vertexcolor"] = "1",
+                            ["$vertexalpha"] = "1",
+                            ["$translucent"] = "1",
+                            ["$nocull"] = "1",
+                        }
+                    )
+
+                if material
+                    and not material:IsError()
+                then
+                    MEXD.GModDirtOverlayMaterial =
+                        material
+                    break
+                end
+            end
+        end
+
+        MEXD.GModDamageOverlayMaterialsReady =
+            #MEXD.GModRustOverlayMaterials > 0
+            or MEXD.GModDirtOverlayMaterial ~= nil
+
+        return MEXD.GModDamageOverlayMaterialsReady
+    end
 
     function MEXD.GetGModRustOverlayMaterial(
         patch
     )
-        local valid = {}
+        MEXD.EnsureGModDamageOverlayMaterials()
 
-        for _, material in ipairs(
+        local valid =
             MEXD.GModRustOverlayMaterials
             or {}
-        ) do
-            if material
-                and not material:IsError()
-            then
-                valid[#valid + 1] =
-                    material
-            end
-        end
 
         if #valid <= 0 then
             return nil
@@ -24401,6 +24506,12 @@ if CLIENT then
             )
 
         return valid[index]
+    end
+
+    function MEXD.GetGModDirtOverlayMaterial()
+        MEXD.EnsureGModDamageOverlayMaterials()
+
+        return MEXD.GModDirtOverlayMaterial
     end
 
     -- Keep the legacy fields available for any external code that referenced
@@ -25397,7 +25508,7 @@ if CLIENT then
     ---------------------------------------------------------------------------
 
     local INTERIOR_NEGLECT_MESH_CACHE = {}
-    local INTERIOR_NEGLECT_PATCH_VERSION = 6
+    local INTERIOR_NEGLECT_PATCH_VERSION = 7
 
     local function InteriorNeglectBodygroupKey(ent)
         if not IsValid(ent) then
@@ -26274,13 +26385,31 @@ if CLIENT then
                 )
         elseif kind == "dirt" then
             material =
-                MEXD.GModDirtOverlayMaterial
+                MEXD.GetGModDirtOverlayMaterial()
         else
             material =
                 MEXD.InteriorDamageTextureMaterials
                 and MEXD.InteriorDamageTextureMaterials[
                     tostring(kind or "")
                 ]
+        end
+
+        if not material
+            or material:IsError()
+        then
+            if kind == "oxidation"
+                or kind == "rust"
+            then
+                MEXD.EnsureInteriorDamageTextureMaterials()
+                material =
+                    MEXD.InteriorDamageTextureMaterials
+                    and MEXD.InteriorDamageTextureMaterials.oxidation
+            elseif kind == "dirt" then
+                MEXD.EnsureInteriorDamageTextureMaterials()
+                material =
+                    MEXD.InteriorDamageTextureMaterials
+                    and MEXD.InteriorDamageTextureMaterials.stain
+            end
         end
 
         if not material
@@ -26732,10 +26861,10 @@ if CLIENT then
             count = 3
         elseif profile == "floor" then
             count = 18
-        elseif profile == "panel_metal"
-            or profile == "metal"
-        then
-            count = 8
+        elseif profile == "panel_metal" then
+            count = 14
+        elseif profile == "metal" then
+            count = 9
         elseif profile == "fabric" then
             count = 6
         elseif profile == "interior" then
@@ -26925,13 +27054,20 @@ if CLIENT then
                     )
             elseif profile == "panel_metal"
                 or profile == "panel"
-                or profile == "metal"
             then
                 maximumSize =
                     math.Clamp(
-                        surfaceSize * 1.15,
-                        0.42,
-                        9.5
+                        surfaceSize * 1.75,
+                        0.85,
+                        16
+                    )
+            elseif profile == "metal"
+            then
+                maximumSize =
+                    math.Clamp(
+                        surfaceSize * 1.28,
+                        0.50,
+                        11
                     )
             else
                 maximumSize =
@@ -27667,6 +27803,250 @@ if CLIENT then
         return 0
     end
 
+    function MEXD.DrawButtonMapCorrosion(
+        train,
+        corrosion,
+        cleanFactor
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.ButtonMap)
+        then
+            return
+        end
+
+        local level =
+            math.Clamp(
+                tonumber(corrosion) or 0,
+                0,
+                1
+            )
+            * (
+                1
+                - math.Clamp(
+                    tonumber(cleanFactor) or 0,
+                    0,
+                    1
+                )
+            )
+
+        if level < 0.16 then
+            return
+        end
+
+        local mins =
+            train:OBBMins()
+        local maxs =
+            train:OBBMaxs()
+
+        if not isvector(mins)
+            or not isvector(maxs)
+        then
+            return
+        end
+
+        local center =
+            (mins + maxs) * 0.5
+        local halfLength =
+            math.max(
+                math.abs(maxs.x - mins.x)
+                    * 0.5,
+                1
+            )
+
+        for panelName, panel in pairs(
+            train.ButtonMap
+        ) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not isvector(panel.pos)
+                or not isangle(panel.ang)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            local width =
+                tonumber(panel.width) or 0
+            local height =
+                tonumber(panel.height) or 0
+            local scale =
+                tonumber(panel.scale) or 0
+
+            if width <= 0
+                or height <= 0
+                or scale <= 0
+            then
+                continue
+            end
+
+            local physicalWidth =
+                width * scale
+            local physicalHeight =
+                height * scale
+
+            if physicalWidth < 3
+                or physicalHeight < 2
+                or physicalWidth > 110
+                or physicalHeight > 110
+            then
+                continue
+            end
+
+            -- Restrict the generic surface overlay to cab-end ButtonMaps.
+            -- Passenger-door/touch maps spread down the whole vehicle and are
+            -- interaction planes rather than dashboard metal.
+            if math.abs(
+                panel.pos.x - center.x
+            ) < halfLength * 0.30
+            then
+                continue
+            end
+
+            local buttonCount = 0
+
+            for _, button in pairs(
+                panel.buttons
+            ) do
+                if istable(button)
+                    and isstring(button.ID)
+                    and button.ID ~= ""
+                    and string.sub(button.ID, 1, 1)
+                        ~= "!"
+                then
+                    buttonCount =
+                        buttonCount + 1
+                end
+            end
+
+            if buttonCount <= 0 then
+                continue
+            end
+
+            local normal =
+                panel.ang:Up()
+            local tangentU =
+                panel.ang:Forward()
+            local tangentV =
+                -panel.ang:Right()
+            local panelCenter =
+                panel.pos
+                + tangentU
+                    * physicalWidth
+                    * 0.5
+                + tangentV
+                    * physicalHeight
+                    * 0.5
+            local patchCount =
+                math.Clamp(
+                    math.floor(
+                        1 + level * 7
+                    ),
+                    1,
+                    8
+                )
+
+            for index = 1, patchCount do
+                local seed =
+                    "MEXButtonMapRust:"
+                    .. tostring(
+                        train:EntIndex()
+                    )
+                    .. ":"
+                    .. tostring(panelName)
+                    .. ":"
+                    .. tostring(index)
+                local patchWidth =
+                    physicalWidth
+                    * util.SharedRandom(
+                        seed .. ":w",
+                        0.16,
+                        0.46,
+                        index
+                    )
+                local patchHeight =
+                    physicalHeight
+                    * util.SharedRandom(
+                        seed .. ":h",
+                        0.18,
+                        0.52,
+                        index
+                    )
+                local availableU =
+                    math.max(
+                        physicalWidth
+                            - patchWidth,
+                        0
+                    )
+                local availableV =
+                    math.max(
+                        physicalHeight
+                            - patchHeight,
+                        0
+                    )
+                local offsetU =
+                    util.SharedRandom(
+                        seed .. ":u",
+                        -availableU * 0.5,
+                        availableU * 0.5,
+                        index
+                    )
+                local offsetV =
+                    util.SharedRandom(
+                        seed .. ":v",
+                        -availableV * 0.5,
+                        availableV * 0.5,
+                        index
+                    )
+                local threshold =
+                    util.SharedRandom(
+                        seed .. ":threshold",
+                        0.10,
+                        0.72,
+                        index
+                    )
+
+                if level < threshold then
+                    continue
+                end
+
+                MEXD.DrawTexturedInteriorPatch(
+                    train,
+                    {
+                        kind = "oxidation",
+                        seed = seed,
+                        pos =
+                            panelCenter
+                            + tangentU * offsetU
+                            + tangentV * offsetV,
+                        normal = normal,
+                        tangentU = tangentU,
+                        tangentV = tangentV,
+                        width = patchWidth,
+                        height = patchHeight,
+                        rotation =
+                            util.SharedRandom(
+                                seed .. ":r",
+                                -28,
+                                28,
+                                index
+                            ),
+                    },
+                    math.Clamp(
+                        (
+                            level - threshold
+                        ) / math.max(
+                            1 - threshold,
+                            0.18
+                        ),
+                        0,
+                        1
+                    ),
+                    "oxidation"
+                )
+            end
+        end
+    end
+
     function MEXD.DrawInteriorNeglectOverlay(
         train
     )
@@ -27977,10 +28357,22 @@ if CLIENT then
             )
         end
 
+        MEXD.DrawButtonMapCorrosion(
+            train,
+            math.max(
+                corrosion,
+                panelCorrosion
+            ),
+            panelClean
+        )
+
         local propDistanceSqr =
             inside
             and 850 * 850
             or 520 * 520
+        local panelPropMap =
+            train.MEXDamageV4PanelProps
+            or BuildPanelPropMap(train)
 
         for name, prop in pairs(
             train.ClientEnts or {}
@@ -28002,6 +28394,20 @@ if CLIENT then
                     name,
                     prop
                 )
+            local belongsToPanel =
+                panelPropMap
+                and panelPropMap[name]
+                    ~= nil
+
+            if belongsToPanel
+                and profile ~= "glass"
+                and profile ~= "light_lens"
+                and profile ~= "floor"
+                and profile ~= "fabric"
+                and profile ~= "rubber"
+            then
+                profile = "panel_metal"
+            end
 
             if profile == "glass"
                 or profile == "light_lens"
