@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.4"
+MEXD.Version = "0.22.5"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -23672,6 +23672,20 @@ if CLIENT then
             Color(55, 46, 38, 116),
             Color(27, 29, 28, 124),
         },
+        stain = {
+            Color(24, 29, 24, 176),
+            Color(38, 39, 30, 166),
+            Color(47, 43, 31, 154),
+            Color(29, 34, 28, 170),
+            Color(57, 49, 35, 142),
+        },
+        oxidation = {
+            Color(72, 41, 27, 188),
+            Color(96, 49, 25, 194),
+            Color(122, 60, 28, 182),
+            Color(84, 55, 37, 178),
+            Color(61, 43, 34, 184),
+        },
     }
 
     local function WeatherPatchRandom(
@@ -24599,7 +24613,7 @@ if CLIENT then
     ---------------------------------------------------------------------------
 
     local INTERIOR_NEGLECT_MESH_CACHE = {}
-    local INTERIOR_NEGLECT_PATCH_VERSION = 5
+    local INTERIOR_NEGLECT_PATCH_VERSION = 6
 
     local function InteriorNeglectBodygroupKey(ent)
         if not IsValid(ent) then
@@ -25061,7 +25075,9 @@ if CLIENT then
         end
 
         if profile == "floor" then
-            return tri.normal.z > 0.28
+            return math.abs(
+                tri.normal.z
+            ) > 0.28
                 and materialProfile
                     ~= "fabric"
         end
@@ -25437,6 +25453,97 @@ if CLIENT then
                     )
                 )
             end
+        end
+    end
+
+    function MEXD.DrawInteriorDamagePatch(
+        ent,
+        patch,
+        maturity,
+        drawVegetation
+    )
+        if not IsValid(ent)
+            or not istable(patch)
+        then
+            return
+        end
+
+        local kind =
+            tostring(
+                patch.kind or "stain"
+            )
+
+        if kind == "oxidation"
+            or kind == "rust"
+        then
+            DrawRustPatch(
+                ent,
+                patch,
+                maturity
+            )
+
+            DrawWeatherCluster(
+                ent,
+                patch,
+                maturity,
+                WEATHER_COLORS.oxidation,
+                7,
+                0.92,
+                false
+            )
+        elseif kind == "grass" then
+            DrawGrassTuft(
+                ent,
+                patch,
+                maturity,
+                drawVegetation == true
+            )
+        elseif kind == "vine" then
+            DrawVinePatch(
+                ent,
+                patch,
+                maturity
+            )
+        elseif kind == "moss" then
+            DrawWeatherCluster(
+                ent,
+                patch,
+                maturity,
+                WEATHER_COLORS.moss,
+                8,
+                0.98,
+                false
+            )
+        elseif kind == "mold" then
+            DrawWeatherCluster(
+                ent,
+                patch,
+                maturity,
+                WEATHER_COLORS.mold,
+                7,
+                0.92,
+                false
+            )
+        elseif kind == "stain" then
+            DrawWeatherCluster(
+                ent,
+                patch,
+                maturity,
+                WEATHER_COLORS.stain,
+                8,
+                0.92,
+                false
+            )
+        else
+            DrawWeatherCluster(
+                ent,
+                patch,
+                maturity,
+                WEATHER_COLORS.grime,
+                6,
+                0.82,
+                false
+            )
         end
     end
 
