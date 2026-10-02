@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.3"
+MEXD.Version = "0.22.4"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -10674,6 +10674,24 @@ if SERVER then
         train.MEXDamageNextNeglectFault = nil
         train.MEXDamageNextNeglectBreakaway = nil
         train.MEXDamageExtremeNeglectApplied = nil
+        train.MEXDamageNeglectCleanedControls =
+            train.MEXDamageNeglectCleanedControls
+            or {}
+
+        for key in pairs(
+            train.MEXDamageNeglectCleanedControls
+        ) do
+            train:SetNW2Bool(
+                "MEX.Damage.CleanControl."
+                    .. tostring(key),
+                false
+            )
+        end
+
+        train.MEXDamageNeglectCleanedControls = {}
+        train:SetNW2Float("MEX.Damage.CleanFloor", 0)
+        train:SetNW2Float("MEX.Damage.CleanInterior", 0)
+        train:SetNW2Float("MEX.Damage.CleanPanel", 0)
         train.MEXDamageWeatherExposed = nil
         train.MEXDamageWeatherProbeAt = nil
 
@@ -10733,6 +10751,26 @@ if SERVER then
         train.MEXDamageNeglectLastActive =
             CurTime()
         train.MEXDamageNextNeglectFault = nil
+        train.MEXDamageNextNeglectBreakaway = nil
+
+        train.MEXDamageNeglectCleanedControls =
+            train.MEXDamageNeglectCleanedControls
+            or {}
+
+        for key in pairs(
+            train.MEXDamageNeglectCleanedControls
+        ) do
+            train:SetNW2Bool(
+                "MEX.Damage.CleanControl."
+                    .. tostring(key),
+                false
+            )
+        end
+
+        train.MEXDamageNeglectCleanedControls = {}
+        train:SetNW2Float("MEX.Damage.CleanFloor", 0)
+        train:SetNW2Float("MEX.Damage.CleanInterior", 0)
+        train:SetNW2Float("MEX.Damage.CleanPanel", 0)
 
         train:SetNW2Float(
             "MEX.Damage.NeglectLevel",
@@ -11074,6 +11112,24 @@ if SERVER then
             item.key,
             item.id
         )
+
+        local cleanKey =
+            tostring(
+                util.CRC(
+                    string.lower(
+                        tostring(item.id)
+                    )
+                )
+            )
+        train.MEXDamageNeglectCleanedControls =
+            train.MEXDamageNeglectCleanedControls
+            or {}
+        train.MEXDamageNeglectCleanedControls[cleanKey] = nil
+        train:SetNW2Bool(
+            "MEX.Damage.CleanControl." .. cleanKey,
+            false
+        )
+
         BlockWearControl(
             train,
             item.key
@@ -14877,6 +14933,88 @@ if SERVER then
         )
     end
 
+    function MEXD.CleanNeglectControl(
+        train,
+        buttonID
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(buttonID)
+            or buttonID == ""
+        then
+            return false
+        end
+
+        if math.max(
+            train:GetNW2Float("MEX.Damage.NeglectLevel", 0),
+            train:GetNW2Float("MEX.Damage.PanelCorrosion", 0)
+        ) <= 0.001
+        then
+            return false
+        end
+
+        local key =
+            tostring(
+                util.CRC(
+                    string.lower(
+                        buttonID:gsub("^.+:", "")
+                    )
+                )
+            )
+
+        train.MEXDamageNeglectCleanedControls =
+            train.MEXDamageNeglectCleanedControls
+            or {}
+
+        if train.MEXDamageNeglectCleanedControls[key] then
+            return false
+        end
+
+        train.MEXDamageNeglectCleanedControls[key] = true
+        train:SetNW2Bool(
+            "MEX.Damage.CleanControl." .. key,
+            true
+        )
+
+        return true
+    end
+
+    function MEXD.CleanNeglectSurface(
+        train,
+        surface
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(surface)
+        then
+            return false
+        end
+
+        if math.max(
+            train:GetNW2Float("MEX.Damage.NeglectLevel", 0),
+            train:GetNW2Float("MEX.Damage.DirtLevel", 0),
+            train:GetNW2Float("MEX.Damage.InteriorDecay", 0),
+            train:GetNW2Float("MEX.Damage.CorrosionLevel", 0)
+        ) <= 0.001
+        then
+            return false
+        end
+
+        local key =
+            surface == "floor"
+            and "MEX.Damage.CleanFloor"
+            or (
+                surface == "panel"
+                and "MEX.Damage.CleanPanel"
+                or "MEX.Damage.CleanInterior"
+            )
+
+        if train:GetNW2Float(key, 0) >= 0.999 then
+            return false
+        end
+
+        train:SetNW2Float(key, 1)
+        return true
+    end
+
     function MEXD.RepairServiceTarget(
         train,
         target
@@ -14890,6 +15028,7 @@ if SERVER then
         if string.sub(target, 1, 8) == "control:" then
             local button =
                 string.sub(target, 9)
+            local repaired = false
 
             if istable(train.MEXDamageDetachedServer) then
                 for name, data in pairs(
@@ -14905,19 +15044,31 @@ if SERVER then
                             ""
                         ) == button
                         then
-                            return MEXD.RepairDetachedComponent(
-                                train,
-                                tostring(name)
-                            )
+                            repaired =
+                                MEXD.RepairDetachedComponent(
+                                    train,
+                                    tostring(name)
+                                )
+                                or repaired
                         end
                     end
                 end
             end
 
-            return MEXD.RepairWearControl(
-                train,
-                button
-            )
+            repaired =
+                MEXD.RepairWearControl(
+                    train,
+                    button
+                )
+                or repaired
+            repaired =
+                MEXD.CleanNeglectControl(
+                    train,
+                    button
+                )
+                or repaired
+
+            return repaired
         elseif string.sub(target, 1, 6) == "light:" then
             return MEXD.RepairWearLight(
                 train,
@@ -14974,7 +15125,23 @@ if SERVER then
         elseif target == "battery" then
             return RepairBatteryOnly(train)
         elseif target == "grkv" then
-            return RepairGRKVOnly(train)
+            local repaired = RepairGRKVOnly(train)
+            return MEXD.CleanNeglectSurface(
+                train,
+                "panel"
+            ) or repaired
+        elseif target == "surface:floor" then
+            return MEXD.CleanNeglectSurface(
+                train,
+                "floor"
+            )
+        elseif string.sub(target, 1, 17)
+            == "surface:interior"
+        then
+            return MEXD.CleanNeglectSurface(
+                train,
+                "interior"
+            )
         elseif target == "front_bogey" then
             if train:GetNW2Bool(
                 "MEX.Damage.FrontBogeyDetached",
@@ -15032,7 +15199,19 @@ if SERVER then
                 target
             )
         elseif ZONES[target] then
-            return RepairZoneOnly(train, target)
+            local repaired =
+                RepairZoneOnly(train, target)
+
+            if target == "floor" then
+                repaired =
+                    MEXD.CleanNeglectSurface(
+                        train,
+                        "floor"
+                    )
+                    or repaired
+            end
+
+            return repaired
         end
 
         return false
@@ -15230,8 +15409,43 @@ if SERVER then
             directImpact ~= nil
             and directScore >= directMinimum
 
-        if not structuralOK and not directOK then
+        local neglectLevel =
+            train:GetNW2Float(
+                "MEX.Damage.NeglectLevel",
+                0
+            )
+        local largestComponent =
+            math.max(
+                math.abs(componentSize.x),
+                math.abs(componentSize.y),
+                math.abs(componentSize.z)
+            )
+        local neglectOK =
+            MEXD.IsPhysicalDamageEnabled()
+            and neglectLevel >= 0.94
+            and not isDoor
+            and (
+                isControl
+                or (
+                    neglectLevel >= 0.985
+                    and largestComponent <= 76
+                )
+            )
+
+        if not structuralOK
+            and not directOK
+            and not neglectOK
+        then
             return
+        end
+
+        if neglectOK and not zone then
+            zone =
+                ClassifyFromWorldPosition(
+                    train,
+                    train:LocalToWorld(anchorLocal)
+                )
+                or "floor"
         end
 
         if directOK then
@@ -22972,6 +23186,21 @@ if CLIENT then
                             interiorDecay * 0.32,
                             "metal"
                         )
+                    else
+                        applyWeathering(
+                            prop,
+                            math.Clamp(
+                                dirt * 0.52
+                                    + interiorDecay * 0.34,
+                                0,
+                                1
+                            ),
+                            growth * 0.10,
+                            scuff * 0.20,
+                            corrosion * 0.10,
+                            interiorDecay * 0.86,
+                            "interior"
+                        )
                     end
                 end
             end
@@ -24951,7 +25180,6 @@ if CLIENT then
 
         if profile == "glass"
             or profile == "light_lens"
-            or profile == "generic"
         then
             prop.MEXDamageInteriorNeglectKey =
                 key
@@ -25966,7 +26194,6 @@ if CLIENT then
 
             if profile == "glass"
                 or profile == "light_lens"
-                or profile == "generic"
             then
                 continue
             end
