@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.6"
+MEXD.Version = "0.23.7"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -24368,6 +24368,210 @@ if CLIENT then
         return textureName
     end
 
+    function MEXD.BuildMaskedSourceOverlay(
+        sourcePath,
+        materialName,
+        seed,
+        blobCount,
+        minRadius,
+        maxRadius
+    )
+        local texture =
+            MEXD.ResolveSourceBaseTexture(
+                sourcePath
+            )
+
+        if not texture then
+            return nil
+        end
+
+        local sourceMaterial =
+            CreateMaterial(
+                materialName
+                    .. "_source_v3",
+                "UnlitGeneric",
+                {
+                    ["$basetexture"] =
+                        texture,
+                    ["$vertexcolor"] = "1",
+                    ["$vertexalpha"] = "1",
+                    ["$translucent"] = "1",
+                    ["$nocull"] = "1",
+                }
+            )
+
+        if not sourceMaterial
+            or sourceMaterial:IsError()
+        then
+            return nil
+        end
+
+        local size = 256
+        local rt =
+            GetRenderTarget(
+                materialName
+                    .. "_rt_v3",
+                size,
+                size
+            )
+
+        if not rt then
+            return nil
+        end
+
+        render.PushRenderTarget(rt)
+        render.Clear(
+            0,
+            0,
+            0,
+            0,
+            true,
+            true
+        )
+        cam.Start2D()
+
+        surface.SetMaterial(
+            sourceMaterial
+        )
+        surface.SetDrawColor(
+            255,
+            255,
+            255,
+            255
+        )
+
+        for blob = 1, blobCount do
+            local cx =
+                util.SharedRandom(
+                    seed .. ":x",
+                    -18,
+                    size + 18,
+                    blob
+                )
+            local cy =
+                util.SharedRandom(
+                    seed .. ":y",
+                    -18,
+                    size + 18,
+                    blob
+                )
+            local radius =
+                util.SharedRandom(
+                    seed .. ":radius",
+                    minRadius,
+                    maxRadius,
+                    blob
+                )
+            local stretch =
+                util.SharedRandom(
+                    seed .. ":stretch",
+                    0.55,
+                    1.65,
+                    blob
+                )
+            local sides =
+                7 + (blob % 5)
+            local phase =
+                util.SharedRandom(
+                    seed .. ":phase",
+                    0,
+                    math.pi * 2,
+                    blob
+                )
+            local vertices = {}
+
+            for point = 1, sides do
+                local angle =
+                    phase
+                    + (
+                        (point - 1)
+                        / sides
+                    )
+                    * math.pi
+                    * 2
+                local wobble =
+                    util.SharedRandom(
+                        seed
+                            .. ":wobble:"
+                            .. tostring(blob),
+                        0.52,
+                        1.14,
+                        point
+                    )
+                local x =
+                    cx
+                    + math.cos(angle)
+                        * radius
+                        * stretch
+                        * wobble
+                local y =
+                    cy
+                    + math.sin(angle)
+                        * radius
+                        * wobble
+                local u =
+                    (
+                        x
+                        + util.SharedRandom(
+                            seed
+                                .. ":uvoffx",
+                            -90,
+                            90,
+                            blob
+                        )
+                    ) / 128
+                local v =
+                    (
+                        y
+                        + util.SharedRandom(
+                            seed
+                                .. ":uvoffy",
+                            -90,
+                            90,
+                            blob
+                        )
+                    ) / 128
+
+                vertices[point] = {
+                    x = x,
+                    y = y,
+                    u = u,
+                    v = v,
+                }
+            end
+
+            surface.DrawPoly(
+                vertices
+            )
+        end
+
+        cam.End2D()
+        render.PopRenderTarget()
+
+        local material =
+            CreateMaterial(
+                materialName
+                    .. "_masked_v3",
+                "UnlitGeneric",
+                {
+                    ["$basetexture"] =
+                        rt:GetName(),
+                    ["$vertexcolor"] = "1",
+                    ["$vertexalpha"] = "1",
+                    ["$translucent"] = "1",
+                    ["$nocull"] = "1",
+                }
+            )
+
+        if not material
+            or material:IsError()
+        then
+            return nil
+        end
+
+        return material
+    end
+
     function MEXD.EnsureGModDamageOverlayMaterials()
         if MEXD.GModDamageOverlayMaterialsReady
         then
@@ -24387,36 +24591,23 @@ if CLIENT then
         for index, sourcePath in ipairs(
             rustCandidates
         ) do
-            local texture =
-                MEXD.ResolveSourceBaseTexture(
-                    sourcePath
+            local material =
+                MEXD.BuildMaskedSourceOverlay(
+                    sourcePath,
+                    "mex_damage_safe_rust_"
+                        .. tostring(index),
+                    "MEXSafeRust:"
+                        .. tostring(index),
+                    34,
+                    7,
+                    38
                 )
 
-            if texture then
-                local material =
-                    CreateMaterial(
-                        "mex_damage_safe_rust_"
-                            .. tostring(index)
-                            .. "_v2",
-                        "UnlitGeneric",
-                        {
-                            ["$basetexture"] =
-                                texture,
-                            ["$vertexcolor"] = "1",
-                            ["$vertexalpha"] = "1",
-                            ["$translucent"] = "1",
-                            ["$nocull"] = "1",
-                        }
-                    )
-
-                if material
-                    and not material:IsError()
-                then
-                    MEXD.GModRustOverlayMaterials[
-                        #MEXD.GModRustOverlayMaterials
-                            + 1
-                    ] = material
-                end
+            if material then
+                MEXD.GModRustOverlayMaterials[
+                    #MEXD.GModRustOverlayMaterials
+                        + 1
+                ] = material
             end
         end
 
@@ -24432,35 +24623,22 @@ if CLIENT then
         for index, sourcePath in ipairs(
             dirtCandidates
         ) do
-            local texture =
-                MEXD.ResolveSourceBaseTexture(
-                    sourcePath
+            local material =
+                MEXD.BuildMaskedSourceOverlay(
+                    sourcePath,
+                    "mex_damage_safe_dirt_"
+                        .. tostring(index),
+                    "MEXSafeDirt:"
+                        .. tostring(index),
+                    28,
+                    10,
+                    46
                 )
 
-            if texture then
-                local material =
-                    CreateMaterial(
-                        "mex_damage_safe_dirt_"
-                            .. tostring(index)
-                            .. "_v2",
-                        "UnlitGeneric",
-                        {
-                            ["$basetexture"] =
-                                texture,
-                            ["$vertexcolor"] = "1",
-                            ["$vertexalpha"] = "1",
-                            ["$translucent"] = "1",
-                            ["$nocull"] = "1",
-                        }
-                    )
-
-                if material
-                    and not material:IsError()
-                then
-                    MEXD.GModDirtOverlayMaterial =
-                        material
-                    break
-                end
+            if material then
+                MEXD.GModDirtOverlayMaterial =
+                    material
+                break
             end
         end
 
