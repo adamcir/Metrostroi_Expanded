@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.5"
+MEXD.Version = "0.23.6"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -27829,6 +27829,40 @@ if CLIENT then
                 )
             )
 
+        local identity =
+            string.lower(
+                tostring(train:GetClass() or "")
+                .. " "
+                .. tostring(train:GetModel() or "")
+            )
+        local modernCompositeCab =
+            string.find(identity, "81-720", 1, true)
+            or string.find(identity, "81_720", 1, true)
+            or string.find(identity, "81-721", 1, true)
+            or string.find(identity, "81_721", 1, true)
+            or string.find(identity, "81-722", 1, true)
+            or string.find(identity, "81_722", 1, true)
+            or string.find(identity, "81-723", 1, true)
+            or string.find(identity, "81_723", 1, true)
+            or string.find(identity, "81-724", 1, true)
+            or string.find(identity, "81_724", 1, true)
+            or string.find(identity, "81-740", 1, true)
+            or string.find(identity, "81_740", 1, true)
+            or string.find(identity, "81-741", 1, true)
+            or string.find(identity, "81_741", 1, true)
+            or string.find(identity, "81-760", 1, true)
+            or string.find(identity, "81_760", 1, true)
+            or string.find(identity, "81-761", 1, true)
+            or string.find(identity, "81_761", 1, true)
+            or string.find(identity, "81-765", 1, true)
+            or string.find(identity, "81_765", 1, true)
+            or string.find(identity, "81-775", 1, true)
+            or string.find(identity, "81_775", 1, true)
+
+        if modernCompositeCab then
+            level = level * 0.34
+        end
+
         if level < 0.16 then
             return
         end
@@ -28405,6 +28439,8 @@ if CLIENT then
                 and profile ~= "floor"
                 and profile ~= "fabric"
                 and profile ~= "rubber"
+                and profile ~= "plastic"
+                and profile ~= "panel"
             then
                 profile = "panel_metal"
             end
