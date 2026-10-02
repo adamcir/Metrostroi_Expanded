@@ -14396,6 +14396,19 @@ if SERVER then
 
         train.MEXDamageDetachedServer[name] = nil
 
+        if isfunction(
+            MEXD.CleanNeglectControl
+        ) then
+            for _, buttonID in ipairs(
+                data.buttons or {}
+            ) do
+                MEXD.CleanNeglectControl(
+                    train,
+                    tostring(buttonID)
+                )
+            end
+        end
+
         if istable(data.electricalFailures) then
             for _, systemName in ipairs(
                 data.electricalFailures
@@ -15131,17 +15144,38 @@ if SERVER then
                 "panel"
             ) or repaired
         elseif target == "surface:floor" then
+            local repaired =
+                RepairZoneOnly(
+                    train,
+                    "floor"
+                )
+
             return MEXD.CleanNeglectSurface(
                 train,
                 "floor"
-            )
+            ) or repaired
         elseif string.sub(target, 1, 16)
             == "surface:interior"
         then
+            local zone =
+                string.sub(
+                    target,
+                    18
+                )
+            local repaired = false
+
+            if ZONES[zone] then
+                repaired =
+                    RepairZoneOnly(
+                        train,
+                        zone
+                    )
+            end
+
             return MEXD.CleanNeglectSurface(
                 train,
                 "interior"
-            )
+            ) or repaired
         elseif target == "front_bogey" then
             if train:GetNW2Bool(
                 "MEX.Damage.FrontBogeyDetached",
@@ -20035,9 +20069,6 @@ if CLIENT then
             return
         end
 
-        train.MEXDamageNeglectClientStage =
-            stage
-
         local panelMap =
             train.MEXDamageV4PanelProps
             or BuildPanelPropMap(train)
@@ -20158,6 +20189,11 @@ if CLIENT then
                     item.prop
                 )
             end
+        end
+
+        if requested > 0 then
+            train.MEXDamageNeglectClientStage =
+                stage
         end
     end
 
