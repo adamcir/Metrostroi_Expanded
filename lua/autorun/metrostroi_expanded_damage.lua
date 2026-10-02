@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.21.1"
+MEXD.Version = "0.21.2"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -1449,7 +1449,7 @@ if SERVER then
 
     local BATTERY_MIN_WORKING_HEALTH = 0.12
 
-    local function RememberBatteryBaseline(train)
+    function MEXD.RememberBatteryBaseline(train)
         if not IsSubwayTrain(train) or not istable(train.Battery) then return end
         local b = train.Battery
         if not train.MEXDamageBatteryRepairCapacity then
@@ -1485,7 +1485,7 @@ if SERVER then
             return false
         end
 
-        RememberBatteryBaseline(train)
+        MEXD.RememberBatteryBaseline(train)
 
         amount = math.max(tonumber(amount) or 0, 0)
         if amount <= 0 then return false end
@@ -4749,9 +4749,9 @@ if SERVER then
         )
     end
 
-    local function RestoreBatteryForService(train)
+    function MEXD.RestoreBatteryForService(train)
         if not IsSubwayTrain(train) or not istable(train.Battery) then return false end
-        RememberBatteryBaseline(train)
+        MEXD.RememberBatteryBaseline(train)
         RestoreWaterBatteryGlitchHook(train)
 
         local b = train.Battery
@@ -4801,7 +4801,7 @@ if SERVER then
             return
         end
 
-        RememberBatteryBaseline(train)
+        MEXD.RememberBatteryBaseline(train)
 
         local battery = train.Battery
         local originalThink = battery.Think
@@ -6798,7 +6798,7 @@ if SERVER then
         return true
     end
 
-    local function ProcessElectricalGhostChatter(
+    function MEXD.ProcessElectricalGhostChatter(
         train
     )
         if not IsSubwayTrain(train)
@@ -6856,7 +6856,7 @@ if SERVER then
         end
     end
 
-    local function RestoreElectricalGhostChatter(
+    function MEXD.RestoreElectricalGhostChatter(
         train
     )
         if not IsSubwayTrain(train)
@@ -6897,7 +6897,7 @@ if SERVER then
         )
     end
 
-    local function StartElectricalGhostChatter(
+    function MEXD.StartElectricalGhostChatter(
         train,
         intensity
     )
@@ -7062,7 +7062,7 @@ if SERVER then
             return
         end
 
-        ProcessElectricalGhostChatter(
+        MEXD.ProcessElectricalGhostChatter(
             train
         )
 
@@ -7148,7 +7148,7 @@ if SERVER then
         if math.Rand(0, 1)
             < chance
         then
-            StartElectricalGhostChatter(
+            MEXD.StartElectricalGhostChatter(
                 train,
                 faultLevel
             )
@@ -7157,7 +7157,7 @@ if SERVER then
                 and math.Rand(0, 1)
                     < 0.26
             then
-                StartElectricalGhostChatter(
+                MEXD.StartElectricalGhostChatter(
                     train,
                     faultLevel
                 )
@@ -7562,7 +7562,7 @@ if SERVER then
             train.MEXDamageImpactArcSeverity = 0
             train.MEXDamageNextImpactArc = nil
         train.MEXDamageNextElectricalGhost = nil
-        RestoreElectricalGhostChatter(
+        MEXD.RestoreElectricalGhostChatter(
             train
         )
             train:SetNW2Float(
@@ -13413,7 +13413,7 @@ if SERVER then
         RestoreWaterVisualGlitchHooks(train)
         RestoreWaterBatteryGlitchHook(train)
         RestoreWaterElectricBlackoutHook(train)
-        RestoreBatteryForService(train)
+        MEXD.RestoreBatteryForService(train)
 
         train.MEXDamageWaterExposure = 0
         train.MEXDamageWaterMoisture = 0
@@ -13434,7 +13434,7 @@ if SERVER then
         train.MEXDamageImpactArcSeverity = 0
         train.MEXDamageNextImpactArc = nil
         train.MEXDamageNextElectricalGhost = nil
-        RestoreElectricalGhostChatter(
+        MEXD.RestoreElectricalGhostChatter(
             train
         )
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
@@ -13528,7 +13528,7 @@ if SERVER then
         train.MEXDamageImpactArcSeverity = 0
         train.MEXDamageNextImpactArc = nil
         train.MEXDamageNextElectricalGhost = nil
-        RestoreElectricalGhostChatter(
+        MEXD.RestoreElectricalGhostChatter(
             train
         )
 
@@ -14304,7 +14304,7 @@ if SERVER then
             or fraction<0.92
             or math.abs(tonumber(b.Voltage) or 0)<18
         if not damaged then return false end
-        return RestoreBatteryForService(train)
+        return MEXD.RestoreBatteryForService(train)
     end
 
     local function RepairGRKVOnly(train)
@@ -15466,20 +15466,20 @@ if SERVER then
         MEXD.ApplyDamage(ent, zone, amount, pos, normal, source)
     end)
 
-    local nextWaterElectricalScan = 0
-    local lastWaterElectricalScan = CurTime()
+    MEXD._nextWaterElectricalScan = MEXD._nextWaterElectricalScan or 0
+    MEXD._lastWaterElectricalScan = MEXD._lastWaterElectricalScan or CurTime()
 
     hook.Add("Think", "MEX.Damage.WaterElectrical", function()
         local now = CurTime()
-        if now < nextWaterElectricalScan then return end
+        if now < MEXD._nextWaterElectricalScan then return end
 
         local dT = math.Clamp(
-            now - lastWaterElectricalScan,
+            now - MEXD._lastWaterElectricalScan,
             0.01,
             0.35
         )
-        lastWaterElectricalScan = now
-        nextWaterElectricalScan = now + WATER_SCAN_INTERVAL
+        MEXD._lastWaterElectricalScan = now
+        MEXD._nextWaterElectricalScan = now + WATER_SCAN_INTERVAL
 
         for _, train in ipairs(ents.GetAll()) do
             if IsSubwayTrain(train) then
@@ -15495,24 +15495,24 @@ if SERVER then
         end
     end)
 
-    local nextWearScan = 0
-    local lastWearScan = CurTime()
+    MEXD._nextWearScan = MEXD._nextWearScan or 0
+    MEXD._lastWearScan = MEXD._lastWearScan or CurTime()
 
     hook.Add(
         "Think",
         "MEX.Damage.PersistentWear",
         function()
             local now = CurTime()
-            if now < nextWearScan then return end
+            if now < MEXD._nextWearScan then return end
 
             local dT = math.Clamp(
-                now - lastWearScan,
+                now - MEXD._lastWearScan,
                 0.05,
                 0.50
             )
 
-            lastWearScan = now
-            nextWearScan = now + 0.20
+            MEXD._lastWearScan = now
+            MEXD._nextWearScan = now + 0.20
 
             for _, train in ipairs(ents.GetAll()) do
                 if IsSubwayTrain(train) then
@@ -15533,11 +15533,11 @@ if SERVER then
         end
     )
 
-    local nextVelocityScan = 0
+    MEXD._nextVelocityScan = MEXD._nextVelocityScan or 0
 
     hook.Add("Think", "MEX.Damage.VelocityCrashDetection", function()
-        if CurTime() < nextVelocityScan then return end
-        nextVelocityScan = CurTime() + 0.05
+        if CurTime() < MEXD._nextVelocityScan then return end
+        MEXD._nextVelocityScan = CurTime() + 0.05
 
         for _, train in ipairs(ents.GetAll()) do
             if not IsSubwayTrain(train) then continue end
