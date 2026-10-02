@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.21.0"
+MEXD.Version = "0.21.1"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -7079,9 +7079,7 @@ if SERVER then
                 train
             )
 
-        if voltage < 18
-            or current <= 0.01
-        then
+        if voltage < 18 then
             return
         end
 
@@ -10635,6 +10633,7 @@ if SERVER then
         train.MEXDamageNeglectIdleSeconds = 0
         train.MEXDamageNeglectLastActive = CurTime()
         train.MEXDamageNextNeglectFault = nil
+        train.MEXDamageExtremeNeglectApplied = nil
         train.MEXDamageWeatherExposed = nil
         train.MEXDamageWeatherProbeAt = nil
 
@@ -11376,6 +11375,11 @@ if SERVER then
             )
         )
 
+        if level >= 0.985 then
+            train.MEXDamageExtremeNeglectApplied =
+                true
+        end
+
         return true
     end
 
@@ -11569,6 +11573,18 @@ if SERVER then
                 1
             )
         )
+
+        if level >= 0.985
+            and not train.MEXDamageExtremeNeglectApplied
+        then
+            MEXD.ApplyExtremeNeglectFailures(
+                train,
+                level
+            )
+        elseif level < 0.90 then
+            train.MEXDamageExtremeNeglectApplied =
+                nil
+        end
 
         if level < 0.16 then
             return
@@ -22729,7 +22745,7 @@ if CLIENT then
     MEXD.CorrosionOverlayMaterial =
         MEXD.WeatherOverlayMaterial
 
-    local WEATHER_OVERLAY_VERSION = 7
+    local WEATHER_OVERLAY_VERSION = 8
 
     local WEATHER_COLORS = {
         moss = {
@@ -24287,6 +24303,194 @@ if CLIENT then
             tangentV
     end
 
+    local function DrawVinePatch(
+        train,
+        patch,
+        maturity
+    )
+        DrawWeatherCluster(
+            train,
+            patch,
+            maturity,
+            WEATHER_COLORS.moss,
+            7
+                + math.floor(
+                    maturity * 6
+                ),
+            0.82,
+            false
+        )
+
+        local worldPos,
+            worldNormal,
+            worldU,
+            worldV =
+            GetWeatherPatchWorldBasis(
+                train,
+                patch
+            )
+
+        if not worldPos then
+            return
+        end
+
+        render.SetMaterial(
+            MEXD.WeatherOverlayMaterial
+        )
+
+        local down =
+            Vector(0, 0, -1)
+        down =
+            down
+            - worldNormal
+                * down:Dot(worldNormal)
+
+        if down:LengthSqr() <= 0.0001 then
+            down = worldV * -1
+        else
+            down:Normalize()
+        end
+
+        local across =
+            worldNormal:Cross(down)
+
+        if across:LengthSqr() <= 0.0001 then
+            across = worldU
+        else
+            across:Normalize()
+        end
+
+        local strands =
+            4
+            + math.floor(
+                maturity * 10
+            )
+
+        for i = 1, strands do
+            local offset =
+                WeatherPatchRandom(
+                    patch,
+                    "vine-u",
+                    -0.46,
+                    0.46,
+                    i
+                )
+                * (patch.width or 12)
+            local length =
+                WeatherPatchRandom(
+                    patch,
+                    "vine-length",
+                    5,
+                    23,
+                    i
+                )
+                * (
+                    0.60
+                    + maturity * 0.82
+                )
+            local width =
+                WeatherPatchRandom(
+                    patch,
+                    "vine-width",
+                    0.32,
+                    1.05,
+                    i
+                )
+            local lean =
+                across
+                * WeatherPatchRandom(
+                    patch,
+                    "vine-lean",
+                    -0.18,
+                    0.18,
+                    i
+                )
+            local direction =
+                down + lean
+
+            if direction:LengthSqr()
+                > 0.0001
+            then
+                direction:Normalize()
+            else
+                direction = down
+            end
+
+            local base =
+                worldPos
+                + across * offset
+                + worldNormal
+                    * (
+                        0.19
+                        + i * 0.001
+                    )
+            local half =
+                across
+                * width
+                * 0.5
+            local tip =
+                direction * length
+
+            render.DrawQuad(
+                base - half,
+                base + half,
+                base
+                    + half * 0.44
+                    + tip,
+                base
+                    - half * 0.44
+                    + tip,
+                WeatherColor(
+                    WEATHER_COLORS.grass,
+                    i,
+                    maturity,
+                    0.82
+                )
+            )
+
+            if i % 2 == 0 then
+                local leafAt =
+                    base
+                    + tip
+                        * WeatherPatchRandom(
+                            patch,
+                            "vine-leaf-pos",
+                            0.32,
+                            0.82,
+                            i
+                        )
+                local leafHalf =
+                    across
+                    * WeatherPatchRandom(
+                        patch,
+                        "vine-leaf-w",
+                        0.5,
+                        1.5,
+                        i
+                    )
+
+                render.DrawQuad(
+                    leafAt
+                        - leafHalf,
+                    leafAt
+                        + leafHalf,
+                    leafAt
+                        + leafHalf * 0.30
+                        + direction * 1.9,
+                    leafAt
+                        - leafHalf * 0.30
+                        + direction * 1.9,
+                    WeatherColor(
+                        WEATHER_COLORS.grass,
+                        i + 1,
+                        maturity,
+                        0.72
+                    )
+                )
+            end
+        end
+    end
+
     local function BuildInteriorNeglectPatches(
         prop,
         profile,
@@ -25735,6 +25939,14 @@ if CLIENT then
 
         if kind == "grass" then
             return surfaces.roof
+        elseif kind == "vine" then
+            if surfaceRoll > 0.86
+                and #surfaces.ending.items > 0
+            then
+                return surfaces.ending
+            end
+
+            return surfaces.side
         elseif kind == "moss" then
             if surfaceRoll < 0.66 then
                 return surfaces.roof
@@ -25808,11 +26020,13 @@ if CLIENT then
                 )
             local kind
 
-            if kindRoll < 0.22 then
+            if kindRoll < 0.20 then
                 kind = "grass"
-            elseif kindRoll < 0.52 then
+            elseif kindRoll < 0.34 then
+                kind = "vine"
+            elseif kindRoll < 0.54 then
                 kind = "moss"
-            elseif kindRoll < 0.76 then
+            elseif kindRoll < 0.77 then
                 kind = "rust"
             elseif kindRoll < 0.91 then
                 kind = "chip"
@@ -25852,6 +26066,7 @@ if CLIENT then
                             or surfaces.side
                         )
                 elseif kind == "grass"
+                    or kind == "vine"
                     or kind == "moss"
                 then
                     group =
@@ -25945,6 +26160,30 @@ if CLIENT then
                         0.88,
                         index
                     )
+            elseif kind == "vine" then
+                width =
+                    util.SharedRandom(
+                        patchSeed .. ":vine-w",
+                        8,
+                        24,
+                        index
+                    )
+                height =
+                    util.SharedRandom(
+                        patchSeed .. ":vine-h",
+                        15,
+                        38,
+                        index
+                    )
+                threshold =
+                    util.SharedRandom(
+                        patchSeed
+                            .. ":vine-threshold",
+                        0.44,
+                        0.91,
+                        index
+                    )
+                rotation = 0
             elseif kind == "moss" then
                 width =
                     util.SharedRandom(
@@ -26246,6 +26485,12 @@ if CLIENT then
                     patch,
                     maturity,
                     drawGrassBlades
+                )
+            elseif patch.kind == "vine" then
+                DrawVinePatch(
+                    train,
+                    patch,
+                    maturity
                 )
             else
                 DrawWeatherCluster(
