@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.0"
+MEXD.Version = "0.23.1"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -648,6 +648,7 @@ if SERVER then
     util.AddNetworkString("MEX.ComponentRepaired")
     util.AddNetworkString("MEX.DetachReset")
     util.AddNetworkString("MEX.ComponentImpact")
+    util.AddNetworkString("MEX.ControlSeized")
 
     local ClassifyFromWorldDeltaVelocity
     local ClassifyFromWorldPosition
@@ -9381,6 +9382,101 @@ if SERVER then
         train.MEXDamageWearControlButtons[key][button] = true
     end
 
+    function MEXD.BroadcastSeizedControlState(
+        train,
+        key,
+        seized,
+        receiver
+    )
+        if not IsSubwayTrain(train)
+            or not isstring(key)
+            or key == ""
+        then
+            return
+        end
+
+        local registered =
+            train.MEXDamageWearControlButtons
+            and train.MEXDamageWearControlButtons[key]
+            or {}
+        local seeds = {}
+
+        for button in pairs(registered or {}) do
+            seeds[#seeds + 1] =
+                tostring(button):gsub(
+                    "^.+:",
+                    ""
+                )
+        end
+
+        if #seeds == 0 then
+            seeds[1] =
+                tostring(key):gsub(
+                    "^.+:",
+                    ""
+                )
+        end
+
+        local expanded =
+            ExpandDetachedButtonAliases(
+                train,
+                seeds
+            )
+        local ids = {}
+        local seen = {}
+
+        for _, button in ipairs(seeds) do
+            local id =
+                tostring(button):gsub(
+                    "^.+:",
+                    ""
+                )
+
+            if id ~= "" and not seen[id] then
+                seen[id] = true
+                ids[#ids + 1] = id
+            end
+        end
+
+        for _, button in ipairs(expanded or {}) do
+            local id =
+                tostring(button):gsub(
+                    "^.+:",
+                    ""
+                )
+
+            if id ~= "" and not seen[id] then
+                seen[id] = true
+                ids[#ids + 1] = id
+            end
+        end
+
+        if #ids <= 0 then
+            return
+        end
+
+        net.Start("MEX.ControlSeized")
+            net.WriteEntity(train)
+            net.WriteBool(seized == true)
+            net.WriteUInt(
+                math.min(#ids, 63),
+                6
+            )
+
+            for index = 1, math.min(
+                #ids,
+                63
+            ) do
+                net.WriteString(ids[index])
+            end
+
+        if IsValid(receiver) then
+            net.Send(receiver)
+        else
+            net.Broadcast()
+        end
+    end
+
     local function BlockWearControl(
         train,
         key
@@ -9425,6 +9521,12 @@ if SERVER then
                 button:gsub("^.+:", "")
             ] = true
         end
+
+        MEXD.BroadcastSeizedControlState(
+            train,
+            key,
+            true
+        )
 
         train:SetNW2String(
             "MEX.Damage.WearFailure",
@@ -9578,6 +9680,12 @@ if SERVER then
         train:SetNW2Int(
             "MEX.Damage.FailedControlCount",
             table.Count(train.MEXDamageFailedControls)
+        )
+
+        MEXD.BroadcastSeizedControlState(
+            train,
+            key,
+            false
         )
 
         return true
@@ -13615,6 +13723,17 @@ if SERVER then
             )
         end
 
+        for key in pairs(
+            train.MEXDamageFailedControls
+            or {}
+        ) do
+            MEXD.BroadcastSeizedControlState(
+                train,
+                tostring(key),
+                false
+            )
+        end
+
         train.MEXDamageWearBlockedButtons = {}
         train.MEXDamageFailedControls = {}
         train.MEXDamageControlWear = {}
@@ -15708,6 +15827,41 @@ if SERVER then
             end
         end)
     end)
+
+    hook.Add(
+        "PlayerInitialSpawn",
+        "MEX.Damage.SyncSeizedControls",
+        function(ply)
+            timer.Simple(
+                2.4,
+                function()
+                    if not IsValid(ply) then
+                        return
+                    end
+
+                    for _, train in ipairs(
+                        ents.GetAll()
+                    ) do
+                        if not IsSubwayTrain(train) then
+                            continue
+                        end
+
+                        for key in pairs(
+                            train.MEXDamageFailedControls
+                            or {}
+                        ) do
+                            MEXD.BroadcastSeizedControlState(
+                                train,
+                                tostring(key),
+                                true,
+                                ply
+                            )
+                        end
+                    end
+                end
+            )
+        end
+    )
 
     hook.Add("EntityTakeDamage", "MEX.Damage.FromEntityDamage", function(ent, dmginfo)
         if not MEXD.IsAnyDamageEnabled() then return end
@@ -19334,8 +19488,23 @@ if CLIENT then
         -- empty (the common case for normal generated buttons).
         EnforceDeadPhysicalBindings(train)
 
-        if not istable(train.MEXDamageDisabledButtonIDs)
-            or table.IsEmpty(train.MEXDamageDisabledButtonIDs)
+        local detachedDisabled =
+            istable(
+                train.MEXDamageDisabledButtonIDs
+            )
+            and not table.IsEmpty(
+                train.MEXDamageDisabledButtonIDs
+            )
+        local seizedDisabled =
+            istable(
+                train.MEXDamageSeizedButtonIDs
+            )
+            and not table.IsEmpty(
+                train.MEXDamageSeizedButtonIDs
+            )
+
+        if not detachedDisabled
+            and not seizedDisabled
         then
             return
         end
@@ -19365,7 +19534,23 @@ if CLIENT then
                 if not istable(button) or not isstring(button.ID) then continue end
 
                 local id = button.ID:gsub("^.+:", "")
-                if not train.MEXDamageDisabledButtonIDs[id] then continue end
+                local disabled =
+                    (
+                        train.MEXDamageDisabledButtonIDs
+                        and train.MEXDamageDisabledButtonIDs[
+                            id
+                        ]
+                    )
+                    or (
+                        train.MEXDamageSeizedButtonIDs
+                        and train.MEXDamageSeizedButtonIDs[
+                            id
+                        ]
+                    )
+
+                if not disabled then
+                    continue
+                end
 
                 -- Do not rely on removing the entry alone: Metrostroi may keep
                 -- a local reference to a button object for part of a frame.
@@ -21007,6 +21192,92 @@ if CLIENT then
         end
     end
 
+    function MEXD.SetClientSeizedControlState(
+        train,
+        ids,
+        seized
+    )
+        if not IsSubwayTrain(train)
+            or not istable(ids)
+        then
+            return
+        end
+
+        train.MEXDamageSeizedButtonIDs =
+            train.MEXDamageSeizedButtonIDs
+            or {}
+
+        for _, rawID in ipairs(ids) do
+            local id =
+                isstring(rawID)
+                and rawID:gsub("^.+:", "")
+                or ""
+
+            if id ~= "" then
+                if seized then
+                    train.MEXDamageSeizedButtonIDs[
+                        id
+                    ] = true
+                else
+                    train.MEXDamageSeizedButtonIDs[
+                        id
+                    ] = nil
+                end
+            end
+        end
+
+        -- Rebuild the private ButtonMap from its pristine definitions before
+        -- re-applying all still-active damage masks. This is important when a
+        -- rust-seized control is repaired: its dead hitbox must come back, but
+        -- unrelated detached/seized controls must remain dead.
+        if not seized
+            and train.MEXDamageV4ButtonMapOriginal
+        then
+            RestoreInteractivePanels(train)
+            train.MEXDamageV4PanelProps = nil
+        end
+
+        EnforceDisabledButtonHitboxes(train)
+    end
+
+    net.Receive(
+        "MEX.ControlSeized",
+        function()
+            local train = net.ReadEntity()
+            local seized = net.ReadBool()
+            local count =
+                math.min(
+                    net.ReadUInt(6),
+                    63
+                )
+            local ids = {}
+
+            for index = 1, count do
+                local id = net.ReadString()
+
+                if isstring(id)
+                    and id ~= ""
+                then
+                    ids[#ids + 1] =
+                        id:gsub(
+                            "^.+:",
+                            ""
+                        )
+                end
+            end
+
+            if not IsSubwayTrain(train) then
+                return
+            end
+
+            MEXD.SetClientSeizedControlState(
+                train,
+                ids,
+                seized
+            )
+        end
+    )
+
     net.Receive("MEX.ComponentRepaired", function()
         local train = net.ReadEntity()
         local name = net.ReadString()
@@ -21047,6 +21318,7 @@ if CLIENT then
 
         RestoreDetachedComponents(train)
         RestoreBrokenGlassMaterials(train)
+        train.MEXDamageSeizedButtonIDs = {}
 
         -- Rebuild a clean per-wagon panel copy on the next damage update.
         RestoreInteractivePanels(train)
