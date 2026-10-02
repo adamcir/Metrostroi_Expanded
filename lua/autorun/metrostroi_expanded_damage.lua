@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.5"
+MEXD.Version = "0.22.6"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -23194,30 +23194,33 @@ if CLIENT then
                 elseif profile == "metal"
                     or profile == "panel_metal"
                 then
-                    -- Painted/bare metal gets dull and takes a subtle brown
-                    -- oxide cast; detailed rust islands are rendered separately.
+                    -- Interior metal must look chemically aged even when the
+                    -- individual model is too small for large procedural rust
+                    -- islands. Oxidation strongly darkens/desaturates paint and
+                    -- shifts exposed metal towards a brown/orange oxide tone.
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.18
-                                - scuff * 0.07
-                                - corrosion * 0.12
-                                - interiorDecay * 0.10,
-                            0.55,
+                                - dirt * 0.20
+                                - scuff * 0.08
+                                - corrosion * 0.24
+                                - interiorDecay * 0.14,
+                            0.38,
                             1
                         )
 
                     r =
                         base.r * darken
-                        + corrosion * 18
+                        + corrosion * 42
                     g =
                         base.g
                         * darken
-                        * (1 - corrosion * 0.08)
+                        * (1 - corrosion * 0.22)
+                        + corrosion * 4
                     b =
                         base.b
                         * darken
-                        * (1 - corrosion * 0.18)
+                        * (1 - corrosion * 0.35)
                 else
                     local darken =
                         math.Clamp(
@@ -23440,11 +23443,11 @@ if CLIENT then
                             0,
                             scuff * 0.42,
                             math.max(
-                                corrosion * 0.72,
+                                corrosion * 0.82,
                                 train:GetNW2Float(
                                     "MEX.Damage.PanelCorrosion",
                                     0
-                                )
+                                ) * (1 - clean)
                             ),
                             interiorDecay,
                             profile
