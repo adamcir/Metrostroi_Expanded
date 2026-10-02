@@ -18,7 +18,7 @@ if CLIENT then
     )
     language.Add(
         "tool.mex_train_fixer.0",
-        "Left click: repair exactly the aimed damaged part."
+        "Left click: repair exactly the aimed damaged part, including dirt/corrosion on interior surfaces."
     )
 end
 
@@ -423,6 +423,37 @@ local function StructuralTarget(train, worldPos)
     return "floor", "Floor / underframe structure"
 end
 
+local function IsPlayerInsideTrain(
+    ply,
+    train
+)
+    if not IsValid(ply)
+        or not IsSubwayTrain(train)
+    then
+        return false
+    end
+
+    local worldPos =
+        ply.GetShootPos
+        and ply:GetShootPos()
+        or ply:WorldSpaceCenter()
+    local localPos =
+        train:WorldToLocal(worldPos)
+    local mins =
+        train:OBBMins()
+            - Vector(8, 8, 8)
+    local maxs =
+        train:OBBMaxs()
+            + Vector(8, 8, 8)
+
+    return localPos.x >= mins.x
+        and localPos.x <= maxs.x
+        and localPos.y >= mins.y
+        and localPos.y <= maxs.y
+        and localPos.z >= mins.z
+        and localPos.z <= maxs.z
+end
+
 local function AimRay(ply, trace)
     local startPos =
         IsValid(ply)
@@ -587,6 +618,23 @@ local function TargetDescription(trace, ply)
             trace.HitPos
         )
 
+    if IsPlayerInsideTrain(
+        ply,
+        train
+    ) then
+        if target == "floor" then
+            return train,
+                "surface:floor",
+                "Passenger floor / floor corrosion"
+        end
+
+        return train,
+            "surface:interior:"
+                .. tostring(target),
+            "Interior surface: "
+                .. tostring(label)
+    end
+
     return train, target, label
 end
 
@@ -739,6 +787,12 @@ function TOOL.BuildCPanel(panel)
     )
     panel:Help(
         "Detached debris, bogeys and couplers are repaired individually."
+    )
+    panel:Help(
+        "Aim at the passenger floor or an interior wall/ceiling to remove neglect, moss and corrosion from that surface."
+    )
+    panel:Help(
+        "Aim directly at a switch/button/lever to repair it and remove its local corrosion."
     )
     panel:Help(
         "Battery and hidden electrical equipment have small service points on the lower underframe. GRKV is repaired only by aiming at the GRKV itself."
