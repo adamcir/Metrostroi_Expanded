@@ -1983,14 +1983,20 @@ function Builder.RerailTrainOnMEX(train, forcedRouteID)
 
     local routeID = trackData.route_id
     local initialAng = trackData.forward:Angle()
+    initialAng.r = 0
 
     local frontLocal = isvector(train.FrontBogey.SpawnPos)
         and train.FrontBogey.SpawnPos
         or train:WorldToLocal(train.FrontBogey:GetPos())
+
     local rearLocal = isvector(train.RearBogey.SpawnPos)
         and train.RearBogey.SpawnPos
         or train:WorldToLocal(train.RearBogey:GetPos())
 
+    -- First estimate both bogey locations using only the horizontal local
+    -- offset from the car center. We intentionally ignore the local Z here;
+    -- track data returns the rail running surface and BogeyOffset adds the
+    -- correct bogey-origin height afterwards.
     local frontGuessOffset = Vector(
         frontLocal.x,
         frontLocal.y,
@@ -2008,15 +2014,13 @@ function Builder.RerailTrainOnMEX(train, forcedRouteID)
     local frontGuess = trackData.centerpos + frontGuessOffset
     local rearGuess = trackData.centerpos + rearGuessOffset
 
-    -- Both bogeys must stay on the same saved MEX route. Without this filter,
-    -- a tight loop or a nearby parallel line can make one end of the car snap
-    -- to a different segment and the complete wagon becomes visibly tilted.
     local frontData = Builder.GetMEXTrackData(
         frontGuess,
         trackData.forward,
         900,
         routeID
     )
+
     local rearData = Builder.GetMEXTrackData(
         rearGuess,
         trackData.forward,
@@ -2038,13 +2042,16 @@ function Builder.RerailTrainOnMEX(train, forcedRouteID)
 
     local targetFront = frontData.centerpos
         + frontData.up * frontBogeyOffset
+
     local targetRear = rearData.centerpos
         + rearData.up * rearBogeyOffset
 
-    -- The car body must follow the actual straight line between its two
-    -- bogeys, not an average of two curve tangents. That guarantees that the
-    -- body cannot acquire a bogus pitch from neighbouring spline pieces.
+    -- A railway vehicle is one rigid car body between two constrained bogeys.
+    -- Therefore the body orientation is the chord between both required bogey
+    -- positions. No roll is introduced because MEX track currently has no
+    -- cant/banking.
     local bodyForward = targetFront - targetRear
+
     if bodyForward:LengthSqr() <= 0.000001 then
         bodyForward = trackData.forward
     else
@@ -2055,11 +2062,13 @@ function Builder.RerailTrainOnMEX(train, forcedRouteID)
         bodyForward = -bodyForward
     end
 
-    -- MEX track has no banking. Vector:Angle() intentionally gives roll = 0,
-    -- while pitch follows the real height difference between both bogeys.
     local bodyAng = bodyForward:Angle()
     bodyAng.r = 0
 
+    -- Fit the original bogey SpawnPos pair to the two desired rail positions.
+    -- We map their LOCAL midpoint to the TARGET midpoint. This preserves every
+    -- train class' real suspension/body geometry instead of inventing another
+    -- body->bogey offset.
     local spawnMid = (frontLocal + rearLocal) * 0.5
     local targetMid = (targetFront + targetRear) * 0.5
 
@@ -2074,31 +2083,34 @@ function Builder.RerailTrainOnMEX(train, forcedRouteID)
         TrainRerailEntities(train)
     )
 
-    train:SetPos(trainPos)
     train:SetAngles(bodyAng)
+    train:SetPos(trainPos)
 
-    -- Put each bogey exactly above its own rail-contact point. The axis
-    -- constraint permits the bogey to swivel, so it should follow the local
-    -- curve tangent rather than inherit the body's chord angle.
-    train.FrontBogey:SetPos(targetFront)
-    train.RearBogey:SetPos(targetRear)
+    -- CRITICAL: never force constrained bogeys onto independent world
+    -- positions. That stretches the Axis constraints and, when physics is
+    -- restored, the train jumps/tilts. Keep the exact original rigid
+    -- relationship to the car body, just like stock Metrostroi does.
+    train.FrontBogey:SetPos(
+        train:LocalToWorld(frontLocal)
+    )
+    train.RearBogey:SetPos(
+        train:LocalToWorld(rearLocal)
+    )
 
-    local frontBogeyAng = frontData.forward:Angle()
-    local rearBogeyAng = rearData.forward:Angle()
-    frontBogeyAng.r = 0
-    rearBogeyAng.r = 0
+    local frontSpawnAng = isangle(train.FrontBogey.SpawnAng)
+        and train.FrontBogey.SpawnAng
+        or angle_zero
 
-    if isangle(train.FrontBogey.SpawnAng) then
-        frontBogeyAng.y = frontBogeyAng.y
-            + train.FrontBogey.SpawnAng.y
-    end
-    if isangle(train.RearBogey.SpawnAng) then
-        rearBogeyAng.y = rearBogeyAng.y
-            + train.RearBogey.SpawnAng.y
-    end
+    local rearSpawnAng = isangle(train.RearBogey.SpawnAng)
+        and train.RearBogey.SpawnAng
+        or angle_zero
 
-    train.FrontBogey:SetAngles(frontBogeyAng)
-    train.RearBogey:SetAngles(rearBogeyAng)
+    train.FrontBogey:SetAngles(
+        train:LocalToWorldAngles(frontSpawnAng)
+    )
+    train.RearBogey:SetAngles(
+        train:LocalToWorldAngles(rearSpawnAng)
+    )
 
     if IsValid(train.FrontCouple)
         and isvector(train.FrontCouple.SpawnPos)
@@ -2131,6 +2143,42 @@ function Builder.RerailTrainOnMEX(train, forcedRouteID)
     StopPhysics(train.FrontBogey)
     StopPhysics(train.RearBogey)
 
+    -- Give Source physics one tick while everything is non-solid and frozen,
+    -- then re-assert the rigid spawn geometry. This prevents old constraint
+    -- error accumulated before rerailing from kicking the wagon sideways.
+    timer.Simple(0, function()
+        if not IsValid(train)
+            or not IsValid(train.FrontBogey)
+            or not IsValid(train.RearBogey)
+        then
+            return
+        end
+
+        train:SetAngles(bodyAng)
+        train:SetPos(trainPos)
+
+        train.FrontBogey:SetPos(
+            train:LocalToWorld(frontLocal)
+        )
+        train.RearBogey:SetPos(
+            train:LocalToWorld(rearLocal)
+        )
+
+        train.FrontBogey:SetAngles(
+            train:LocalToWorldAngles(frontSpawnAng)
+        )
+        train.RearBogey:SetAngles(
+            train:LocalToWorldAngles(rearSpawnAng)
+        )
+
+        ResetBogeyWheelsToBogey(train.FrontBogey)
+        ResetBogeyWheelsToBogey(train.RearBogey)
+
+        StopPhysics(train)
+        StopPhysics(train.FrontBogey)
+        StopPhysics(train.RearBogey)
+    end)
+
     FinishRerailMove(
         saved,
         "mex_track_rerail_train_" .. train:EntIndex()
@@ -2159,7 +2207,7 @@ function Builder.InstallRerailSupport()
         Metrostroi.MEXOriginalRerailGetTrackData
         or Metrostroi.RerailGetTrackData
 
-    if Metrostroi.MEXTrackBuilderRerailVersion == 6 then
+    if Metrostroi.MEXTrackBuilderRerailVersion == 7 then
         return true
     end
 
@@ -2234,7 +2282,7 @@ function Builder.InstallRerailSupport()
         return Builder.RerailTrainOnMEX(train)
     end
 
-    Metrostroi.MEXTrackBuilderRerailVersion = 6
+    Metrostroi.MEXTrackBuilderRerailVersion = 7
     print(
         "[Metrostroi Expanded] Track Builder rerail support installed"
     )
