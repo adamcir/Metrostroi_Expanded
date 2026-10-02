@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.6"
+MEXD.Version = "0.22.7"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -22850,6 +22850,19 @@ if CLIENT then
         ) then
             profile = "light_lens"
         elseif NeglectContainsAny(
+            identity,
+            {
+                "interior", "salon", "saloon",
+                "wall", "ceiling", "cabine",
+                "cabin", "inside", "passenger",
+            }
+        ) then
+            -- The complete saloon/interior ClientEnt often contains metal,
+            -- plastic and glass submaterials. Classifying the whole model from
+            -- any one submaterial made it become "metal", which suppressed
+            -- mold/stain growth across the actual passenger interior.
+            profile = "interior"
+        elseif NeglectContainsAny(
             materialText,
             {"glass", "window", "stekl", "windscreen"}
         ) then
@@ -22893,14 +22906,6 @@ if CLIENT then
             )
         then
             profile = "metal"
-        elseif NeglectContainsAny(
-            identity,
-            {
-                "interior", "salon", "wall",
-                "ceiling", "cab", "cabin",
-            }
-        ) then
-            profile = "interior"
         end
 
         ent.MEXDamageNeglectMaterialKey =
@@ -23621,6 +23626,363 @@ if CLIENT then
         MEXD.WeatherOverlayMaterial =
             Material("models/debug/debugwhite")
     end
+
+    function MEXD.EnsureInteriorDamageTextureMaterials()
+        if MEXD.InteriorDamageTextureMaterialsReady
+            and istable(
+                MEXD.InteriorDamageTextureMaterials
+            )
+        then
+            return true
+        end
+
+        if not render
+            or not surface
+            or not cam
+            or not GetRenderTarget
+        then
+            return false
+        end
+
+        local size = 256
+        local specs = {
+            oxidation = {
+                count = 74,
+                base = {
+                    Color(57, 30, 17, 210),
+                    Color(91, 43, 18, 225),
+                    Color(126, 59, 21, 214),
+                    Color(164, 78, 28, 188),
+                    Color(72, 50, 37, 220),
+                },
+                minRadius = 4,
+                maxRadius = 31,
+                speckles = 135,
+            },
+            mold = {
+                count = 68,
+                base = {
+                    Color(16, 24, 18, 180),
+                    Color(28, 39, 27, 192),
+                    Color(48, 56, 37, 170),
+                    Color(66, 68, 45, 150),
+                    Color(22, 31, 25, 194),
+                },
+                minRadius = 5,
+                maxRadius = 38,
+                speckles = 105,
+            },
+            moss = {
+                count = 76,
+                base = {
+                    Color(40, 60, 26, 190),
+                    Color(61, 79, 32, 205),
+                    Color(83, 96, 40, 188),
+                    Color(105, 106, 47, 162),
+                    Color(52, 68, 30, 202),
+                },
+                minRadius = 4,
+                maxRadius = 32,
+                speckles = 118,
+            },
+            stain = {
+                count = 58,
+                base = {
+                    Color(22, 24, 21, 150),
+                    Color(35, 33, 27, 165),
+                    Color(53, 45, 34, 142),
+                    Color(27, 34, 29, 158),
+                    Color(67, 55, 39, 128),
+                },
+                minRadius = 9,
+                maxRadius = 48,
+                speckles = 42,
+            },
+        }
+
+        MEXD.InteriorDamageTextureMaterials =
+            MEXD.InteriorDamageTextureMaterials
+            or {}
+
+        local function shared(
+            seed,
+            minimum,
+            maximum,
+            index
+        )
+            return util.SharedRandom(
+                seed,
+                minimum,
+                maximum,
+                index
+            )
+        end
+
+        local function drawBlob(
+            seed,
+            cx,
+            cy,
+            radiusX,
+            radiusY,
+            sides,
+            color,
+            ordinal
+        )
+            local vertices = {}
+            local phase =
+                shared(
+                    seed .. ":phase",
+                    0,
+                    math.pi * 2,
+                    ordinal
+                )
+
+            for point = 1, sides do
+                local angle =
+                    phase
+                    + (
+                        (point - 1)
+                        / sides
+                    )
+                    * math.pi
+                    * 2
+                local wobble =
+                    shared(
+                        seed
+                            .. ":wobble:"
+                            .. tostring(ordinal),
+                        0.52,
+                        1.12,
+                        point
+                    )
+
+                vertices[point] = {
+                    x =
+                        cx
+                        + math.cos(angle)
+                            * radiusX
+                            * wobble,
+                    y =
+                        cy
+                        + math.sin(angle)
+                            * radiusY
+                            * wobble,
+                }
+            end
+
+            surface.SetDrawColor(color)
+            surface.DrawPoly(vertices)
+        end
+
+        for kind, spec in pairs(specs) do
+            local rtName =
+                "mex_damage_interior_"
+                .. kind
+                .. "_rt_v7"
+            local rt =
+                GetRenderTarget(
+                    rtName,
+                    size,
+                    size,
+                    false
+                )
+
+            if rt then
+                render.PushRenderTarget(rt)
+                render.Clear(
+                    0,
+                    0,
+                    0,
+                    0,
+                    true,
+                    true
+                )
+                cam.Start2D()
+                draw.NoTexture()
+
+                for i = 1, spec.count do
+                    local color =
+                        spec.base[
+                            ((i - 1) % #spec.base)
+                            + 1
+                        ]
+                    local radius =
+                        shared(
+                            rtName .. ":radius",
+                            spec.minRadius,
+                            spec.maxRadius,
+                            i
+                        )
+                    local stretch =
+                        shared(
+                            rtName .. ":stretch",
+                            0.55,
+                            1.62,
+                            i
+                        )
+                    local cx =
+                        shared(
+                            rtName .. ":x",
+                            -18,
+                            size + 18,
+                            i
+                        )
+                    local cy =
+                        shared(
+                            rtName .. ":y",
+                            -18,
+                            size + 18,
+                            i
+                        )
+                    local alpha =
+                        math.Clamp(
+                            (color.a or 255)
+                            * shared(
+                                rtName .. ":alpha",
+                                0.52,
+                                1.0,
+                                i
+                            ),
+                            0,
+                            255
+                        )
+
+                    drawBlob(
+                        rtName .. ":blob",
+                        cx,
+                        cy,
+                        radius * stretch,
+                        radius,
+                        7 + (i % 5),
+                        Color(
+                            color.r,
+                            color.g,
+                            color.b,
+                            alpha
+                        ),
+                        i
+                    )
+                end
+
+                for i = 1, spec.speckles do
+                    local color =
+                        spec.base[
+                            ((i + 1) % #spec.base)
+                            + 1
+                        ]
+                    local s =
+                        shared(
+                            rtName .. ":speck-s",
+                            kind == "stain"
+                                and 1
+                                or 0.7,
+                            kind == "stain"
+                                and 4
+                                or 3.2,
+                            i
+                        )
+
+                    surface.SetDrawColor(
+                        color.r,
+                        color.g,
+                        color.b,
+                        math.Clamp(
+                            (color.a or 255) * 0.72,
+                            0,
+                            255
+                        )
+                    )
+                    surface.DrawRect(
+                        shared(
+                            rtName .. ":speck-x",
+                            0,
+                            size - s,
+                            i
+                        ),
+                        shared(
+                            rtName .. ":speck-y",
+                            0,
+                            size - s,
+                            i
+                        ),
+                        s,
+                        s
+                    )
+                end
+
+                cam.End2D()
+                render.PopRenderTarget()
+
+                local material =
+                    CreateMaterial(
+                        "mex_damage_interior_"
+                            .. kind
+                            .. "_mat_v7",
+                        "UnlitGeneric",
+                        {
+                            ["$basetexture"] =
+                                rt:GetName(),
+                            ["$vertexcolor"] = "1",
+                            ["$vertexalpha"] = "1",
+                            ["$translucent"] = "1",
+                            ["$nocull"] = "1",
+                        }
+                    )
+
+                if material
+                    and not material:IsError()
+                then
+                    MEXD.InteriorDamageTextureMaterials[
+                        kind
+                    ] = material
+                end
+            end
+        end
+
+        MEXD.InteriorDamageTextureMaterialsReady =
+            IsValid(
+                MEXD.InteriorDamageTextureMaterials
+                    and MEXD.InteriorDamageTextureMaterials.oxidation
+            )
+            or (
+                MEXD.InteriorDamageTextureMaterials
+                and MEXD.InteriorDamageTextureMaterials.oxidation
+                and not MEXD.InteriorDamageTextureMaterials.oxidation:IsError()
+            )
+
+        return MEXD.InteriorDamageTextureMaterialsReady
+            == true
+    end
+
+    hook.Add(
+        "InitPostEntity",
+        "MEX.Damage.BuildInteriorTextures",
+        function()
+            timer.Simple(
+                0.25,
+                function()
+                    if istable(
+                        MetrostroiExpandedDamage
+                    ) then
+                        MetrostroiExpandedDamage
+                            .EnsureInteriorDamageTextureMaterials()
+                    end
+                end
+            )
+        end
+    )
+
+    timer.Simple(
+        0.35,
+        function()
+            if istable(
+                MetrostroiExpandedDamage
+            ) then
+                MetrostroiExpandedDamage
+                    .EnsureInteriorDamageTextureMaterials()
+            end
+        end
+    )
 
     -- Keep the legacy fields available for any external code that referenced
     -- them, but do not use the old ivy/rust decal materials anymore.
@@ -25459,6 +25821,159 @@ if CLIENT then
         end
     end
 
+    function MEXD.DrawTexturedInteriorPatch(
+        ent,
+        patch,
+        maturity,
+        kind
+    )
+        if not IsValid(ent)
+            or not istable(patch)
+        then
+            return false
+        end
+
+        if not MEXD.EnsureInteriorDamageTextureMaterials()
+        then
+            return false
+        end
+
+        local material =
+            MEXD.InteriorDamageTextureMaterials
+            and MEXD.InteriorDamageTextureMaterials[
+                tostring(kind or "")
+            ]
+
+        if not material
+            or material:IsError()
+        then
+            return false
+        end
+
+        local worldPos,
+            worldNormal,
+            worldU,
+            worldV =
+            GetWeatherPatchWorldBasis(
+                ent,
+                patch
+            )
+
+        if not worldPos then
+            return false
+        end
+
+        render.SetMaterial(material)
+
+        local scale = 1
+
+        if kind == "mold" then
+            scale = 1.34
+        elseif kind == "stain" then
+            scale = 1.52
+        elseif kind == "moss" then
+            scale = 1.18
+        elseif kind == "oxidation" then
+            scale = 1.10
+        end
+
+        local alpha =
+            math.Clamp(
+                118
+                    + maturity * 126,
+                0,
+                244
+            )
+
+        DrawWeatherSurfaceRect(
+            worldPos,
+            worldNormal,
+            worldU,
+            worldV,
+            0,
+            0,
+            (patch.width or 10) * scale,
+            (patch.height or 8) * scale,
+            patch.rotation or 0,
+            Color(
+                255,
+                255,
+                255,
+                alpha
+            ),
+            0.205
+        )
+
+        if maturity >= 0.62
+            and MEXD.TakeWeatherQuadBudget(1)
+        then
+            render.SetMaterial(material)
+
+            local width =
+                (patch.width or 10)
+                * scale
+                * WeatherPatchRandom(
+                    patch,
+                    "texture-layer-w",
+                    0.46,
+                    0.78,
+                    1
+                )
+            local height =
+                (patch.height or 8)
+                * scale
+                * WeatherPatchRandom(
+                    patch,
+                    "texture-layer-h",
+                    0.42,
+                    0.74,
+                    1
+                )
+
+            DrawWeatherSurfaceRect(
+                worldPos,
+                worldNormal,
+                worldU,
+                worldV,
+                WeatherPatchRandom(
+                    patch,
+                    "texture-layer-u",
+                    -0.18,
+                    0.18,
+                    1
+                )
+                    * (patch.width or 10),
+                WeatherPatchRandom(
+                    patch,
+                    "texture-layer-v",
+                    -0.18,
+                    0.18,
+                    1
+                )
+                    * (patch.height or 8),
+                width,
+                height,
+                (patch.rotation or 0)
+                    + WeatherPatchRandom(
+                        patch,
+                        "texture-layer-r",
+                        -34,
+                        34,
+                        1
+                    ),
+                Color(
+                    255,
+                    255,
+                    255,
+                    math.floor(alpha * 0.58)
+                ),
+                0.214
+            )
+        end
+
+        return true
+    end
+
     function MEXD.DrawInteriorDamagePatch(
         ent,
         patch,
@@ -25479,21 +25994,18 @@ if CLIENT then
         if kind == "oxidation"
             or kind == "rust"
         then
-            DrawRustPatch(
-                ent,
-                patch,
-                maturity
-            )
-
-            DrawWeatherCluster(
+            if not MEXD.DrawTexturedInteriorPatch(
                 ent,
                 patch,
                 maturity,
-                WEATHER_COLORS.oxidation,
-                7,
-                0.92,
-                false
-            )
+                "oxidation"
+            ) then
+                DrawRustPatch(
+                    ent,
+                    patch,
+                    maturity
+                )
+            end
         elseif kind == "grass" then
             DrawGrassTuft(
                 ent,
@@ -25508,35 +26020,56 @@ if CLIENT then
                 maturity
             )
         elseif kind == "moss" then
-            DrawWeatherCluster(
+            if not MEXD.DrawTexturedInteriorPatch(
                 ent,
                 patch,
                 maturity,
-                WEATHER_COLORS.moss,
-                8,
-                0.98,
-                false
-            )
+                "moss"
+            ) then
+                DrawWeatherCluster(
+                    ent,
+                    patch,
+                    maturity,
+                    WEATHER_COLORS.moss,
+                    8,
+                    0.98,
+                    false
+                )
+            end
         elseif kind == "mold" then
-            DrawWeatherCluster(
+            if not MEXD.DrawTexturedInteriorPatch(
                 ent,
                 patch,
                 maturity,
-                WEATHER_COLORS.mold,
-                7,
-                0.92,
-                false
-            )
+                "mold"
+            ) then
+                DrawWeatherCluster(
+                    ent,
+                    patch,
+                    maturity,
+                    WEATHER_COLORS.mold,
+                    7,
+                    0.92,
+                    false
+                )
+            end
         elseif kind == "stain" then
-            DrawWeatherCluster(
+            if not MEXD.DrawTexturedInteriorPatch(
                 ent,
                 patch,
                 maturity,
-                WEATHER_COLORS.stain,
-                8,
-                0.92,
-                false
-            )
+                "stain"
+            ) then
+                DrawWeatherCluster(
+                    ent,
+                    patch,
+                    maturity,
+                    WEATHER_COLORS.stain,
+                    8,
+                    0.92,
+                    false
+                )
+            end
         else
             DrawWeatherCluster(
                 ent,
@@ -25811,18 +26344,44 @@ if CLIENT then
                         0.05
                     )
                 )
-            local maximumSize =
-                profile == "floor"
-                and math.Clamp(
-                    surfaceSize * 1.55,
-                    3.0,
-                    30
-                )
-                or math.Clamp(
-                    surfaceSize * 1.05,
-                    0.45,
-                    8.5
-                )
+            local maximumSize
+
+            if profile == "floor" then
+                maximumSize =
+                    math.Clamp(
+                        surfaceSize * 1.65,
+                        3.4,
+                        34
+                    )
+            elseif profile == "interior"
+                or profile == "fabric"
+                or profile == "wood"
+                or profile == "generic"
+            then
+                maximumSize =
+                    math.Clamp(
+                        surfaceSize * 2.15,
+                        2.8,
+                        28
+                    )
+            elseif profile == "panel_metal"
+                or profile == "panel"
+                or profile == "metal"
+            then
+                maximumSize =
+                    math.Clamp(
+                        surfaceSize * 1.15,
+                        0.42,
+                        9.5
+                    )
+            else
+                maximumSize =
+                    math.Clamp(
+                        surfaceSize * 1.35,
+                        0.6,
+                        14
+                    )
+            end
             local minimumSize =
                 profile == "floor"
                 and math.min(
