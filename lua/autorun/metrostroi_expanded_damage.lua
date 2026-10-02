@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.2"
+MEXD.Version = "0.23.3"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -10782,6 +10782,10 @@ if SERVER then
         train.MEXDamageNextNeglectFault = nil
         train.MEXDamageNextNeglectBreakaway = nil
         train.MEXDamageExtremeNeglectApplied = nil
+        train:SetNW2Bool(
+            "MEX.Damage.CommandNeglectNoBreakaway",
+            false
+        )
         train.MEXDamageNeglectCleanedControls =
             train.MEXDamageNeglectCleanedControls
             or {}
@@ -10860,6 +10864,10 @@ if SERVER then
             CurTime()
         train.MEXDamageNextNeglectFault = nil
         train.MEXDamageNextNeglectBreakaway = nil
+        train:SetNW2Bool(
+            "MEX.Damage.CommandNeglectNoBreakaway",
+            true
+        )
 
         train.MEXDamageNeglectCleanedControls =
             train.MEXDamageNeglectCleanedControls
@@ -11372,6 +11380,10 @@ if SERVER then
     )
         if not IsSubwayTrain(train)
             or not MEXD.IsPhysicalDamageEnabled()
+            or train:GetNW2Bool(
+                "MEX.Damage.CommandNeglectNoBreakaway",
+                false
+            )
         then
             return false
         end
@@ -11801,6 +11813,16 @@ if SERVER then
         )
 
         if weatheringActive then
+            if train:GetNW2Bool(
+                "MEX.Damage.CommandNeglectNoBreakaway",
+                false
+            ) then
+                train:SetNW2Bool(
+                    "MEX.Damage.CommandNeglectNoBreakaway",
+                    false
+                )
+            end
+
             train.MEXDamageNeglectIdleSeconds =
                 math.max(
                     0,
@@ -20236,6 +20258,14 @@ if CLIENT then
                 0
             )
 
+        if train:GetNW2Bool(
+            "MEX.Damage.CommandNeglectNoBreakaway",
+            false
+        ) then
+            train.MEXDamageNeglectClientStage = 0
+            return
+        end
+
         if level < 0.94 then
             train.MEXDamageNeglectClientStage = 0
             return
@@ -23477,33 +23507,50 @@ if CLIENT then
                 elseif profile == "metal"
                     or profile == "panel_metal"
                 then
-                    -- Interior metal must look chemically aged even when the
-                    -- individual model is too small for large procedural rust
-                    -- islands. Oxidation strongly darkens/desaturates paint and
-                    -- shifts exposed metal towards a brown/orange oxide tone.
+                    -- Do not fake rust by turning the whole panel orange.
+                    -- Corrosion is rendered by actual textured overlays below;
+                    -- the base model only becomes duller/darker with age.
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.20
+                                - dirt * 0.18
                                 - scuff * 0.08
-                                - corrosion * 0.24
-                                - interiorDecay * 0.14,
-                            0.38,
+                                - corrosion * 0.16
+                                - interiorDecay * 0.12,
+                            0.50,
                             1
+                        )
+                    local grey =
+                        (
+                            base.r
+                            + base.g
+                            + base.b
+                        ) / 3
+                    local desaturate =
+                        math.Clamp(
+                            corrosion * 0.28,
+                            0,
+                            0.28
                         )
 
                     r =
-                        base.r * darken
-                        + corrosion * 42
+                        Lerp(
+                            desaturate,
+                            base.r * darken,
+                            grey * darken
+                        )
                     g =
-                        base.g
-                        * darken
-                        * (1 - corrosion * 0.22)
-                        + corrosion * 4
+                        Lerp(
+                            desaturate,
+                            base.g * darken,
+                            grey * darken
+                        )
                     b =
-                        base.b
-                        * darken
-                        * (1 - corrosion * 0.35)
+                        Lerp(
+                            desaturate,
+                            base.b * darken,
+                            grey * darken
+                        )
                 else
                     local darken =
                         math.Clamp(
@@ -24257,6 +24304,104 @@ if CLIENT then
             end
         end
     )
+
+    MEXD.GModRustOverlayMaterials = {
+        CreateMaterial(
+            "mex_damage_gmod_rust_tram_v1",
+            "UnlitGeneric",
+            {
+                ["$basetexture"] =
+                    "models/props_wasteland/metal_tram001a",
+                ["$vertexcolor"] = "1",
+                ["$vertexalpha"] = "1",
+                ["$translucent"] = "1",
+                ["$nocull"] = "1",
+            }
+        ),
+        CreateMaterial(
+            "mex_damage_gmod_rust_wall_v1",
+            "UnlitGeneric",
+            {
+                ["$basetexture"] =
+                    "models/props_debris/metalwall001a",
+                ["$vertexcolor"] = "1",
+                ["$vertexalpha"] = "1",
+                ["$translucent"] = "1",
+                ["$nocull"] = "1",
+            }
+        ),
+        CreateMaterial(
+            "mex_damage_gmod_rust_ladder_v1",
+            "UnlitGeneric",
+            {
+                ["$basetexture"] =
+                    "models/props_c17/metalladder003",
+                ["$vertexcolor"] = "1",
+                ["$vertexalpha"] = "1",
+                ["$translucent"] = "1",
+                ["$nocull"] = "1",
+            }
+        ),
+    }
+
+    MEXD.GModDirtOverlayMaterial =
+        CreateMaterial(
+            "mex_damage_gmod_dirt_v1",
+            "UnlitGeneric",
+            {
+                ["$basetexture"] =
+                    "models/props_wasteland/dirtwall001a",
+                ["$vertexcolor"] = "1",
+                ["$vertexalpha"] = "1",
+                ["$translucent"] = "1",
+                ["$nocull"] = "1",
+            }
+        )
+
+    function MEXD.GetGModRustOverlayMaterial(
+        patch
+    )
+        local valid = {}
+
+        for _, material in ipairs(
+            MEXD.GModRustOverlayMaterials
+            or {}
+        ) do
+            if material
+                and not material:IsError()
+            then
+                valid[#valid + 1] =
+                    material
+            end
+        end
+
+        if #valid <= 0 then
+            return nil
+        end
+
+        local fraction =
+            util.SharedRandom(
+                tostring(
+                    patch
+                    and patch.seed
+                    or "MEXRust"
+                )
+                    .. ":gmod-rust-material",
+                0,
+                0.9999,
+                1
+            )
+        local index =
+            math.Clamp(
+                math.floor(
+                    fraction * #valid
+                ) + 1,
+                1,
+                #valid
+            )
+
+        return valid[index]
+    end
 
     -- Keep the legacy fields available for any external code that referenced
     -- them, but do not use the old ivy/rust decal materials anymore.
@@ -26112,11 +26257,25 @@ if CLIENT then
             return false
         end
 
-        local material =
-            MEXD.InteriorDamageTextureMaterials
-            and MEXD.InteriorDamageTextureMaterials[
-                tostring(kind or "")
-            ]
+        local material
+
+        if kind == "oxidation"
+            or kind == "rust"
+        then
+            material =
+                MEXD.GetGModRustOverlayMaterial(
+                    patch
+                )
+        elseif kind == "dirt" then
+            material =
+                MEXD.GModDirtOverlayMaterial
+        else
+            material =
+                MEXD.InteriorDamageTextureMaterials
+                and MEXD.InteriorDamageTextureMaterials[
+                    tostring(kind or "")
+                ]
+        end
 
         if not material
             or material:IsError()
@@ -26147,8 +26306,12 @@ if CLIENT then
             scale = 1.52
         elseif kind == "moss" then
             scale = 1.18
-        elseif kind == "oxidation" then
-            scale = 1.10
+        elseif kind == "oxidation"
+            or kind == "rust"
+        then
+            scale = 1.18
+        elseif kind == "dirt" then
+            scale = 1.42
         end
 
         local extreme =
@@ -26415,6 +26578,23 @@ if CLIENT then
                     false
                 )
             end
+        elseif kind == "dirt" then
+            if not MEXD.DrawTexturedInteriorPatch(
+                ent,
+                patch,
+                maturity,
+                "dirt"
+            ) then
+                DrawWeatherCluster(
+                    ent,
+                    patch,
+                    maturity,
+                    WEATHER_COLORS.dirt,
+                    7,
+                    0.90,
+                    false
+                )
+            end
         else
             DrawWeatherCluster(
                 ent,
@@ -26634,7 +26814,10 @@ if CLIENT then
                         == "generic"
 
                 if rustable
-                    and kindRoll < 0.52
+                    and (
+                        index == 1
+                        or kindRoll < 0.52
+                    )
                 then
                     kind = "oxidation"
                 elseif kindRoll < 0.70 then
@@ -26645,11 +26828,15 @@ if CLIENT then
                     kind = "grime"
                 end
             elseif profile == "floor" then
-                if kindRoll < 0.24 then
+                if index == 1 then
+                    kind = "dirt"
+                elseif kindRoll < 0.18 then
                     kind = "grass"
-                elseif kindRoll < 0.54 then
+                elseif kindRoll < 0.40 then
                     kind = "moss"
-                elseif kindRoll < 0.82 then
+                elseif kindRoll < 0.68 then
+                    kind = "dirt"
+                elseif kindRoll < 0.86 then
                     kind = "stain"
                 else
                     kind = "mold"
@@ -27021,11 +27208,15 @@ if CLIENT then
                 )
             local kind
 
-            if kindRoll < 0.26 then
+            if index <= 3 then
+                kind = "dirt"
+            elseif kindRoll < 0.16 then
                 kind = "grass"
-            elseif kindRoll < 0.57 then
+            elseif kindRoll < 0.36 then
                 kind = "moss"
-            elseif kindRoll < 0.84 then
+            elseif kindRoll < 0.66 then
+                kind = "dirt"
+            elseif kindRoll < 0.86 then
                 kind = "stain"
             else
                 kind = "mold"
@@ -27635,6 +27826,14 @@ if CLIENT then
                         0,
                         1
                     )
+            elseif patch.kind == "dirt" then
+                level =
+                    math.Clamp(
+                        floorDirt * 1.06
+                            + floorDecay * 0.18,
+                        0,
+                        1
+                    )
             else
                 level =
                     math.Clamp(
@@ -27900,6 +28099,14 @@ if CLIENT then
                         math.Clamp(
                             propDecay
                                 + propDirt * 0.22,
+                            0,
+                            1
+                        )
+                elseif patch.kind == "dirt" then
+                    level =
+                        math.Clamp(
+                            propDirt * 1.05
+                                + propDecay * 0.16,
                             0,
                             1
                         )
