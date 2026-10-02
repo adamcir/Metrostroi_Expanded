@@ -26609,14 +26609,14 @@ if CLIENT then
         MEXD._weatherDrawDetail =
             inside
             and math.Clamp(
-                quality * 0.82,
-                0.24,
-                0.82
+                quality * 0.95,
+                0.30,
+                1.0
             )
             or math.Clamp(
-                quality * 0.45,
-                0.18,
-                0.52
+                quality * 0.52,
+                0.20,
+                0.58
             )
 
         -- Baked passenger floor: low-count patches anchored to the real floor
@@ -26635,22 +26635,32 @@ if CLIENT then
                 growth * (1 - floorClean)
             local level
 
-            if patch.kind == "moss" then
+            if patch.kind == "grass" then
                 level =
                     math.Clamp(
-                        math.max(
-                            floorGrowth * 0.98,
-                            floorDecay * 0.80
-                        )
-                            + floorDirt * 0.10,
+                        floorGrowth * 1.06
+                            + floorDecay * 0.42,
                         0,
                         1
                     )
-            elseif patch.kind == "mold" then
+            elseif patch.kind == "moss" then
+                level =
+                    math.Clamp(
+                        math.max(
+                            floorGrowth * 1.04,
+                            floorDecay * 0.84
+                        )
+                            + floorDirt * 0.12,
+                        0,
+                        1
+                    )
+            elseif patch.kind == "mold"
+                or patch.kind == "stain"
+            then
                 level =
                     math.Clamp(
                         floorDecay
-                            + floorDirt * 0.22,
+                            + floorDirt * 0.28,
                         0,
                         1
                     )
@@ -26658,8 +26668,8 @@ if CLIENT then
                 level =
                     math.Clamp(
                         math.max(
-                            floorDecay * 0.94,
-                            floorDirt * 0.86
+                            floorDecay * 0.96,
+                            floorDirt * 0.88
                         ),
                         0,
                         1
@@ -26686,28 +26696,12 @@ if CLIENT then
                     1
                 )
 
-            DrawWeatherCluster(
+            MEXD.DrawInteriorDamagePatch(
                 train,
                 patch,
                 maturity,
-                patch.kind == "moss"
-                    and WEATHER_COLORS.moss
-                    or (
-                        patch.kind == "mold"
-                        and WEATHER_COLORS.mold
-                        or WEATHER_COLORS.grime
-                    ),
-                patch.kind == "moss"
-                    and 4
-                    or 3,
-                patch.kind == "moss"
-                    and 0.82
-                    or (
-                        patch.kind == "mold"
-                        and 0.78
-                        or 0.74
-                    ),
-                false
+                inside
+                    and floorGrowth > 0.34
             )
         end
 
@@ -26729,16 +26723,42 @@ if CLIENT then
                 corrosion * (1 - interiorClean)
             local level
 
-            if patch.kind == "rust" then
-                level = bodyCorrosion
+            if patch.kind == "oxidation"
+                or patch.kind == "rust"
+            then
+                level =
+                    math.Clamp(
+                        bodyCorrosion * 1.04
+                            + bodyDecay * 0.16,
+                        0,
+                        1
+                    )
+            elseif patch.kind == "vine" then
+                level =
+                    math.Clamp(
+                        bodyGrowth * 1.05
+                            + bodyDecay * 0.48,
+                        0,
+                        1
+                    )
             elseif patch.kind == "moss" then
                 level =
                     math.Clamp(
                         math.max(
-                            bodyDecay * 0.82,
-                            bodyGrowth * 0.96
+                            bodyDecay * 0.86,
+                            bodyGrowth * 1.02
                         )
-                        + bodyDirt * 0.10,
+                        + bodyDirt * 0.12,
+                        0,
+                        1
+                    )
+            elseif patch.kind == "stain"
+                or patch.kind == "mold"
+            then
+                level =
+                    math.Clamp(
+                        bodyDecay
+                            + bodyDirt * 0.32,
                         0,
                         1
                     )
@@ -26746,7 +26766,7 @@ if CLIENT then
                 level =
                     math.Clamp(
                         bodyDecay * 0.98
-                            + bodyDirt * 0.22,
+                            + bodyDirt * 0.24,
                         0,
                         1
                     )
@@ -26772,30 +26792,12 @@ if CLIENT then
                     1
                 )
 
-            DrawWeatherCluster(
+            MEXD.DrawInteriorDamagePatch(
                 train,
                 patch,
                 maturity,
-                patch.kind == "rust"
-                    and WEATHER_COLORS.rust
-                    or (
-                        patch.kind == "moss"
-                        and WEATHER_COLORS.moss
-                        or (
-                            patch.kind == "mold"
-                            and WEATHER_COLORS.mold
-                            or WEATHER_COLORS.grime
-                        )
-                    ),
-                3,
-                patch.kind == "rust"
-                    and 0.66
-                    or (
-                        patch.kind == "moss"
-                        and 0.76
-                        or 0.72
-                    ),
-                false
+                inside
+                    and bodyGrowth > 0.30
             )
         end
 
@@ -26878,30 +26880,55 @@ if CLIENT then
             ) do
                 local level
 
-                if patch.kind == "rust" then
+                if patch.kind == "oxidation"
+                    or patch.kind == "rust"
+                then
                     level =
                         profile == "panel_metal"
-                        and math.max(
-                            propPanelCorrosion,
-                            propCorrosion * 0.76
+                        and math.Clamp(
+                            math.max(
+                                propPanelCorrosion,
+                                propCorrosion * 0.88
+                            )
+                                + propDecay * 0.10,
+                            0,
+                            1
                         )
                         or propCorrosion
+                elseif patch.kind == "grass" then
+                    level =
+                        math.Clamp(
+                            propGrowth * 1.06
+                                + propDecay * 0.40,
+                            0,
+                            1
+                        )
+                elseif patch.kind == "vine" then
+                    level =
+                        math.Clamp(
+                            propGrowth * 1.04
+                                + propDecay * 0.46,
+                            0,
+                            1
+                        )
                 elseif patch.kind == "moss" then
                     level =
                         math.Clamp(
                             math.max(
-                                propGrowth * 0.95,
-                                propDecay * 0.78
+                                propGrowth * 1.02,
+                                propDecay * 0.82
                             )
-                                + propDirt * 0.08,
+                                + propDirt * 0.10,
                             0,
                             1
                         )
-                elseif patch.kind == "mold" then
+                elseif patch.kind == "mold"
+                    or patch.kind == "stain"
+                then
                     level =
                         math.Clamp(
                             propDecay
-                                + propDirt * 0.14,
+                                + propDirt * 0.22,
                             0,
                             1
                         )
@@ -26909,8 +26936,8 @@ if CLIENT then
                     level =
                         math.Clamp(
                             math.max(
-                                propDecay * 0.92,
-                                propDirt * 0.72
+                                propDecay * 0.94,
+                                propDirt * 0.76
                             ),
                             0,
                             1
@@ -26938,36 +26965,12 @@ if CLIENT then
                         1
                     )
 
-                DrawWeatherCluster(
+                MEXD.DrawInteriorDamagePatch(
                     prop,
                     patch,
                     maturity,
-                    patch.kind == "rust"
-                        and WEATHER_COLORS.rust
-                        or (
-                            patch.kind == "moss"
-                            and WEATHER_COLORS.moss
-                            or (
-                                patch.kind == "mold"
-                                and WEATHER_COLORS.mold
-                                or WEATHER_COLORS.grime
-                            )
-                        ),
-                    profile == "floor"
-                        and (
-                            patch.kind == "moss"
-                            and 4
-                            or 3
-                        )
-                        or 2,
-                    patch.kind == "rust"
-                        and 0.62
-                        or (
-                            patch.kind == "moss"
-                            and 0.76
-                            or 0.58
-                        ),
-                    false
+                    inside
+                        and propGrowth > 0.34
                 )
             end
         end
