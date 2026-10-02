@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.1"
+MEXD.Version = "0.22.2"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -22425,9 +22425,9 @@ if CLIENT then
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.34
-                                - interiorDecay * 0.36,
-                            0.38,
+                                - dirt * 0.40
+                                - interiorDecay * 0.46,
+                            0.28,
                             1
                         )
                     r =
@@ -22454,9 +22454,9 @@ if CLIENT then
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.25
-                                - interiorDecay * 0.24,
-                            0.46,
+                                - dirt * 0.30
+                                - interiorDecay * 0.34,
+                            0.34,
                             1
                         )
 
@@ -22474,9 +22474,9 @@ if CLIENT then
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.30
-                                - interiorDecay * 0.22,
-                            0.42,
+                                - dirt * 0.34
+                                - interiorDecay * 0.30,
+                            0.30,
                             1
                         )
                     r = base.r * darken
@@ -22528,9 +22528,9 @@ if CLIENT then
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.22
-                                - interiorDecay * 0.18,
-                            0.56,
+                                - dirt * 0.28
+                                - interiorDecay * 0.27,
+                            0.44,
                             1
                         )
                     local yellow =
@@ -22550,9 +22550,9 @@ if CLIENT then
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.28
-                                - interiorDecay * 0.42,
-                            0.42,
+                                - dirt * 0.34
+                                - interiorDecay * 0.52,
+                            0.30,
                             1
                         )
                     local grime =
@@ -22922,7 +22922,7 @@ if CLIENT then
     MEXD.CorrosionOverlayMaterial =
         MEXD.WeatherOverlayMaterial
 
-    local WEATHER_OVERLAY_VERSION = 9
+    local WEATHER_OVERLAY_VERSION = 10
 
     local WEATHER_COLORS = {
         moss = {
@@ -22957,16 +22957,16 @@ if CLIENT then
             Color(126, 130, 128, 116),
         },
         mold = {
-            Color(39, 47, 37, 126),
-            Color(48, 53, 40, 120),
-            Color(57, 55, 43, 108),
-            Color(31, 38, 33, 116),
+            Color(31, 41, 32, 146),
+            Color(40, 49, 35, 140),
+            Color(49, 51, 37, 128),
+            Color(26, 34, 29, 138),
         },
         grime = {
-            Color(45, 42, 37, 112),
-            Color(58, 51, 43, 106),
-            Color(67, 58, 48, 96),
-            Color(36, 37, 35, 102),
+            Color(34, 32, 29, 132),
+            Color(46, 40, 34, 126),
+            Color(55, 46, 38, 116),
+            Color(27, 29, 28, 124),
         },
     }
 
@@ -23753,21 +23753,21 @@ if CLIENT then
                 WeatherPatchRandom(
                     patch,
                     "blade-w",
-                    0.48,
-                    1.18,
+                    0.58,
+                    1.42,
                     i
                 )
             local bladeHeight =
                 WeatherPatchRandom(
                     patch,
                     "blade-h",
-                    5.0,
-                    18.0,
+                    7.0,
+                    24.0,
                     i
                 )
                 * (
-                    0.68
-                    + maturity * 0.92
+                    0.78
+                    + maturity * 1.12
                 )
             local angle =
                 math.rad(
@@ -23895,7 +23895,7 @@ if CLIENT then
     ---------------------------------------------------------------------------
 
     local INTERIOR_NEGLECT_MESH_CACHE = {}
-    local INTERIOR_NEGLECT_PATCH_VERSION = 3
+    local INTERIOR_NEGLECT_PATCH_VERSION = 4
 
     local function InteriorNeglectBodygroupKey(ent)
         if not IsValid(ent) then
@@ -24618,20 +24618,20 @@ if CLIENT then
                 WeatherPatchRandom(
                     patch,
                     "vine-length",
-                    5,
-                    23,
+                    7,
+                    31,
                     i
                 )
                 * (
-                    0.60
-                    + maturity * 0.82
+                    0.72
+                    + maturity * 1.02
                 )
             local width =
                 WeatherPatchRandom(
                     patch,
                     "vine-width",
-                    0.32,
-                    1.05,
+                    0.42,
+                    1.32,
                     i
                 )
             local lean =
@@ -25142,7 +25142,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 16 do
+        for index = 1, 20 do
             local patchSeed =
                 seed
                 .. ":"
@@ -25182,9 +25182,9 @@ if CLIENT then
                 )
             local maximumSize =
                 math.Clamp(
-                    surfaceSize * 1.85,
-                    4.0,
-                    34
+                    surfaceSize * 2.10,
+                    5.0,
+                    40
                 )
             local kind =
                 util.SharedRandom(
@@ -25252,7 +25252,7 @@ if CLIENT then
         end
 
         local key =
-            "v1|"
+            "v2|"
             .. tostring(
                 train:GetModel() or ""
             )
@@ -25367,7 +25367,7 @@ if CLIENT then
 
         local patches = {}
         local seed =
-            "MEXMainInteriorV1:"
+            "MEXMainInteriorV2:"
             .. tostring(
                 train:EntIndex()
             )
@@ -25416,12 +25416,16 @@ if CLIENT then
                     == "metal"
             local kind =
                 rustable
-                    and roll > 0.82
+                    and roll > 0.88
                     and "rust"
                     or (
-                        roll < 0.34
-                        and "mold"
-                        or "grime"
+                        roll < 0.30
+                        and "moss"
+                        or (
+                            roll < 0.57
+                            and "mold"
+                            or "grime"
+                        )
                     )
             local surfaceSize =
                 math.sqrt(
@@ -25433,9 +25437,9 @@ if CLIENT then
                 )
             local size =
                 math.Clamp(
-                    surfaceSize * 1.45,
-                    4.5,
-                    26
+                    surfaceSize * 1.75,
+                    5.5,
+                    32
                 )
 
             patches[#patches + 1] = {
@@ -25471,8 +25475,8 @@ if CLIENT then
                 threshold =
                     util.SharedRandom(
                         patchSeed .. ":threshold",
-                        0.08,
-                        0.74,
+                        0.04,
+                        0.64,
                         index
                     ),
             }
@@ -25511,6 +25515,11 @@ if CLIENT then
         local dirt =
             train:GetNW2Float(
                 "MEX.Damage.DirtLevel",
+                0
+            )
+        local growth =
+            train:GetNW2Float(
+                "MEX.Damage.OvergrowthLevel",
                 0
             )
 
@@ -25622,15 +25631,30 @@ if CLIENT then
                 train
             ) or {}
         ) do
-            local level =
-                patch.kind == "rust"
-                and corrosion
-                or math.Clamp(
-                    decay * 0.96
-                        + dirt * 0.18,
-                    0,
-                    1
-                )
+            local level
+
+            if patch.kind == "rust" then
+                level = corrosion
+            elseif patch.kind == "moss" then
+                level =
+                    math.Clamp(
+                        math.max(
+                            decay * 0.82,
+                            growth * 0.96
+                        )
+                        + dirt * 0.10,
+                        0,
+                        1
+                    )
+            else
+                level =
+                    math.Clamp(
+                        decay * 0.98
+                            + dirt * 0.22,
+                        0,
+                        1
+                    )
+            end
             local threshold =
                 tonumber(
                     patch.threshold
@@ -25659,14 +25683,22 @@ if CLIENT then
                 patch.kind == "rust"
                     and WEATHER_COLORS.rust
                     or (
-                        patch.kind == "mold"
-                        and WEATHER_COLORS.mold
-                        or WEATHER_COLORS.grime
+                        patch.kind == "moss"
+                        and WEATHER_COLORS.moss
+                        or (
+                            patch.kind == "mold"
+                            and WEATHER_COLORS.mold
+                            or WEATHER_COLORS.grime
+                        )
                     ),
-                2,
+                3,
                 patch.kind == "rust"
-                    and 0.62
-                    or 0.68,
+                    and 0.66
+                    or (
+                        patch.kind == "moss"
+                        and 0.76
+                        or 0.72
+                    ),
                 false
             )
         end
@@ -26604,15 +26636,15 @@ if CLIENT then
                 )
             local kind
 
-            if kindRoll < 0.20 then
+            if kindRoll < 0.24 then
                 kind = "grass"
-            elseif kindRoll < 0.34 then
+            elseif kindRoll < 0.46 then
                 kind = "vine"
-            elseif kindRoll < 0.54 then
+            elseif kindRoll < 0.67 then
                 kind = "moss"
-            elseif kindRoll < 0.77 then
+            elseif kindRoll < 0.84 then
                 kind = "rust"
-            elseif kindRoll < 0.91 then
+            elseif kindRoll < 0.94 then
                 kind = "chip"
             else
                 kind = "dirt"
@@ -26725,46 +26757,46 @@ if CLIENT then
                 width =
                     util.SharedRandom(
                         patchSeed .. ":grass-w",
-                        14,
-                        36,
+                        18,
+                        44,
                         index
                     )
                 height =
                     util.SharedRandom(
                         patchSeed .. ":grass-h",
-                        10,
-                        27,
+                        13,
+                        34,
                         index
                     )
                 threshold =
                     util.SharedRandom(
                         patchSeed
                             .. ":grass-threshold",
-                        0.22,
-                        0.88,
+                        0.14,
+                        0.76,
                         index
                     )
             elseif kind == "vine" then
                 width =
                     util.SharedRandom(
                         patchSeed .. ":vine-w",
-                        8,
-                        24,
+                        11,
+                        30,
                         index
                     )
                 height =
                     util.SharedRandom(
                         patchSeed .. ":vine-h",
-                        15,
-                        38,
+                        20,
+                        52,
                         index
                     )
                 threshold =
                     util.SharedRandom(
                         patchSeed
                             .. ":vine-threshold",
-                        0.44,
-                        0.91,
+                        0.28,
+                        0.79,
                         index
                     )
                 rotation = 0
@@ -26772,23 +26804,23 @@ if CLIENT then
                 width =
                     util.SharedRandom(
                         patchSeed .. ":moss-w",
-                        6,
-                        23,
+                        8,
+                        30,
                         index
                     )
                 height =
                     util.SharedRandom(
                         patchSeed .. ":moss-h",
-                        4,
-                        14,
+                        5,
+                        18,
                         index
                     )
                 threshold =
                     util.SharedRandom(
                         patchSeed
                             .. ":moss-threshold",
-                        0.07,
-                        0.91,
+                        0.04,
+                        0.79,
                         index
                     )
             elseif kind == "rust" then
