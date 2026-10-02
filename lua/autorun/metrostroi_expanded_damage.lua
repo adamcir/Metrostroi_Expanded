@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.22.8"
+MEXD.Version = "0.22.9"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -26202,14 +26202,15 @@ if CLIENT then
             count = 8
         elseif profile == "fabric" then
             count = 6
-        elseif profile == "interior"
-            or profile == "wood"
+        elseif profile == "interior" then
+            count = 12
+        elseif profile == "wood"
             or profile == "plastic"
             or profile == "rubber"
         then
-            count = 7
+            count = 8
         else
-            count = 5
+            count = 6
         end
 
         local patches = {}
@@ -26309,14 +26310,34 @@ if CLIENT then
                 else
                     kind = "mold"
                 end
-            elseif profile == "interior"
-                or profile == "wood"
-            then
-                if kindRoll < 0.22 then
+            elseif profile == "interior" then
+                local forced =
+                    index <= 4
+                    and ({
+                        "stain",
+                        "mold",
+                        "moss",
+                        "vine",
+                    })[index]
+                    or nil
+
+                if forced then
+                    kind = forced
+                elseif kindRoll < 0.20 then
                     kind = "vine"
-                elseif kindRoll < 0.50 then
+                elseif kindRoll < 0.45 then
                     kind = "moss"
-                elseif kindRoll < 0.78 then
+                elseif kindRoll < 0.74 then
+                    kind = "stain"
+                else
+                    kind = "mold"
+                end
+            elseif profile == "wood" then
+                if kindRoll < 0.18 then
+                    kind = "vine"
+                elseif kindRoll < 0.45 then
+                    kind = "moss"
+                elseif kindRoll < 0.76 then
                     kind = "stain"
                 else
                     kind = "mold"
@@ -26927,7 +26948,11 @@ if CLIENT then
             local verticalSurface =
                 math.abs(normal.z) < 0.62
 
-            if rustable
+            if index % 11 == 0 then
+                kind = "mold"
+            elseif index % 7 == 0 then
+                kind = "stain"
+            elseif rustable
                 and roll < 0.32
             then
                 kind = "oxidation"
