@@ -216,6 +216,6 @@ function TOOL.BuildCPanel(panel)
         "Reload (R): fully repair every Metrostroi train wagon currently on the map."
     )
     panel:Help(
-        "This resets structural/component damage, water/electrical failures, battery damage, GRKV/relay wear, detached bogeys/couplers and detached hardware."
+        "This resets structural/component damage, water/electrical failures, battery damage, GRKV/relay wear, detached bogeys/couplers and detached hardware, and completely removes neglect, moss, dirt, interior decay and corrosion."
     )
 end
