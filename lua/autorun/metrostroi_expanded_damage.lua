@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.20.4"
+MEXD.Version = "0.21.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -6798,6 +6798,345 @@ if SERVER then
         return true
     end
 
+    local function ProcessElectricalGhostChatter(
+        train
+    )
+        if not IsSubwayTrain(train)
+            or not istable(
+                train.MEXDamageElectricalGhostChatter
+            )
+        then
+            return
+        end
+
+        local now = CurTime()
+
+        for systemName, data in pairs(
+            train.MEXDamageElectricalGhostChatter
+        ) do
+            if now < (
+                tonumber(data.restoreAt)
+                or 0
+            ) then
+                continue
+            end
+
+            local system =
+                train[systemName]
+
+            if istable(system)
+                and istable(data)
+                and isfunction(data.trigger)
+            then
+                pcall(
+                    data.trigger,
+                    system,
+                    "Set",
+                    tonumber(data.originalTarget)
+                        or tonumber(
+                            data.originalValue
+                        )
+                        or 0
+                )
+            end
+
+            train.MEXDamageElectricalGhostChatter[
+                systemName
+            ] = nil
+        end
+
+        if next(
+            train.MEXDamageElectricalGhostChatter
+        ) == nil
+        then
+            train:SetNW2String(
+                "MEX.Damage.GhostRelay",
+                ""
+            )
+        end
+    end
+
+    local function StartElectricalGhostChatter(
+        train,
+        intensity
+    )
+        if not IsSubwayTrain(train)
+            or not MEXD.IsElectricalDamageEnabled()
+        then
+            return false
+        end
+
+        local candidates =
+            CollectWaterRelayChatterCandidates(
+                train
+            )
+
+        if #candidates <= 0 then
+            return false
+        end
+
+        train.MEXDamageElectricalGhostChatter =
+            train.MEXDamageElectricalGhostChatter
+            or {}
+
+        local available = {}
+
+        for _, item in ipairs(candidates) do
+            if not train.MEXDamageElectricalGhostChatter[
+                item.name
+            ]
+                and not (
+                    train.MEXDamageRelayChatter
+                    and train.MEXDamageRelayChatter[
+                        item.name
+                    ]
+                )
+            then
+                available[
+                    #available + 1
+                ] = item
+            end
+        end
+
+        if #available <= 0 then
+            return false
+        end
+
+        local item =
+            available[
+                math.random(
+                    1,
+                    #available
+                )
+            ]
+        local system =
+            item.system
+        local trigger =
+            system.TriggerInput
+
+        if not isfunction(trigger) then
+            return false
+        end
+
+        local originalTarget =
+            tonumber(system.TargetValue)
+        local originalValue =
+            tonumber(system.Value)
+        local current =
+            originalTarget ~= nil
+            and originalTarget
+            or originalValue
+            or 0
+        local ghostValue =
+            current > 0.5
+            and 0
+            or 1
+
+        intensity =
+            math.Clamp(
+                tonumber(intensity) or 0,
+                0,
+                1
+            )
+
+        train.MEXDamageElectricalGhostChatter[
+            item.name
+        ] = {
+            trigger = trigger,
+            originalTarget =
+                originalTarget,
+            originalValue =
+                originalValue,
+            restoreAt =
+                CurTime()
+                + math.Rand(
+                    0.045,
+                    0.16
+                        + intensity * 0.42
+                ),
+        }
+
+        -- This is downstream electrical ghosting: a relay/contact command
+        -- energizes or drops without moving the driver's physical toggle.
+        pcall(
+            trigger,
+            system,
+            "Set",
+            ghostValue
+        )
+
+        train:SetNW2String(
+            "MEX.Damage.GhostRelay",
+            item.name
+        )
+
+        if math.Rand(0, 1)
+            < 0.18 + intensity * 0.30
+        then
+            local pos =
+                MEXD.WaterRelayWorldPosition(
+                    train,
+                    item.name
+                )
+                or train:WorldSpaceCenter()
+
+            MEXD.EmitImpactElectricalArc(
+                train,
+                pos,
+                intensity
+            )
+        end
+
+        PlayLocalizedDamageSound(
+            train,
+            MEXD.WaterRelayWorldPosition(
+                train,
+                item.name
+            ) or train:WorldSpaceCenter(),
+            WATER_RELAY_CHATTER_SOUNDS[
+                math.random(
+                    1,
+                    #WATER_RELAY_CHATTER_SOUNDS
+                )
+            ],
+            50
+                + math.floor(
+                    intensity * 10
+                ),
+            math.random(
+                90,
+                118
+            ),
+            0.32
+                + intensity * 0.28
+        )
+
+        return true
+    end
+
+    function MEXD.UpdateElectricalFaultChatter(
+        train
+    )
+        if not IsSubwayTrain(train) then
+            return
+        end
+
+        ProcessElectricalGhostChatter(
+            train
+        )
+
+        if not MEXD.IsElectricalDamageEnabled() then
+            return
+        end
+
+        local electrical =
+            math.Clamp(
+                train:GetNW2Float(
+                    "MEX.Damage.electrical",
+                    0
+                ),
+                0,
+                1
+            )
+        local neglect =
+            math.Clamp(
+                train:GetNW2Float(
+                    "MEX.Damage.NeglectLevel",
+                    0
+                ),
+                0,
+                1
+            )
+        local failedRelays =
+            table.Count(
+                train.MEXDamageWearFailedSystems
+                or {}
+            )
+        local faultLevel =
+            math.Clamp(
+                math.max(
+                    electrical,
+                    math.max(
+                        neglect - 0.35,
+                        0
+                    ) * 0.92,
+                    math.min(
+                        failedRelays / 12,
+                        1
+                    ) * 0.72
+                ),
+                0,
+                1
+            )
+
+        if faultLevel < 0.20 then
+            return
+        end
+
+        local voltage,
+            current =
+            GetTrainElectricalWaterState(
+                train
+            )
+
+        if voltage < 18
+            or current <= 0.01
+        then
+            return
+        end
+
+        local now =
+            CurTime()
+
+        if (
+            train.MEXDamageNextElectricalGhost
+            or 0
+        ) > now
+        then
+            return
+        end
+
+        local chance =
+            math.Clamp(
+                0.025
+                    + faultLevel
+                        * faultLevel
+                        * 0.64,
+                0.025,
+                0.68
+            )
+
+        if math.Rand(0, 1)
+            < chance
+        then
+            StartElectricalGhostChatter(
+                train,
+                faultLevel
+            )
+
+            if faultLevel > 0.78
+                and math.Rand(0, 1)
+                    < 0.26
+            then
+                StartElectricalGhostChatter(
+                    train,
+                    faultLevel
+                )
+            end
+        end
+
+        train.MEXDamageNextElectricalGhost =
+            now
+            + math.Rand(
+                0.12,
+                Lerp(
+                    faultLevel,
+                    1.35,
+                    0.22
+                )
+            )
+    end
+
     local function UpdateWaterTransientGlitches(
         train,
         wetness,
@@ -7183,6 +7522,12 @@ if SERVER then
             train.MEXDamageImpactArcPositions = {}
             train.MEXDamageImpactArcSeverity = 0
             train.MEXDamageNextImpactArc = nil
+        train.MEXDamageNextElectricalGhost = nil
+        train.MEXDamageElectricalGhostChatter = {}
+        train:SetNW2String(
+            "MEX.Damage.GhostRelay",
+            ""
+        )
             train:SetNW2Float(
                 "MEX.Damage.ThirdRailFloodSeconds",
                 0
@@ -10403,6 +10748,17 @@ if SERVER then
             false
         )
 
+        if level >= 0.90
+            and isfunction(
+                MEXD.ApplyExtremeNeglectFailures
+            )
+        then
+            MEXD.ApplyExtremeNeglectFailures(
+                train,
+                level
+            )
+        end
+
         return true
     end
 
@@ -10648,9 +11004,9 @@ if SERVER then
         -- metal switchgear can legitimately seize from rust/oxide.
         local maxFraction =
             math.Clamp(
-                0.12 + severity * 0.52,
+                0.12 + severity * 0.73,
                 0.12,
-                0.64
+                0.85
             )
         local maximum =
             math.max(
@@ -10693,7 +11049,8 @@ if SERVER then
     end
 
     function MEXD.FailCorrodedIndicator(
-        train
+        train,
+        severity
     )
         if not IsSubwayTrain(train) then
             return false
@@ -10727,11 +11084,28 @@ if SERVER then
                 train.MEXDamageFailedIndicators
                 or {}
             )
+        severity =
+            math.Clamp(
+                tonumber(severity)
+                    or train:GetNW2Float(
+                        "MEX.Damage.NeglectLevel",
+                        0
+                    ),
+                0,
+                1
+            )
+
         local maximum =
             math.max(
                 1,
                 math.floor(
-                    total * 0.28
+                    total
+                    * math.Clamp(
+                        0.18
+                            + severity * 0.52,
+                        0.18,
+                        0.70
+                    )
                 )
             )
 
@@ -10780,6 +11154,227 @@ if SERVER then
                 false
             )
         end
+
+        return true
+    end
+
+    function MEXD.ApplyExtremeNeglectFailures(
+        train,
+        level
+    )
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        level =
+            math.Clamp(
+                tonumber(level) or 0,
+                0,
+                1
+            )
+
+        if level < 0.90 then
+            return false
+        end
+
+        local severity =
+            math.Clamp(
+                (level - 0.90) / 0.10,
+                0,
+                1
+            )
+
+        EnsureButtonEventGuard(train)
+        EnsureWearLightGuard(train)
+        EnsureIndicatorWearGuard(train)
+
+        -- At 100% this represents a wagon abandoned for decades, not merely a
+        -- dirty service train. Most panel hardware is seized or intermittent.
+        local controlAttempts =
+            math.floor(
+                18 + severity * 240
+            )
+
+        for _ = 1, controlAttempts do
+            if not MEXD.FailCorrodedControl(
+                train,
+                level
+            ) then
+                break
+            end
+        end
+
+        -- Indicators and lamps have had decades of moisture, oxidation and
+        -- failed seals. Leave a minority alive so the train is "almost" rather
+        -- than mathematically completely dead.
+        for _ = 1, math.floor(
+            5 + severity * 120
+        ) do
+            if not MEXD.FailCorrodedIndicator(
+                train,
+                level
+            ) then
+                break
+            end
+        end
+
+        train.MEXDamageWearFailedLights =
+            train.MEXDamageWearFailedLights
+            or {}
+
+        if istable(train.Lights) then
+            local lampChance =
+                0.18 + severity * 0.62
+
+            for index, light in pairs(
+                train.Lights
+            ) do
+                if istable(light)
+                    and isvector(light[2])
+                    and math.Rand(0, 1)
+                        < lampChance
+                then
+                    train.MEXDamageWearFailedLights[
+                        index
+                    ] = true
+                    train:SetNW2Bool(
+                        "MEX.Damage.WearLight."
+                            .. tostring(index),
+                        true
+                    )
+
+                    local direct =
+                        train.MEXDamageWearOriginalSetLightPower
+
+                    if isfunction(direct) then
+                        direct(
+                            train,
+                            index,
+                            false,
+                            0
+                        )
+                    elseif isfunction(
+                        train.SetLightPower
+                    ) then
+                        train:SetLightPower(
+                            index,
+                            false,
+                            0
+                        )
+                    end
+                end
+            end
+        end
+
+        train:SetNW2Int(
+            "MEX.Damage.FailedLightCount",
+            table.Count(
+                train.MEXDamageWearFailedLights
+            )
+        )
+
+        -- A large fraction of hidden relay/contact circuits seize open. Panel
+        -- switches themselves remain physical objects and can still be repaired
+        -- individually by the Train Fixer.
+        if MEXD.IsElectricalDamageEnabled()
+            and istable(train.Systems)
+        then
+            local relayChance =
+                0.12 + severity * 0.58
+
+            for systemName, system in pairs(
+                train.Systems
+            ) do
+                systemName =
+                    tostring(systemName)
+
+                if IsRelayLikeElectricalSystem(system)
+                    and not MEXD.IsVisiblePanelOperatorSystem(
+                        train,
+                        systemName,
+                        system
+                    )
+                    and not IsCircuitBreakerSystem(
+                        systemName,
+                        system
+                    )
+                    and not IsFuseSystemName(
+                        systemName
+                    )
+                    and math.Rand(0, 1)
+                        < relayChance
+                then
+                    if FailElectricalSystemOpen(
+                        train,
+                        systemName,
+                        {
+                            cause = "neglect",
+                            temporary = false,
+                        }
+                    ) then
+                        train.MEXDamageWearFailedSystems =
+                            train.MEXDamageWearFailedSystems
+                            or {}
+                        train.MEXDamageWearFailedSystems[
+                            systemName
+                        ] = true
+                    end
+                end
+            end
+
+            train:SetNW2Int(
+                "MEX.Damage.FailedRelayCount",
+                table.Count(
+                    train.MEXDamageWearFailedSystems
+                    or {}
+                )
+            )
+            train:SetNW2Float(
+                "MEX.Damage.electrical",
+                math.max(
+                    train:GetNW2Float(
+                        "MEX.Damage.electrical",
+                        0
+                    ),
+                    0.62
+                        + severity * 0.36
+                )
+            )
+            train:SetNW2Bool(
+                "MEX.Damage.ElectricalFault",
+                true
+            )
+        end
+
+        if istable(train.Battery)
+            and isfunction(
+                MEXD.ApplyBatteryDamage
+            )
+        then
+            MEXD.ApplyBatteryDamage(
+                train,
+                0.34 + severity * 0.63,
+                "50-year neglect"
+            )
+        end
+
+        if severity > 0.72
+            and math.Rand(0, 1)
+                < 0.45 + severity * 0.40
+        then
+            FailGRKVFromWear(train)
+        end
+
+        train:SetNW2Float(
+            "MEX.Damage.ScuffLevel",
+            math.max(
+                train:GetNW2Float(
+                    "MEX.Damage.ScuffLevel",
+                    0
+                ),
+                0.42 + severity * 0.48
+            )
+        )
 
         return true
     end
@@ -11056,7 +11651,8 @@ if SERVER then
                 < 0.030 + level * 0.075
         then
             MEXD.FailCorrodedIndicator(
-                train
+                train,
+                level
             )
         end
 
@@ -12782,6 +13378,12 @@ if SERVER then
         train.MEXDamageImpactArcPositions = {}
         train.MEXDamageImpactArcSeverity = 0
         train.MEXDamageNextImpactArc = nil
+        train.MEXDamageNextElectricalGhost = nil
+        train.MEXDamageElectricalGhostChatter = {}
+        train:SetNW2String(
+            "MEX.Damage.GhostRelay",
+            ""
+        )
         train:SetNW2Float("MEX.Damage.WaterGlitchIntensity", 0)
         train:SetNW2Float("MEX.Damage.BatteryGlitchFactor", 1)
         train:SetNW2Float("MEX.Damage.BatteryFloodLevel", 0)
@@ -12872,6 +13474,12 @@ if SERVER then
         train.MEXDamageImpactArcPositions = {}
         train.MEXDamageImpactArcSeverity = 0
         train.MEXDamageNextImpactArc = nil
+        train.MEXDamageNextElectricalGhost = nil
+        train.MEXDamageElectricalGhostChatter = {}
+        train:SetNW2String(
+            "MEX.Damage.GhostRelay",
+            ""
+        )
 
         train:SetNW2Float("MEX.Damage.electrical", 0)
         train:SetNW2Bool("MEX.Damage.ElectricalFault", false)
@@ -14829,6 +15437,9 @@ if SERVER then
                 MEXD.UpdateImpactElectricalArcing(train)
                 MEXD.UpdateTrainFire(train, dT)
                 UpdateWaterElectricalDamage(train, dT)
+                MEXD.UpdateElectricalFaultChatter(
+                    train
+                )
             end
         end
     end)
@@ -22118,7 +22729,7 @@ if CLIENT then
     MEXD.CorrosionOverlayMaterial =
         MEXD.WeatherOverlayMaterial
 
-    local WEATHER_OVERLAY_VERSION = 6
+    local WEATHER_OVERLAY_VERSION = 7
 
     local WEATHER_COLORS = {
         moss = {
@@ -22883,9 +23494,9 @@ if CLIENT then
         )
 
         local blades =
-            5
+            8
             + math.floor(
-                maturity * 11
+                maturity * 25
             )
 
         for i = 1, blades do
@@ -22919,13 +23530,13 @@ if CLIENT then
                 WeatherPatchRandom(
                     patch,
                     "blade-h",
-                    3.8,
-                    10.8,
+                    5.0,
+                    18.0,
                     i
                 )
                 * (
-                    0.62
-                    + maturity * 0.70
+                    0.68
+                    + maturity * 0.92
                 )
             local angle =
                 math.rad(
@@ -25183,7 +25794,7 @@ if CLIENT then
             )
         local patches = {}
 
-        for index = 1, 176 do
+        for index = 1, 288 do
             local patchSeed =
                 seed
                 .. ":"
@@ -25197,13 +25808,13 @@ if CLIENT then
                 )
             local kind
 
-            if kindRoll < 0.13 then
+            if kindRoll < 0.22 then
                 kind = "grass"
-            elseif kindRoll < 0.39 then
+            elseif kindRoll < 0.52 then
                 kind = "moss"
-            elseif kindRoll < 0.72 then
+            elseif kindRoll < 0.76 then
                 kind = "rust"
-            elseif kindRoll < 0.90 then
+            elseif kindRoll < 0.91 then
                 kind = "chip"
             else
                 kind = "dirt"
@@ -25315,23 +25926,23 @@ if CLIENT then
                 width =
                     util.SharedRandom(
                         patchSeed .. ":grass-w",
-                        10,
-                        27,
+                        14,
+                        36,
                         index
                     )
                 height =
                     util.SharedRandom(
                         patchSeed .. ":grass-h",
-                        7,
-                        19,
+                        10,
+                        27,
                         index
                     )
                 threshold =
                     util.SharedRandom(
                         patchSeed
                             .. ":grass-threshold",
-                        0.36,
-                        0.95,
+                        0.22,
+                        0.88,
                         index
                     )
             elseif kind == "moss" then
@@ -25441,9 +26052,9 @@ if CLIENT then
             -- across the air next to a rounded roof.
             local localLimit =
                 math.Clamp(
-                    surfaceSize * 2.4,
+                    surfaceSize * 2.7,
                     5,
-                    24
+                    32
                 )
             width =
                 math.min(
@@ -25642,8 +26253,11 @@ if CLIENT then
                     patch,
                     maturity,
                     WEATHER_COLORS.moss,
-                    8,
-                    0.84,
+                    8
+                        + math.floor(
+                            maturity * 8
+                        ),
+                    0.88,
                     false
                 )
             end
