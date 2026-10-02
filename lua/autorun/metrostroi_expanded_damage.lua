@@ -27981,14 +27981,364 @@ if CLIENT then
         return 0
     end
 
+    function MEXD.BuildButtonMapCorrosionPatches(
+        train
+    )
+        if not IsSubwayTrain(train)
+            or not istable(train.ButtonMap)
+        then
+            return {}
+        end
+
+        local meshData =
+            GetInteriorNeglectRenderMesh(
+                train
+            )
+
+        if not istable(meshData)
+            or not istable(meshData.triangles)
+        then
+            return {}
+        end
+
+        local key =
+            "v2|"
+            .. tostring(
+                train:GetModel() or ""
+            )
+            .. "|"
+            .. tostring(
+                train:GetSkin() or 0
+            )
+            .. "|"
+            .. InteriorNeglectBodygroupKey(
+                train
+            )
+            .. "|"
+            .. tostring(
+                table.Count(train.ButtonMap)
+            )
+
+        if train.MEXDamageButtonMapCorrosionKey
+                == key
+            and istable(
+                train.MEXDamageButtonMapCorrosionPatches
+            )
+        then
+            return train.MEXDamageButtonMapCorrosionPatches
+        end
+
+        local mins =
+            train:OBBMins()
+        local maxs =
+            train:OBBMaxs()
+
+        if not isvector(mins)
+            or not isvector(maxs)
+        then
+            return {}
+        end
+
+        local center =
+            (mins + maxs) * 0.5
+        local halfLength =
+            math.max(
+                math.abs(maxs.x - mins.x)
+                    * 0.5,
+                1
+            )
+        local patches = {}
+
+        for panelName, panel in pairs(
+            train.ButtonMap
+        ) do
+            if panelName == "BaseClass"
+                or not istable(panel)
+                or not isvector(panel.pos)
+                or not isangle(panel.ang)
+                or not istable(panel.buttons)
+            then
+                continue
+            end
+
+            local width =
+                tonumber(panel.width) or 0
+            local height =
+                tonumber(panel.height) or 0
+            local scale =
+                tonumber(panel.scale) or 0
+
+            if width <= 0
+                or height <= 0
+                or scale <= 0
+            then
+                continue
+            end
+
+            local physicalWidth =
+                width * scale
+            local physicalHeight =
+                height * scale
+
+            if physicalWidth < 3
+                or physicalHeight < 2
+                or physicalWidth > 110
+                or physicalHeight > 110
+            then
+                continue
+            end
+
+            if math.abs(
+                panel.pos.x - center.x
+            ) < halfLength * 0.30
+            then
+                continue
+            end
+
+            local buttonCount = 0
+
+            for _, button in pairs(
+                panel.buttons
+            ) do
+                if istable(button)
+                    and isstring(button.ID)
+                    and button.ID ~= ""
+                    and string.sub(
+                        button.ID,
+                        1,
+                        1
+                    ) ~= "!"
+                then
+                    buttonCount =
+                        buttonCount + 1
+                end
+            end
+
+            if buttonCount <= 0 then
+                continue
+            end
+
+            local panelU =
+                panel.ang:Forward()
+            local panelV =
+                -panel.ang:Right()
+            local panelNormal =
+                panel.ang:Up()
+            local candidates = {}
+
+            local function gather(
+                pad,
+                normalDistance,
+                alignment
+            )
+                candidates = {}
+
+                for _, tri in ipairs(
+                    meshData.triangles
+                ) do
+                    local materialProfile =
+                        tostring(
+                            tri.materialProfile
+                            or "generic"
+                        )
+
+                    if materialProfile == "glass"
+                        or materialProfile == "hidden"
+                        or materialProfile == "floor"
+                        or materialProfile == "fabric"
+                        or materialProfile == "rubber"
+                        or materialProfile == "plastic"
+                    then
+                        continue
+                    end
+
+                    local rel =
+                        tri.center
+                        - panel.pos
+                    local u =
+                        rel:Dot(panelU)
+                    local v =
+                        rel:Dot(panelV)
+                    local n =
+                        math.abs(
+                            rel:Dot(
+                                panelNormal
+                            )
+                        )
+                    local facing =
+                        math.abs(
+                            tri.normal:Dot(
+                                panelNormal
+                            )
+                        )
+
+                    if u >= -pad
+                        and u <= physicalWidth + pad
+                        and v >= -pad
+                        and v <= physicalHeight + pad
+                        and n <= normalDistance
+                        and facing >= alignment
+                    then
+                        candidates[
+                            #candidates + 1
+                        ] = tri
+                    end
+                end
+            end
+
+            gather(
+                5,
+                9,
+                0.28
+            )
+
+            if #candidates == 0 then
+                gather(
+                    10,
+                    18,
+                    0.16
+                )
+            end
+
+            if #candidates == 0 then
+                continue
+            end
+
+            local patchCount =
+                math.Clamp(
+                    math.floor(
+                        4
+                            + math.min(
+                                buttonCount,
+                                24
+                            ) * 0.22
+                    ),
+                    4,
+                    10
+                )
+
+            for index = 1, patchCount do
+                local seed =
+                    "MEXButtonMapMeshRust:"
+                    .. tostring(
+                        train:EntIndex()
+                    )
+                    .. ":"
+                    .. tostring(panelName)
+                    .. ":"
+                    .. tostring(index)
+                local tri =
+                    PickInteriorNeglectTriangle(
+                        candidates,
+                        seed,
+                        index
+                    )
+
+                if not tri then
+                    continue
+                end
+
+                local pos,
+                    normal,
+                    tangentU,
+                    tangentV =
+                    InteriorPointOnTriangle(
+                        tri,
+                        seed,
+                        index
+                    )
+
+                if not pos then
+                    continue
+                end
+
+                if normal:Dot(
+                    panelNormal
+                ) < 0
+                then
+                    normal = -normal
+                    tangentV =
+                        normal:Cross(
+                            tangentU
+                        )
+
+                    if tangentV:LengthSqr()
+                        > 0.0001
+                    then
+                        tangentV:Normalize()
+                    end
+                end
+
+                local surfaceSize =
+                    math.sqrt(
+                        math.max(
+                            tonumber(tri.area)
+                                or 0.2,
+                            0.05
+                        )
+                    )
+                local maximumSize =
+                    math.Clamp(
+                        surfaceSize * 1.45,
+                        1.4,
+                        12.5
+                    )
+
+                patches[#patches + 1] = {
+                    kind = "oxidation",
+                    seed = seed,
+                    pos = pos,
+                    normal = normal,
+                    tangentU = tangentU,
+                    tangentV = tangentV,
+                    width =
+                        maximumSize
+                        * util.SharedRandom(
+                            seed .. ":w",
+                            0.55,
+                            1.0,
+                            index
+                        ),
+                    height =
+                        maximumSize
+                        * util.SharedRandom(
+                            seed .. ":h",
+                            0.42,
+                            0.92,
+                            index
+                        ),
+                    rotation =
+                        util.SharedRandom(
+                            seed .. ":r",
+                            -28,
+                            28,
+                            index
+                        ),
+                    threshold =
+                        util.SharedRandom(
+                            seed .. ":threshold",
+                            0.10,
+                            0.74,
+                            index
+                        ),
+                }
+            end
+        end
+
+        train.MEXDamageButtonMapCorrosionKey =
+            key
+        train.MEXDamageButtonMapCorrosionPatches =
+            patches
+
+        return patches
+    end
+
     function MEXD.DrawButtonMapCorrosion(
         train,
         corrosion,
         cleanFactor
     )
-        if not IsSubwayTrain(train)
-            or not istable(train.ButtonMap)
-        then
+        if not IsSubwayTrain(train) then
             return
         end
 
@@ -28045,217 +28395,38 @@ if CLIENT then
             return
         end
 
-        local mins =
-            train:OBBMins()
-        local maxs =
-            train:OBBMaxs()
-
-        if not isvector(mins)
-            or not isvector(maxs)
-        then
-            return
-        end
-
-        local center =
-            (mins + maxs) * 0.5
-        local halfLength =
-            math.max(
-                math.abs(maxs.x - mins.x)
-                    * 0.5,
-                1
-            )
-
-        for panelName, panel in pairs(
-            train.ButtonMap
+        for _, patch in ipairs(
+            MEXD.BuildButtonMapCorrosionPatches(
+                train
+            ) or {}
         ) do
-            if panelName == "BaseClass"
-                or not istable(panel)
-                or not isvector(panel.pos)
-                or not isangle(panel.ang)
-                or not istable(panel.buttons)
-            then
+            local threshold =
+                tonumber(
+                    patch.threshold
+                ) or 1
+
+            if level < threshold then
                 continue
             end
 
-            local width =
-                tonumber(panel.width) or 0
-            local height =
-                tonumber(panel.height) or 0
-            local scale =
-                tonumber(panel.scale) or 0
-
-            if width <= 0
-                or height <= 0
-                or scale <= 0
-            then
-                continue
-            end
-
-            local physicalWidth =
-                width * scale
-            local physicalHeight =
-                height * scale
-
-            if physicalWidth < 3
-                or physicalHeight < 2
-                or physicalWidth > 110
-                or physicalHeight > 110
-            then
-                continue
-            end
-
-            -- Restrict the generic surface overlay to cab-end ButtonMaps.
-            -- Passenger-door/touch maps spread down the whole vehicle and are
-            -- interaction planes rather than dashboard metal.
-            if math.abs(
-                panel.pos.x - center.x
-            ) < halfLength * 0.30
-            then
-                continue
-            end
-
-            local buttonCount = 0
-
-            for _, button in pairs(
-                panel.buttons
-            ) do
-                if istable(button)
-                    and isstring(button.ID)
-                    and button.ID ~= ""
-                    and string.sub(button.ID, 1, 1)
-                        ~= "!"
-                then
-                    buttonCount =
-                        buttonCount + 1
-                end
-            end
-
-            if buttonCount <= 0 then
-                continue
-            end
-
-            local normal =
-                panel.ang:Up()
-            local tangentU =
-                panel.ang:Forward()
-            local tangentV =
-                -panel.ang:Right()
-            local panelCenter =
-                panel.pos
-                + tangentU
-                    * physicalWidth
-                    * 0.5
-                + tangentV
-                    * physicalHeight
-                    * 0.5
-            local patchCount =
+            local maturity =
                 math.Clamp(
-                    math.floor(
-                        1 + level * 7
+                    (
+                        level - threshold
+                    ) / math.max(
+                        1 - threshold,
+                        0.18
                     ),
-                    1,
-                    8
+                    0,
+                    1
                 )
 
-            for index = 1, patchCount do
-                local seed =
-                    "MEXButtonMapRust:"
-                    .. tostring(
-                        train:EntIndex()
-                    )
-                    .. ":"
-                    .. tostring(panelName)
-                    .. ":"
-                    .. tostring(index)
-                local patchWidth =
-                    physicalWidth
-                    * util.SharedRandom(
-                        seed .. ":w",
-                        0.16,
-                        0.46,
-                        index
-                    )
-                local patchHeight =
-                    physicalHeight
-                    * util.SharedRandom(
-                        seed .. ":h",
-                        0.18,
-                        0.52,
-                        index
-                    )
-                local availableU =
-                    math.max(
-                        physicalWidth
-                            - patchWidth,
-                        0
-                    )
-                local availableV =
-                    math.max(
-                        physicalHeight
-                            - patchHeight,
-                        0
-                    )
-                local offsetU =
-                    util.SharedRandom(
-                        seed .. ":u",
-                        -availableU * 0.5,
-                        availableU * 0.5,
-                        index
-                    )
-                local offsetV =
-                    util.SharedRandom(
-                        seed .. ":v",
-                        -availableV * 0.5,
-                        availableV * 0.5,
-                        index
-                    )
-                local threshold =
-                    util.SharedRandom(
-                        seed .. ":threshold",
-                        0.10,
-                        0.72,
-                        index
-                    )
-
-                if level < threshold then
-                    continue
-                end
-
-                MEXD.DrawTexturedInteriorPatch(
-                    train,
-                    {
-                        kind = "oxidation",
-                        seed = seed,
-                        pos =
-                            panelCenter
-                            + tangentU * offsetU
-                            + tangentV * offsetV,
-                        normal = normal,
-                        tangentU = tangentU,
-                        tangentV = tangentV,
-                        width = patchWidth,
-                        height = patchHeight,
-                        rotation =
-                            util.SharedRandom(
-                                seed .. ":r",
-                                -28,
-                                28,
-                                index
-                            ),
-                    },
-                    math.Clamp(
-                        (
-                            level - threshold
-                        ) / math.max(
-                            1 - threshold,
-                            0.18
-                        ),
-                        0,
-                        1
-                    ),
-                    "oxidation"
-                )
-            end
+            MEXD.DrawTexturedInteriorPatch(
+                train,
+                patch,
+                maturity,
+                "oxidation"
+            )
         end
     end
 
