@@ -15135,7 +15135,7 @@ if SERVER then
                 train,
                 "floor"
             )
-        elseif string.sub(target, 1, 17)
+        elseif string.sub(target, 1, 16)
             == "surface:interior"
         then
             return MEXD.CleanNeglectSurface(
@@ -23236,6 +23236,33 @@ if CLIENT then
                         "MEX.Damage.InteriorDecay",
                         0
                     )
+                local floorClean =
+                    math.Clamp(
+                        train:GetNW2Float(
+                            "MEX.Damage.CleanFloor",
+                            0
+                        ),
+                        0,
+                        1
+                    )
+                local interiorClean =
+                    math.Clamp(
+                        train:GetNW2Float(
+                            "MEX.Damage.CleanInterior",
+                            0
+                        ),
+                        0,
+                        1
+                    )
+                local panelClean =
+                    math.Clamp(
+                        train:GetNW2Float(
+                            "MEX.Damage.CleanPanel",
+                            0
+                        ),
+                        0,
+                        1
+                    )
 
                 -- Keep the main carbody tint deliberately subtle because some
                 -- train models bake window glass into the body model. Surface
@@ -23262,6 +23289,58 @@ if CLIENT then
                             name,
                             prop
                         )
+                    local controlClean = 0
+
+                    if isfunction(
+                        MEXD.GetNeglectControlCleanFactor
+                    ) then
+                        controlClean =
+                            MEXD.GetNeglectControlCleanFactor(
+                                train,
+                                name,
+                                prop
+                            )
+                    end
+
+                    local clean
+
+                    if profile == "floor" then
+                        clean =
+                            math.max(
+                                floorClean,
+                                controlClean
+                            )
+                    elseif profile == "panel"
+                        or profile == "panel_metal"
+                    then
+                        clean =
+                            math.max(
+                                panelClean,
+                                controlClean
+                            )
+                    elseif profile == "glass"
+                        or profile == "light_lens"
+                    then
+                        clean = controlClean
+                    else
+                        clean =
+                            math.max(
+                                interiorClean,
+                                controlClean
+                            )
+                    end
+
+                    local dirt =
+                        dirt * (1 - clean)
+                    local growth =
+                        growth * (1 - clean)
+                    local scuff =
+                        scuff * (1 - clean)
+                    local corrosion =
+                        corrosion * (1 - clean)
+                    local interiorDecay =
+                        interiorDecay
+                            * (1 - clean)
 
                     if profile == "glass"
                         or profile == "light_lens"
