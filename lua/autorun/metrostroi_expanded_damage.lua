@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.3"
+MEXD.Version = "0.23.4"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -26252,7 +26252,13 @@ if CLIENT then
             return false
         end
 
-        if not MEXD.EnsureInteriorDamageTextureMaterials()
+        local usesBuiltInTexture =
+            kind == "oxidation"
+            or kind == "rust"
+            or kind == "dirt"
+
+        if not usesBuiltInTexture
+            and not MEXD.EnsureInteriorDamageTextureMaterials()
         then
             return false
         end
