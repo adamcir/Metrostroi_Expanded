@@ -25660,25 +25660,25 @@ if CLIENT then
         local count
 
         if maxDimension <= 7 then
-            count = 1
-        elseif maxDimension <= 20 then
             count = 2
+        elseif maxDimension <= 20 then
+            count = 3
         elseif profile == "floor" then
-            count = 12
+            count = 18
         elseif profile == "panel_metal"
             or profile == "metal"
         then
-            count = 5
+            count = 8
         elseif profile == "fabric" then
-            count = 4
+            count = 6
         elseif profile == "interior"
             or profile == "wood"
             or profile == "plastic"
             or profile == "rubber"
         then
-            count = 3
+            count = 7
         else
-            count = 2
+            count = 5
         end
 
         local patches = {}
@@ -25713,6 +25713,22 @@ if CLIENT then
                 continue
             end
 
+            if profile == "floor"
+                and normal.z < 0
+            then
+                normal = -normal
+                tangentV =
+                    normal:Cross(
+                        tangentU
+                    )
+
+                if tangentV:LengthSqr()
+                    > 0.0001
+                then
+                    tangentV:Normalize()
+                end
+            end
+
             local materialProfile =
                 tostring(
                     tri.materialProfile
@@ -25736,42 +25752,52 @@ if CLIENT then
                         == "generic"
 
                 if rustable
-                    and kindRoll < 0.50
+                    and kindRoll < 0.52
                 then
-                    kind = "rust"
-                elseif kindRoll < 0.72 then
+                    kind = "oxidation"
+                elseif kindRoll < 0.70 then
                     kind = "moss"
+                elseif kindRoll < 0.88 then
+                    kind = "stain"
                 else
-                    kind = "dirt"
+                    kind = "grime"
                 end
             elseif profile == "floor" then
-                if kindRoll < 0.42 then
+                if kindRoll < 0.24 then
+                    kind = "grass"
+                elseif kindRoll < 0.54 then
                     kind = "moss"
-                elseif kindRoll < 0.74 then
-                    kind = "mold"
+                elseif kindRoll < 0.82 then
+                    kind = "stain"
                 else
-                    kind = "dirt"
+                    kind = "mold"
                 end
             elseif profile == "fabric" then
-                kind =
-                    kindRoll < 0.56
-                    and "mold"
-                    or "dirt"
+                if kindRoll < 0.58 then
+                    kind = "stain"
+                else
+                    kind = "mold"
+                end
             elseif profile == "interior"
                 or profile == "wood"
             then
-                if kindRoll < 0.36 then
+                if kindRoll < 0.22 then
+                    kind = "vine"
+                elseif kindRoll < 0.50 then
                     kind = "moss"
-                elseif kindRoll < 0.66 then
-                    kind = "mold"
+                elseif kindRoll < 0.78 then
+                    kind = "stain"
                 else
-                    kind = "dirt"
+                    kind = "mold"
                 end
             else
-                kind =
-                    kindRoll < 0.22
-                    and "mold"
-                    or "dirt"
+                if kindRoll < 0.18 then
+                    kind = "moss"
+                elseif kindRoll < 0.62 then
+                    kind = "stain"
+                else
+                    kind = "mold"
+                end
             end
 
             local surfaceSize =
@@ -25785,14 +25811,14 @@ if CLIENT then
             local maximumSize =
                 profile == "floor"
                 and math.Clamp(
-                    surfaceSize * 1.10,
-                    2.2,
-                    22
+                    surfaceSize * 1.55,
+                    3.0,
+                    30
                 )
                 or math.Clamp(
-                    surfaceSize * 0.78,
-                    0.32,
-                    5.6
+                    surfaceSize * 1.05,
+                    0.45,
+                    8.5
                 )
             local minimumSize =
                 profile == "floor"
@@ -25844,14 +25870,27 @@ if CLIENT then
                 threshold =
                     util.SharedRandom(
                         patchSeed .. ":threshold",
-                        kind == "rust"
-                            and 0.16
+                        (
+                            kind == "oxidation"
+                            or kind == "rust"
+                        )
+                            and 0.12
                             or (
-                                kind == "moss"
-                                and 0.12
-                                or 0.08
+                                kind == "grass"
+                                and 0.32
+                                or (
+                                    kind == "vine"
+                                    and 0.26
+                                    or (
+                                        kind == "moss"
+                                        and 0.14
+                                        or 0.05
+                                    )
+                                )
                             ),
-                        0.84,
+                        kind == "grass"
+                            and 0.78
+                            or 0.72,
                         index
                     ),
                 material =
@@ -25926,7 +25965,9 @@ if CLIENT then
         for _, tri in ipairs(
             meshData.triangles
         ) do
-            if tri.normal.z <= 0.50
+            if math.abs(
+                tri.normal.z
+            ) <= 0.34
                 or tri.materialProfile
                     == "glass"
                 or tri.materialProfile
@@ -25978,7 +26019,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 28 do
+        for index = 1, 44 do
             local patchSeed =
                 seed
                 .. ":"
@@ -26008,6 +26049,20 @@ if CLIENT then
                 continue
             end
 
+            if normal.z < 0 then
+                normal = -normal
+                tangentV =
+                    normal:Cross(
+                        tangentU
+                    )
+
+                if tangentV:LengthSqr()
+                    > 0.0001
+                then
+                    tangentV:Normalize()
+                end
+            end
+
             local surfaceSize =
                 math.sqrt(
                     math.max(
@@ -26031,12 +26086,14 @@ if CLIENT then
                 )
             local kind
 
-            if kindRoll < 0.38 then
+            if kindRoll < 0.26 then
+                kind = "grass"
+            elseif kindRoll < 0.57 then
                 kind = "moss"
-            elseif kindRoll < 0.72 then
-                kind = "mold"
+            elseif kindRoll < 0.84 then
+                kind = "stain"
             else
-                kind = "dirt"
+                kind = "mold"
             end
 
             patches[#patches + 1] = {
@@ -26072,8 +26129,16 @@ if CLIENT then
                 threshold =
                     util.SharedRandom(
                         patchSeed .. ":threshold",
-                        0.02,
-                        0.66,
+                        kind == "grass"
+                            and 0.28
+                            or (
+                                kind == "moss"
+                                and 0.10
+                                or 0.03
+                            ),
+                        kind == "grass"
+                            and 0.72
+                            or 0.62,
                         index
                     ),
             }
@@ -26095,7 +26160,7 @@ if CLIENT then
         end
 
         local key =
-            "v2|"
+            "v3|"
             .. tostring(
                 train:GetModel() or ""
             )
@@ -26231,14 +26296,14 @@ if CLIENT then
 
         local patches = {}
         local seed =
-            "MEXMainInteriorV2:"
+            "MEXMainInteriorV3:"
             .. tostring(
                 train:EntIndex()
             )
             .. ":"
             .. key
 
-        for index = 1, 32 do
+        for index = 1, 58 do
             local patchSeed =
                 seed
                 .. ":"
@@ -26268,6 +26333,28 @@ if CLIENT then
                 continue
             end
 
+            local toInterior =
+                center - pos
+
+            if toInterior:LengthSqr()
+                > 0.0001
+                and normal:Dot(
+                    toInterior
+                ) < 0
+            then
+                normal = -normal
+                tangentV =
+                    normal:Cross(
+                        tangentU
+                    )
+
+                if tangentV:LengthSqr()
+                    > 0.0001
+                then
+                    tangentV:Normalize()
+                end
+            end
+
             local roll =
                 util.SharedRandom(
                     patchSeed .. ":kind",
@@ -26280,16 +26367,23 @@ if CLIENT then
                     == "metal"
             local kind
 
+            local verticalSurface =
+                math.abs(normal.z) < 0.62
+
             if rustable
-                and roll > 0.88
+                and roll < 0.32
             then
-                kind = "rust"
-            elseif roll < 0.45 then
+                kind = "oxidation"
+            elseif verticalSurface
+                and roll < 0.48
+            then
+                kind = "vine"
+            elseif roll < 0.67 then
                 kind = "moss"
-            elseif roll < 0.74 then
-                kind = "mold"
+            elseif roll < 0.88 then
+                kind = "stain"
             else
-                kind = "grime"
+                kind = "mold"
             end
             local surfaceSize =
                 math.sqrt(
@@ -26301,9 +26395,9 @@ if CLIENT then
                 )
             local size =
                 math.Clamp(
-                    surfaceSize * 1.75,
-                    5.5,
-                    32
+                    surfaceSize * 2.25,
+                    7.0,
+                    42
                 )
 
             patches[#patches + 1] = {
@@ -26339,8 +26433,20 @@ if CLIENT then
                 threshold =
                     util.SharedRandom(
                         patchSeed .. ":threshold",
-                        0.04,
-                        0.64,
+                        kind == "vine"
+                            and 0.24
+                            or (
+                                kind == "oxidation"
+                                and 0.10
+                                or (
+                                    kind == "moss"
+                                    and 0.12
+                                    or 0.03
+                                )
+                            ),
+                        kind == "vine"
+                            and 0.74
+                            or 0.62,
                         index
                     ),
             }
