@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.23.1"
+MEXD.Version = "0.23.2"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -21190,6 +21190,11 @@ if CLIENT then
                 data.debris
             )
         end
+
+        -- Repairing some unrelated detached hardware rebuilds ButtonMap.
+        -- Re-apply corrosion-seized controls afterwards so a repaired door or
+        -- lamp cannot accidentally resurrect a rust-jammed switch.
+        EnforceDisabledButtonHitboxes(train)
     end
 
     function MEXD.SetClientSeizedControlState(
