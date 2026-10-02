@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.20.3"
+MEXD.Version = "0.20.4"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -10327,6 +10327,85 @@ if SERVER then
         )
     end
 
+    function MEXD.SetNeglectLevel(
+        train,
+        level
+    )
+        if not IsSubwayTrain(train) then
+            return false
+        end
+
+        level =
+            math.Clamp(
+                tonumber(level) or 0,
+                0,
+                1
+            )
+
+        train.MEXDamageNeglectExposure =
+            level
+        train.MEXDamageNeglectIdleSeconds =
+            level > 0 and 60 * 45 * level or 0
+        train.MEXDamageNeglectLastActive =
+            CurTime()
+        train.MEXDamageNextNeglectFault = nil
+
+        train:SetNW2Float(
+            "MEX.Damage.NeglectLevel",
+            level
+        )
+        train:SetNW2Float(
+            "MEX.Damage.DirtLevel",
+            math.Clamp(
+                level * 1.08
+                    + train:GetNW2Float(
+                        "MEX.Damage.ScuffLevel",
+                        0
+                    ) * 0.18,
+                0,
+                1
+            )
+        )
+        train:SetNW2Float(
+            "MEX.Damage.OvergrowthLevel",
+            math.Clamp(
+                (level - 0.42) / 0.58,
+                0,
+                1
+            )
+        )
+        train:SetNW2Float(
+            "MEX.Damage.CorrosionLevel",
+            math.Clamp(
+                (level - 0.18) / 0.82,
+                0,
+                1
+            )
+        )
+        train:SetNW2Float(
+            "MEX.Damage.InteriorDecay",
+            math.Clamp(
+                (level - 0.34) / 0.66,
+                0,
+                1
+            )
+        )
+        train:SetNW2Float(
+            "MEX.Damage.PanelCorrosion",
+            math.Clamp(
+                (level - 0.28) / 0.72,
+                0,
+                1
+            )
+        )
+        train:SetNW2Bool(
+            "MEX.Damage.NeglectAccumulating",
+            false
+        )
+
+        return true
+    end
+
     function MEXD.IsTrainWeatherExposed(train)
         if not IsSubwayTrain(train) then
             return false
@@ -12925,6 +13004,95 @@ if SERVER then
             args[1]
         )
     end)
+
+    local function ResolveNeglectCommandTrain(ply)
+        if not IsValid(ply)
+            or not ply:IsPlayer()
+        then
+            return nil
+        end
+
+        local trace =
+            ply:GetEyeTrace()
+
+        if not trace
+            or not IsValid(trace.Entity)
+        then
+            return nil
+        end
+
+        local ent =
+            trace.Entity
+
+        if IsSubwayTrain(ent) then
+            return ent
+        end
+
+        for _, candidate in ipairs({
+            ent:GetParent(),
+            ent:GetNW2Entity("TrainEntity"),
+            ent:GetNWEntity("TrainEntity"),
+            ent.TrainEntity,
+            ent.Train,
+        }) do
+            if IsSubwayTrain(candidate) then
+                return candidate
+            end
+        end
+
+        return nil
+    end
+
+    concommand.Add(
+        "mex_damage_neglect_set",
+        function(ply, _, args)
+            if IsValid(ply)
+                and not ply:IsAdmin()
+            then
+                return
+            end
+
+            if not IsValid(ply)
+                or not ply:IsPlayer()
+            then
+                print(
+                    "[Metrostroi Expanded/Damage] mex_damage_neglect_set must be used by a player aiming at a train."
+                )
+                return
+            end
+
+            local train =
+                ResolveNeglectCommandTrain(
+                    ply
+                )
+
+            if not IsSubwayTrain(train) then
+                ply:ChatPrint(
+                    "[Metrostroi Expanded] Aim at a Metrostroi train first."
+                )
+                return
+            end
+
+            local level =
+                math.Clamp(
+                    tonumber(args[1]) or 1,
+                    0,
+                    1
+                )
+
+            MEXD.SetNeglectLevel(
+                train,
+                level
+            )
+
+            ply:ChatPrint(
+                string.format(
+                    "[Metrostroi Expanded] Train neglect set to %.0f%%.",
+                    level * 100
+                )
+            )
+        end
+    )
 
     cvars.AddChangeCallback(
         DAMAGE_ENABLED_CVAR_NAME,
@@ -21950,7 +22118,7 @@ if CLIENT then
     MEXD.CorrosionOverlayMaterial =
         MEXD.WeatherOverlayMaterial
 
-    local WEATHER_OVERLAY_VERSION = 5
+    local WEATHER_OVERLAY_VERSION = 6
 
     local WEATHER_COLORS = {
         moss = {
@@ -22304,14 +22472,24 @@ if CLIENT then
             MEXD.WeatherOverlayMaterial
         )
 
+        local tinyPatch =
+            math.max(
+                tonumber(patch.width) or 0,
+                tonumber(patch.height) or 0
+            ) < 4.5
         local count =
             math.max(
-                2,
+                tinyPatch and 1 or 2,
                 math.floor(
                     baseCount
                         * (
                             0.48
                             + maturity * 0.70
+                        )
+                        * (
+                            tinyPatch
+                            and 0.42
+                            or 1
                         )
                 )
             )
@@ -22434,6 +22612,8 @@ if CLIENT then
                 .. ":inner",
             pos = patch.pos,
             normal = patch.normal,
+            tangentU = patch.tangentU,
+            tangentV = patch.tangentV,
             width =
                 (patch.width or 10)
                 * 0.68,
@@ -22856,6 +23036,646 @@ if CLIENT then
         end
     end
 
+    ---------------------------------------------------------------------------
+    -- Interior weathering on the real visible model mesh
+    --
+    -- The previous implementation used OBB faces. On Metrostroi controls the
+    -- OBB is often a simple cube much larger than the visible knob/button, so
+    -- rust appeared as floating orange cards. The same problem kept floor dirt
+    -- off the actual passenger floor. Sample the MDL render triangles instead.
+    ---------------------------------------------------------------------------
+
+    local INTERIOR_NEGLECT_MESH_CACHE = {}
+    local INTERIOR_NEGLECT_PATCH_VERSION = 2
+
+    local function InteriorNeglectBodygroupKey(ent)
+        if not IsValid(ent) then
+            return "0"
+        end
+
+        local groups =
+            ent:GetBodyGroups()
+
+        if not istable(groups)
+            or #groups == 0
+        then
+            return "0"
+        end
+
+        local maxID = 0
+
+        for _, group in ipairs(groups) do
+            if istable(group) then
+                maxID =
+                    math.max(
+                        maxID,
+                        tonumber(group.id) or 0
+                    )
+            end
+        end
+
+        local values = {}
+
+        for id = 0, maxID do
+            values[#values + 1] =
+                tostring(
+                    math.Clamp(
+                        ent:GetBodygroup(id) or 0,
+                        0,
+                        9
+                    )
+                )
+        end
+
+        return table.concat(values)
+    end
+
+    local function InteriorMeshMaterialProfile(
+        materialName
+    )
+        local text =
+            string.lower(
+                tostring(materialName or "")
+            )
+
+        local function has(words)
+            for _, word in ipairs(words) do
+                if string.find(
+                    text,
+                    word,
+                    1,
+                    true
+                ) then
+                    return true
+                end
+            end
+
+            return false
+        end
+
+        if has({
+            "glass", "window", "windscreen",
+            "windshield", "stekl", "lens",
+            "transparent",
+        }) then
+            return "glass"
+        end
+
+        if has({
+            "nodraw", "invisible", "shadow",
+            "collision",
+        }) then
+            return "hidden"
+        end
+
+        if has({
+            "floor", "linoleum", "lino",
+            "rubberfloor", "vinylfloor",
+            "carpet",
+        }) then
+            return "floor"
+        end
+
+        if has({
+            "fabric", "cloth", "seat",
+            "upholstery", "leather",
+        }) then
+            return "fabric"
+        end
+
+        if has({
+            "rubber", "gasket", "seal",
+            "hose",
+        }) then
+            return "rubber"
+        end
+
+        if has({
+            "plastic", "bakelite", "abs",
+            "polymer", "vinyl",
+        }) then
+            return "plastic"
+        end
+
+        if has({
+            "wood", "veneer", "plywood",
+        }) then
+            return "wood"
+        end
+
+        if has({
+            "metal", "steel", "iron",
+            "chrome", "aluminium", "aluminum",
+            "copper", "brass", "paint",
+            "body", "shell",
+        }) then
+            return "metal"
+        end
+
+        return "generic"
+    end
+
+    local function GetInteriorNeglectRenderMesh(
+        ent
+    )
+        if not IsValid(ent)
+            or not util
+            or not isfunction(
+                util.GetModelMeshes
+            )
+        then
+            return nil
+        end
+
+        local model =
+            ent:GetModel()
+
+        if not isstring(model)
+            or model == ""
+        then
+            return nil
+        end
+
+        local skin =
+            ent:GetSkin() or 0
+        local bodygroups =
+            InteriorNeglectBodygroupKey(
+                ent
+            )
+        local key =
+            model
+            .. "|"
+            .. tostring(skin)
+            .. "|"
+            .. tostring(bodygroups)
+        local cached =
+            INTERIOR_NEGLECT_MESH_CACHE[
+                key
+            ]
+
+        if cached ~= nil then
+            return cached or nil
+        end
+
+        local ok, meshes =
+            pcall(
+                util.GetModelMeshes,
+                model,
+                0,
+                bodygroups,
+                skin
+            )
+
+        if not ok
+            or not istable(meshes)
+            or #meshes == 0
+        then
+            ok, meshes =
+                pcall(
+                    util.GetModelMeshes,
+                    model,
+                    0,
+                    0,
+                    skin
+                )
+        end
+
+        if not ok
+            or not istable(meshes)
+            or #meshes == 0
+        then
+            INTERIOR_NEGLECT_MESH_CACHE[
+                key
+            ] = false
+            return nil
+        end
+
+        local triangles = {}
+        local mins =
+            Vector(
+                math.huge,
+                math.huge,
+                math.huge
+            )
+        local maxs =
+            Vector(
+                -math.huge,
+                -math.huge,
+                -math.huge
+            )
+
+        for _, meshData in ipairs(
+            meshes
+        ) do
+            local vertices =
+                meshData.triangles
+            local material =
+                tostring(
+                    meshData.material
+                    or ""
+                )
+            local materialProfile =
+                InteriorMeshMaterialProfile(
+                    material
+                )
+
+            if materialProfile == "hidden"
+                or not istable(vertices)
+                or #vertices < 3
+            then
+                continue
+            end
+
+            for i = 1, #vertices - 2, 3 do
+                local va =
+                    vertices[i]
+                local vb =
+                    vertices[i + 1]
+                local vc =
+                    vertices[i + 2]
+
+                if not istable(va)
+                    or not istable(vb)
+                    or not istable(vc)
+                    or not isvector(va.pos)
+                    or not isvector(vb.pos)
+                    or not isvector(vc.pos)
+                then
+                    continue
+                end
+
+                local a =
+                    va.pos
+                local b =
+                    vb.pos
+                local c =
+                    vc.pos
+                local e1 =
+                    b - a
+                local e2 =
+                    c - a
+                local cross =
+                    e1:Cross(e2)
+                local crossLength =
+                    cross:Length()
+
+                if crossLength <= 0.015 then
+                    continue
+                end
+
+                local normal =
+                    Vector(0, 0, 0)
+                local normalCount = 0
+
+                for _, vertex in ipairs({
+                    va, vb, vc,
+                }) do
+                    if isvector(
+                        vertex.normal
+                    ) then
+                        normal =
+                            normal
+                            + vertex.normal
+                        normalCount =
+                            normalCount + 1
+                    end
+                end
+
+                if normalCount > 0
+                    and normal:LengthSqr()
+                        > 0.0001
+                then
+                    normal:Normalize()
+                else
+                    normal = cross
+                    normal:Normalize()
+                end
+
+                local tangent =
+                    e1:LengthSqr()
+                        >= e2:LengthSqr()
+                        and e1
+                        or e2
+
+                tangent =
+                    tangent
+                    - normal
+                        * tangent:Dot(normal)
+
+                if tangent:LengthSqr()
+                    <= 0.0001
+                then
+                    continue
+                end
+
+                tangent:Normalize()
+
+                local tangentV =
+                    normal:Cross(tangent)
+
+                if tangentV:LengthSqr()
+                    <= 0.0001
+                then
+                    continue
+                end
+
+                tangentV:Normalize()
+
+                local item = {
+                    a = Vector(
+                        a.x, a.y, a.z
+                    ),
+                    b = Vector(
+                        b.x, b.y, b.z
+                    ),
+                    c = Vector(
+                        c.x, c.y, c.z
+                    ),
+                    na =
+                        isvector(va.normal)
+                        and Vector(
+                            va.normal.x,
+                            va.normal.y,
+                            va.normal.z
+                        )
+                        or nil,
+                    nb =
+                        isvector(vb.normal)
+                        and Vector(
+                            vb.normal.x,
+                            vb.normal.y,
+                            vb.normal.z
+                        )
+                        or nil,
+                    nc =
+                        isvector(vc.normal)
+                        and Vector(
+                            vc.normal.x,
+                            vc.normal.y,
+                            vc.normal.z
+                        )
+                        or nil,
+                    normal = normal,
+                    tangentU = tangent,
+                    tangentV = tangentV,
+                    area =
+                        crossLength * 0.5,
+                    center =
+                        (a + b + c) / 3,
+                    material = material,
+                    materialProfile =
+                        materialProfile,
+                }
+
+                triangles[#triangles + 1] =
+                    item
+
+                for _, p in ipairs({
+                    a, b, c,
+                }) do
+                    mins.x =
+                        math.min(
+                            mins.x,
+                            p.x
+                        )
+                    mins.y =
+                        math.min(
+                            mins.y,
+                            p.y
+                        )
+                    mins.z =
+                        math.min(
+                            mins.z,
+                            p.z
+                        )
+                    maxs.x =
+                        math.max(
+                            maxs.x,
+                            p.x
+                        )
+                    maxs.y =
+                        math.max(
+                            maxs.y,
+                            p.y
+                        )
+                    maxs.z =
+                        math.max(
+                            maxs.z,
+                            p.z
+                        )
+                end
+            end
+        end
+
+        if #triangles == 0 then
+            INTERIOR_NEGLECT_MESH_CACHE[
+                key
+            ] = false
+            return nil
+        end
+
+        local data = {
+            triangles = triangles,
+            mins = mins,
+            maxs = maxs,
+        }
+
+        INTERIOR_NEGLECT_MESH_CACHE[
+            key
+        ] = data
+
+        return data
+    end
+
+    local function NeglectTriangleAllowed(
+        tri,
+        profile
+    )
+        if not istable(tri) then
+            return false
+        end
+
+        local materialProfile =
+            tostring(
+                tri.materialProfile
+                or "generic"
+            )
+
+        if materialProfile == "glass"
+            or materialProfile == "hidden"
+        then
+            return false
+        end
+
+        if profile == "floor" then
+            return tri.normal.z > 0.28
+                and materialProfile
+                    ~= "fabric"
+        end
+
+        if profile == "panel_metal"
+            or profile == "metal"
+        then
+            return materialProfile
+                ~= "fabric"
+                and materialProfile
+                    ~= "rubber"
+        end
+
+        return true
+    end
+
+    local function PickInteriorNeglectTriangle(
+        triangles,
+        seed,
+        index
+    )
+        local total = 0
+
+        for _, tri in ipairs(
+            triangles or {}
+        ) do
+            total =
+                total
+                + math.max(
+                    tonumber(tri.area) or 0,
+                    0.001
+                )
+        end
+
+        if total <= 0 then
+            return nil
+        end
+
+        local target =
+            util.SharedRandom(
+                tostring(seed)
+                    .. ":triangle",
+                0,
+                total,
+                tonumber(index) or 0
+            )
+        local accumulated = 0
+
+        for _, tri in ipairs(
+            triangles
+        ) do
+            accumulated =
+                accumulated
+                + math.max(
+                    tonumber(tri.area) or 0,
+                    0.001
+                )
+
+            if accumulated >= target then
+                return tri
+            end
+        end
+
+        return triangles[
+            #triangles
+        ]
+    end
+
+    local function InteriorPointOnTriangle(
+        tri,
+        seed,
+        index
+    )
+        if not istable(tri) then
+            return nil
+        end
+
+        local u =
+            util.SharedRandom(
+                tostring(seed) .. ":u",
+                0.10,
+                0.90,
+                tonumber(index) or 0
+            )
+        local v =
+            util.SharedRandom(
+                tostring(seed) .. ":v",
+                0.10,
+                0.90,
+                (tonumber(index) or 0)
+                    + 471
+            )
+
+        if u + v > 1 then
+            u = 1 - u
+            v = 1 - v
+        end
+
+        local w =
+            1 - u - v
+        local pos =
+            tri.a * w
+            + tri.b * u
+            + tri.c * v
+        local normal =
+            Vector(
+                tri.normal.x,
+                tri.normal.y,
+                tri.normal.z
+            )
+
+        if isvector(tri.na)
+            and isvector(tri.nb)
+            and isvector(tri.nc)
+        then
+            local smooth =
+                tri.na * w
+                + tri.nb * u
+                + tri.nc * v
+
+            if smooth:LengthSqr()
+                > 0.0001
+            then
+                smooth:Normalize()
+                normal = smooth
+            end
+        end
+
+        local tangentU =
+            Vector(
+                tri.tangentU.x,
+                tri.tangentU.y,
+                tri.tangentU.z
+            )
+
+        tangentU =
+            tangentU
+            - normal
+                * tangentU:Dot(normal)
+
+        if tangentU:LengthSqr()
+            <= 0.0001
+        then
+            return nil
+        end
+
+        tangentU:Normalize()
+
+        local tangentV =
+            normal:Cross(
+                tangentU
+            )
+
+        if tangentV:LengthSqr()
+            <= 0.0001
+        then
+            return nil
+        end
+
+        tangentV:Normalize()
+
+        return pos,
+            normal,
+            tangentU,
+            tangentV
+    end
+
     local function BuildInteriorNeglectPatches(
         prop,
         profile,
@@ -22866,11 +23686,25 @@ if CLIENT then
         end
 
         local key =
-            tostring(profile)
+            tostring(
+                INTERIOR_NEGLECT_PATCH_VERSION
+            )
+            .. "|"
+            .. tostring(profile)
             .. "|"
             .. tostring(name or "")
             .. "|"
-            .. tostring(prop:GetModel() or "")
+            .. tostring(
+                prop:GetModel() or ""
+            )
+            .. "|"
+            .. tostring(
+                prop:GetSkin() or 0
+            )
+            .. "|"
+            .. InteriorNeglectBodygroupKey(
+                prop
+            )
 
         if prop.MEXDamageInteriorNeglectKey
                 == key
@@ -22892,27 +23726,67 @@ if CLIENT then
             return {}
         end
 
-        local mins = prop:OBBMins()
-        local maxs = prop:OBBMaxs()
-        local size = maxs - mins
-        local sx = math.max(math.abs(size.x), 0.5)
-        local sy = math.max(math.abs(size.y), 0.5)
-        local sz = math.max(math.abs(size.z), 0.5)
+        local meshData =
+            GetInteriorNeglectRenderMesh(
+                prop
+            )
+
+        if not istable(meshData)
+            or not istable(
+                meshData.triangles
+            )
+        then
+            prop.MEXDamageInteriorNeglectKey =
+                key
+            prop.MEXDamageInteriorNeglectPatches =
+                {}
+            return {}
+        end
+
+        local candidates = {}
+
+        for _, tri in ipairs(
+            meshData.triangles
+        ) do
+            if NeglectTriangleAllowed(
+                tri,
+                profile
+            ) then
+                candidates[
+                    #candidates + 1
+                ] = tri
+            end
+        end
+
+        if #candidates == 0 then
+            prop.MEXDamageInteriorNeglectKey =
+                key
+            prop.MEXDamageInteriorNeglectPatches =
+                {}
+            return {}
+        end
+
         local seed =
-            "MEXInteriorV1:"
-            .. tostring(prop:EntIndex())
+            "MEXInteriorMeshV2:"
+            .. tostring(
+                prop:EntIndex()
+            )
             .. ":"
             .. key
         local count =
             profile == "floor"
-                and 14
+                and 26
                 or (
-                    profile == "fabric"
-                    and 9
+                    profile == "panel_metal"
+                    and 18
                     or (
-                        profile == "panel_metal"
-                        and 8
-                        or 6
+                        profile == "metal"
+                        and 12
+                        or (
+                            profile == "fabric"
+                            and 10
+                            or 8
+                        )
                     )
                 )
         local patches = {}
@@ -22922,154 +23796,36 @@ if CLIENT then
                 seed
                 .. ":"
                 .. tostring(index)
-            local normal
-            local pos
-            local faceU
-            local faceV
-
-            if profile == "floor" then
-                normal = Vector(0, 0, 1)
-                pos = Vector(
-                    Lerp(
-                        util.SharedRandom(
-                            patchSeed .. ":x",
-                            0.07,
-                            0.93,
-                            index
-                        ),
-                        mins.x,
-                        maxs.x
-                    ),
-                    Lerp(
-                        util.SharedRandom(
-                            patchSeed .. ":y",
-                            0.07,
-                            0.93,
-                            index
-                        ),
-                        mins.y,
-                        maxs.y
-                    ),
-                    maxs.z
+            local tri =
+                PickInteriorNeglectTriangle(
+                    candidates,
+                    patchSeed,
+                    index
                 )
-                faceU = sx
-                faceV = sy
-            else
-                local areaX = sy * sz
-                local areaY = sx * sz
-                local areaZ = sx * sy
-                local totalArea =
-                    math.max(
-                        areaX + areaY + areaZ,
-                        0.01
-                    )
-                local roll =
-                    util.SharedRandom(
-                        patchSeed .. ":face",
-                        0,
-                        totalArea,
-                        index
-                    )
-                local sign =
-                    util.SharedRandom(
-                        patchSeed .. ":sign",
-                        0,
-                        1,
-                        index
-                    ) < 0.5
-                    and -1
-                    or 1
 
-                if roll < areaX then
-                    normal = Vector(sign, 0, 0)
-                    pos = Vector(
-                        sign < 0
-                            and mins.x
-                            or maxs.x,
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":fy",
-                                0.10,
-                                0.90,
-                                index
-                            ),
-                            mins.y,
-                            maxs.y
-                        ),
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":fz",
-                                0.10,
-                                0.90,
-                                index
-                            ),
-                            mins.z,
-                            maxs.z
-                        )
-                    )
-                    faceU = sy
-                    faceV = sz
-                elseif roll < areaX + areaY then
-                    normal = Vector(0, sign, 0)
-                    pos = Vector(
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":fx",
-                                0.10,
-                                0.90,
-                                index
-                            ),
-                            mins.x,
-                            maxs.x
-                        ),
-                        sign < 0
-                            and mins.y
-                            or maxs.y,
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":fz",
-                                0.10,
-                                0.90,
-                                index
-                            ),
-                            mins.z,
-                            maxs.z
-                        )
-                    )
-                    faceU = sx
-                    faceV = sz
-                else
-                    normal = Vector(0, 0, sign)
-                    pos = Vector(
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":fx",
-                                0.10,
-                                0.90,
-                                index
-                            ),
-                            mins.x,
-                            maxs.x
-                        ),
-                        Lerp(
-                            util.SharedRandom(
-                                patchSeed .. ":fy",
-                                0.10,
-                                0.90,
-                                index
-                            ),
-                            mins.y,
-                            maxs.y
-                        ),
-                        sign < 0
-                            and mins.z
-                            or maxs.z
-                    )
-                    faceU = sx
-                    faceV = sy
-                end
+            if not tri then
+                continue
             end
 
+            local pos,
+                normal,
+                tangentU,
+                tangentV =
+                InteriorPointOnTriangle(
+                    tri,
+                    patchSeed,
+                    index
+                )
+
+            if not pos then
+                continue
+            end
+
+            local materialProfile =
+                tostring(
+                    tri.materialProfile
+                    or "generic"
+                )
             local kindRoll =
                 util.SharedRandom(
                     patchSeed .. ":kind",
@@ -23082,8 +23838,14 @@ if CLIENT then
             if profile == "panel_metal"
                 or profile == "metal"
             then
+                local rustable =
+                    materialProfile == "metal"
+                    or materialProfile
+                        == "generic"
+
                 kind =
-                    kindRoll < 0.58
+                    rustable
+                    and kindRoll < 0.58
                     and "rust"
                     or "dirt"
             elseif profile == "floor"
@@ -23092,8 +23854,8 @@ if CLIENT then
                 kind =
                     kindRoll < (
                         profile == "floor"
-                        and 0.38
-                        or 0.48
+                        and 0.46
+                        or 0.38
                     )
                     and "mold"
                     or "dirt"
@@ -23104,48 +23866,71 @@ if CLIENT then
                     or "dirt"
             end
 
+            local surfaceSize =
+                math.sqrt(
+                    math.max(
+                        tonumber(tri.area)
+                            or 0.2,
+                        0.05
+                    )
+                )
+            local maximumSize =
+                profile == "floor"
+                and math.Clamp(
+                    surfaceSize * 0.95,
+                    1.8,
+                    18
+                )
+                or math.Clamp(
+                    surfaceSize * 0.72,
+                    0.28,
+                    4.8
+                )
+            local minimumSize =
+                profile == "floor"
+                and math.min(
+                    1.2,
+                    maximumSize
+                )
+                or math.min(
+                    0.20,
+                    maximumSize
+                )
+
             patches[#patches + 1] = {
                 kind = kind,
                 seed = patchSeed,
                 pos = pos,
                 normal = normal,
+                tangentU = tangentU,
+                tangentV = tangentV,
                 width =
-                    math.Clamp(
-                        faceU
+                    math.max(
+                        minimumSize,
+                        maximumSize
                             * util.SharedRandom(
                                 patchSeed .. ":w",
-                                0.08,
-                                profile == "floor"
-                                    and 0.28
-                                    or 0.22,
+                                0.34,
+                                0.78,
                                 index
-                            ),
-                        1.2,
-                        profile == "floor"
-                            and 34
-                            or 18
+                            )
                     ),
                 height =
-                    math.Clamp(
-                        faceV
+                    math.max(
+                        minimumSize,
+                        maximumSize
                             * util.SharedRandom(
                                 patchSeed .. ":h",
-                                0.08,
-                                profile == "floor"
-                                    and 0.25
-                                    or 0.22,
+                                0.30,
+                                0.72,
                                 index
-                            ),
-                        1.0,
-                        profile == "floor"
-                            and 28
-                            or 16
+                            )
                     ),
                 rotation =
                     util.SharedRandom(
                         patchSeed .. ":rot",
-                        -38,
-                        38,
+                        -30,
+                        30,
                         index
                     ),
                 threshold =
@@ -23153,16 +23938,231 @@ if CLIENT then
                         patchSeed .. ":threshold",
                         kind == "rust"
                             and 0.16
-                            or 0.10,
-                        0.91,
+                            or 0.08,
+                        0.88,
                         index
                     ),
+                material =
+                    tri.material,
             }
         end
 
         prop.MEXDamageInteriorNeglectKey =
             key
         prop.MEXDamageInteriorNeglectPatches =
+            patches
+
+        return patches
+    end
+
+    local function BuildMainFloorNeglectPatches(
+        train
+    )
+        if not IsSubwayTrain(train) then
+            return {}
+        end
+
+        local key =
+            tostring(
+                INTERIOR_NEGLECT_PATCH_VERSION
+            )
+            .. "|"
+            .. tostring(
+                train:GetModel() or ""
+            )
+            .. "|"
+            .. tostring(
+                train:GetSkin() or 0
+            )
+            .. "|"
+            .. InteriorNeglectBodygroupKey(
+                train
+            )
+
+        if train.MEXDamageMainFloorNeglectKey
+                == key
+            and istable(
+                train.MEXDamageMainFloorNeglectPatches
+            )
+        then
+            return train.MEXDamageMainFloorNeglectPatches
+        end
+
+        local meshData =
+            GetInteriorNeglectRenderMesh(
+                train
+            )
+
+        if not istable(meshData)
+            or not istable(meshData.triangles)
+            or not isvector(meshData.mins)
+            or not isvector(meshData.maxs)
+        then
+            train.MEXDamageMainFloorNeglectKey =
+                key
+            train.MEXDamageMainFloorNeglectPatches =
+                {}
+            return {}
+        end
+
+        local span =
+            meshData.maxs
+            - meshData.mins
+        local candidates = {}
+        local namedFloor = {}
+
+        for _, tri in ipairs(
+            meshData.triangles
+        ) do
+            if tri.normal.z <= 0.50
+                or tri.materialProfile
+                    == "glass"
+                or tri.materialProfile
+                    == "hidden"
+            then
+                continue
+            end
+
+            if tri.materialProfile
+                == "floor"
+            then
+                namedFloor[
+                    #namedFloor + 1
+                ] = tri
+                continue
+            end
+
+            local zFraction =
+                (
+                    tri.center.z
+                    - meshData.mins.z
+                ) / math.max(
+                    span.z,
+                    1
+                )
+
+            -- Passenger floors sit well below the roof but above most
+            -- underframe equipment. This catches baked-in floors on 81-717
+            -- models where there is no separate ClientProp named "floor".
+            if zFraction >= 0.18
+                and zFraction <= 0.62
+            then
+                candidates[
+                    #candidates + 1
+                ] = tri
+            end
+        end
+
+        if #namedFloor > 0 then
+            candidates = namedFloor
+        end
+
+        local patches = {}
+        local seed =
+            "MEXMainFloorMeshV2:"
+            .. tostring(
+                train:EntIndex()
+            )
+            .. ":"
+            .. key
+
+        for index = 1, 38 do
+            local patchSeed =
+                seed
+                .. ":"
+                .. tostring(index)
+            local tri =
+                PickInteriorNeglectTriangle(
+                    candidates,
+                    patchSeed,
+                    index
+                )
+
+            if not tri then
+                continue
+            end
+
+            local pos,
+                normal,
+                tangentU,
+                tangentV =
+                InteriorPointOnTriangle(
+                    tri,
+                    patchSeed,
+                    index
+                )
+
+            if not pos then
+                continue
+            end
+
+            local surfaceSize =
+                math.sqrt(
+                    math.max(
+                        tonumber(tri.area)
+                            or 1,
+                        0.2
+                    )
+                )
+            local maximumSize =
+                math.Clamp(
+                    surfaceSize * 1.15,
+                    2.4,
+                    22
+                )
+            local kind =
+                util.SharedRandom(
+                    patchSeed .. ":kind",
+                    0,
+                    1,
+                    index
+                ) < 0.48
+                and "mold"
+                or "dirt"
+
+            patches[#patches + 1] = {
+                kind = kind,
+                seed = patchSeed,
+                pos = pos,
+                normal = normal,
+                tangentU = tangentU,
+                tangentV = tangentV,
+                width =
+                    maximumSize
+                    * util.SharedRandom(
+                        patchSeed .. ":w",
+                        0.38,
+                        0.86,
+                        index
+                    ),
+                height =
+                    maximumSize
+                    * util.SharedRandom(
+                        patchSeed .. ":h",
+                        0.30,
+                        0.74,
+                        index
+                    ),
+                rotation =
+                    util.SharedRandom(
+                        patchSeed .. ":r",
+                        -25,
+                        25,
+                        index
+                    ),
+                threshold =
+                    util.SharedRandom(
+                        patchSeed .. ":threshold",
+                        0.06,
+                        0.82,
+                        index
+                    ),
+            }
+        end
+
+        train.MEXDamageMainFloorNeglectKey =
+            key
+        train.MEXDamageMainFloorNeglectPatches =
             patches
 
         return patches
@@ -23210,6 +24210,64 @@ if CLIENT then
             ) > 2300 * 2300
         then
             return
+        end
+
+        local floorPatches =
+            BuildMainFloorNeglectPatches(
+                train
+            )
+
+        for _, patch in ipairs(
+            floorPatches or {}
+        ) do
+            local level =
+                patch.kind == "mold"
+                and math.Clamp(
+                    decay * 0.96
+                        + dirt * 0.18,
+                    0,
+                    1
+                )
+                or math.Clamp(
+                    math.max(
+                        decay * 0.90,
+                        dirt * 0.78
+                    ),
+                    0,
+                    1
+                )
+            local threshold =
+                tonumber(
+                    patch.threshold
+                ) or 1
+
+            if level >= threshold then
+                local maturity =
+                    math.Clamp(
+                        (
+                            level - threshold
+                        ) / math.max(
+                            1 - threshold,
+                            0.18
+                        ),
+                        0,
+                        1
+                    )
+
+                DrawWeatherCluster(
+                    train,
+                    patch,
+                    maturity,
+                    patch.kind == "mold"
+                        and WEATHER_COLORS.mold
+                        or WEATHER_COLORS.dirt,
+                    8,
+                    patch.kind == "mold"
+                        and 0.72
+                        or 0.64,
+                    false
+                )
+            end
         end
 
         for name, prop in pairs(
