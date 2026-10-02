@@ -10,7 +10,7 @@ end
 MetrostroiExpandedDamage = MetrostroiExpandedDamage or {}
 local MEXD = MetrostroiExpandedDamage
 
-MEXD.Version = "0.21.3"
+MEXD.Version = "0.22.0"
 
 local DAMAGE_ENABLED_CVAR_NAME = "mex_damage_enabled"
 local DEFORMATION_ENABLED_CVAR_NAME = "mex_damage_deformation_enabled"
@@ -22486,19 +22486,40 @@ if CLIENT then
                     local darken =
                         math.Clamp(
                             1
-                                - dirt * 0.26
-                                - interiorDecay * 0.28,
-                            0.46,
+                                - dirt * 0.30
+                                - interiorDecay * 0.38,
+                            0.40,
                             1
                         )
+                    local grey =
+                        (
+                            base.r
+                            + base.g
+                            + base.b
+                        ) / 3
+                    local fade =
+                        interiorDecay * 0.20
+
                     r =
-                        base.r * darken
+                        Lerp(
+                            fade,
+                            base.r,
+                            grey
+                        ) * darken
                         + 10 * interiorDecay
                     g =
-                        base.g * darken
+                        Lerp(
+                            fade,
+                            base.g,
+                            grey
+                        ) * darken
                         + 6 * interiorDecay
                     b =
-                        base.b * darken
+                        Lerp(
+                            fade,
+                            base.b,
+                            grey
+                        ) * darken
                 elseif profile == "plastic"
                     or profile == "panel"
                 then
@@ -22525,6 +22546,41 @@ if CLIENT then
                         base.b
                         * darken
                         * (1 - yellow)
+                elseif profile == "interior" then
+                    local darken =
+                        math.Clamp(
+                            1
+                                - dirt * 0.28
+                                - interiorDecay * 0.42,
+                            0.42,
+                            1
+                        )
+                    local grime =
+                        math.Clamp(
+                            interiorDecay * 0.44
+                                + dirt * 0.16,
+                            0,
+                            0.58
+                        )
+
+                    r =
+                        Lerp(
+                            grime,
+                            base.r * darken,
+                            68
+                        )
+                    g =
+                        Lerp(
+                            grime,
+                            base.g * darken,
+                            61
+                        )
+                    b =
+                        Lerp(
+                            grime,
+                            base.b * darken,
+                            49
+                        )
                 elseif profile == "metal"
                     or profile == "panel_metal"
                 then
@@ -22753,6 +22809,92 @@ if CLIENT then
     -- parts of Source materials and produced obvious square cards.  This
     -- neutral, vertex-coloured material gives us predictable alpha and lets
     -- the silhouette come from many small irregular chips/blades instead.
+    MEXD.WeatherQualityConVar =
+        MEXD.WeatherQualityConVar
+        or CreateClientConVar(
+            "mex_damage_weather_quality",
+            "0.62",
+            true,
+            false,
+            "Metrostroi Expanded weathering render quality (0.2-1.0)"
+        )
+
+    function MEXD.GetWeatherRenderQuality()
+        local value =
+            MEXD.WeatherQualityConVar
+            and MEXD.WeatherQualityConVar:GetFloat()
+            or 0.62
+
+        return math.Clamp(
+            tonumber(value) or 0.62,
+            0.20,
+            1.00
+        )
+    end
+
+    function MEXD.TakeWeatherQuadBudget(amount)
+        amount =
+            math.max(
+                math.floor(
+                    tonumber(amount) or 1
+                ),
+                1
+            )
+
+        if MEXD._weatherQuadBudget == nil then
+            return true
+        end
+
+        if MEXD._weatherQuadBudget < amount then
+            return false
+        end
+
+        MEXD._weatherQuadBudget =
+            MEXD._weatherQuadBudget
+            - amount
+
+        return true
+    end
+
+    function MEXD.IsEyeInsideTrainBounds(
+        train,
+        eye
+    )
+        if not IsSubwayTrain(train)
+            or not isvector(eye)
+        then
+            return false
+        end
+
+        local localPos =
+            train:WorldToLocal(eye)
+        local mins =
+            train:OBBMins()
+        local maxs =
+            train:OBBMaxs()
+
+        if not isvector(mins)
+            or not isvector(maxs)
+        then
+            return false
+        end
+
+        local margin = 10
+
+        return localPos.x
+                >= mins.x - margin
+            and localPos.x
+                <= maxs.x + margin
+            and localPos.y
+                >= mins.y - margin
+            and localPos.y
+                <= maxs.y + margin
+            and localPos.z
+                >= mins.z - margin
+            and localPos.z
+                <= maxs.z + margin
+    end
+
     MEXD.WeatherOverlayMaterial =
         CreateMaterial(
             "mex_damage_weather_overlay_v4",
@@ -22780,7 +22922,7 @@ if CLIENT then
     MEXD.CorrosionOverlayMaterial =
         MEXD.WeatherOverlayMaterial
 
-    local WEATHER_OVERLAY_VERSION = 8
+    local WEATHER_OVERLAY_VERSION = 9
 
     local WEATHER_COLORS = {
         moss = {
@@ -22797,16 +22939,17 @@ if CLIENT then
             Color(86, 77, 42, 206),
         },
         rust = {
-            Color(72, 39, 26, 156),
-            Color(91, 46, 27, 166),
-            Color(113, 57, 29, 158),
-            Color(137, 70, 34, 142),
-            Color(84, 52, 36, 146),
+            Color(56, 35, 27, 138),
+            Color(73, 41, 28, 148),
+            Color(91, 49, 29, 142),
+            Color(108, 58, 32, 128),
+            Color(67, 47, 37, 134),
         },
         dirt = {
-            Color(52, 49, 42, 76),
-            Color(67, 60, 48, 88),
-            Color(79, 67, 50, 76),
+            Color(42, 40, 36, 94),
+            Color(55, 50, 43, 104),
+            Color(67, 57, 46, 92),
+            Color(36, 37, 35, 86),
         },
         bare = {
             Color(155, 157, 151, 126),
@@ -22814,10 +22957,16 @@ if CLIENT then
             Color(126, 130, 128, 116),
         },
         mold = {
-            Color(43, 52, 37, 122),
-            Color(54, 59, 39, 116),
-            Color(66, 62, 43, 106),
-            Color(35, 43, 33, 112),
+            Color(39, 47, 37, 126),
+            Color(48, 53, 40, 120),
+            Color(57, 55, 43, 108),
+            Color(31, 38, 33, 116),
+        },
+        grime = {
+            Color(45, 42, 37, 112),
+            Color(58, 51, 43, 106),
+            Color(67, 58, 48, 96),
+            Color(36, 37, 35, 102),
         },
     }
 
@@ -23073,6 +23222,10 @@ if CLIENT then
         color,
         normalOffset
     )
+        if not MEXD.TakeWeatherQuadBudget(1) then
+            return false
+        end
+
         local angle =
             math.rad(rotation or 0)
         local ca =
@@ -23106,6 +23259,8 @@ if CLIENT then
             center - halfU + halfV,
             color
         )
+
+        return true
     end
 
     local function DrawWeatherCluster(
@@ -23139,20 +23294,30 @@ if CLIENT then
                 tonumber(patch.width) or 0,
                 tonumber(patch.height) or 0
             ) < 4.5
+        local detail =
+            math.Clamp(
+                tonumber(
+                    MEXD._weatherDrawDetail
+                ) or 1,
+                0.16,
+                1
+            )
         local count =
             math.max(
-                tinyPatch and 1 or 2,
+                1,
                 math.floor(
                     baseCount
                         * (
-                            0.48
-                            + maturity * 0.70
+                            0.34
+                            + maturity * 0.42
                         )
                         * (
                             tinyPatch
-                            and 0.42
+                            and 0.30
                             or 1
                         )
+                        * detail
+                    + 0.5
                 )
             )
         local spread =
@@ -23198,7 +23363,7 @@ if CLIENT then
                 )
             local width =
                 math.max(
-                    0.55,
+                    tinyPatch and 0.16 or 0.48,
                     (patch.width or 12)
                         * widthScale
                         * (
@@ -23208,7 +23373,7 @@ if CLIENT then
                 )
             local height =
                 math.max(
-                    0.40,
+                    tinyPatch and 0.12 or 0.34,
                     (patch.height or 8)
                         * heightScale
                         * (
@@ -23544,10 +23709,25 @@ if CLIENT then
             MEXD.WeatherOverlayMaterial
         )
 
+        local detail =
+            math.Clamp(
+                tonumber(
+                    MEXD._weatherDrawDetail
+                ) or 1,
+                0.16,
+                1
+            )
         local blades =
-            8
-            + math.floor(
-                maturity * 25
+            math.max(
+                3,
+                math.floor(
+                    (
+                        5
+                        + maturity * 13
+                    )
+                    * detail
+                    + 0.5
+                )
             )
 
         for i = 1, blades do
@@ -23573,8 +23753,8 @@ if CLIENT then
                 WeatherPatchRandom(
                     patch,
                     "blade-w",
-                    0.34,
-                    0.92,
+                    0.48,
+                    1.18,
                     i
                 )
             local bladeHeight =
@@ -23647,6 +23827,10 @@ if CLIENT then
                 direction
                 * bladeHeight
 
+            if not MEXD.TakeWeatherQuadBudget(1) then
+                break
+            end
+
             render.DrawQuad(
                 base - half,
                 base + half,
@@ -23662,7 +23846,10 @@ if CLIENT then
 
             -- A second narrow card at a different angle gives nearby tufts
             -- actual volume instead of the old flat roof sticker look.
-            if i % 2 == 0 then
+            if detail >= 0.72
+                and i % 3 == 0
+                and MEXD.TakeWeatherQuadBudget(1)
+            then
                 local across2 =
                     worldU
                         * math.cos(angle + 1.0472)
@@ -24343,16 +24530,25 @@ if CLIENT then
         patch,
         maturity
     )
+        local detail =
+            math.Clamp(
+                tonumber(
+                    MEXD._weatherDrawDetail
+                ) or 1,
+                0.16,
+                1
+            )
+
         DrawWeatherCluster(
             train,
             patch,
             maturity,
             WEATHER_COLORS.moss,
-            7
+            4
                 + math.floor(
-                    maturity * 6
+                    maturity * 3
                 ),
-            0.82,
+            0.78,
             false
         )
 
@@ -24396,9 +24592,16 @@ if CLIENT then
         end
 
         local strands =
-            4
-            + math.floor(
-                maturity * 10
+            math.max(
+                2,
+                math.floor(
+                    (
+                        3
+                        + maturity * 7
+                    )
+                    * detail
+                    + 0.5
+                )
             )
 
         for i = 1, strands do
@@ -24466,6 +24669,10 @@ if CLIENT then
             local tip =
                 direction * length
 
+            if not MEXD.TakeWeatherQuadBudget(1) then
+                break
+            end
+
             render.DrawQuad(
                 base - half,
                 base + half,
@@ -24483,7 +24690,10 @@ if CLIENT then
                 )
             )
 
-            if i % 2 == 0 then
+            if detail >= 0.68
+                and i % 3 == 0
+                and MEXD.TakeWeatherQuadBudget(1)
+            then
                 local leafAt =
                     base
                     + tip
@@ -24617,28 +24827,44 @@ if CLIENT then
         end
 
         local seed =
-            "MEXInteriorMeshV2:"
+            "MEXInteriorMeshV3:"
             .. tostring(
                 prop:EntIndex()
             )
             .. ":"
             .. key
-        local count =
-            profile == "floor"
-                and 26
-                or (
-                    profile == "panel_metal"
-                    and 18
-                    or (
-                        profile == "metal"
-                        and 12
-                        or (
-                            profile == "fabric"
-                            and 10
-                            or 8
-                        )
-                    )
-                )
+        local meshSpan =
+            isvector(meshData.maxs)
+            and isvector(meshData.mins)
+            and (
+                meshData.maxs
+                - meshData.mins
+            )
+            or Vector(4, 4, 4)
+        local maxDimension =
+            math.max(
+                math.abs(meshSpan.x),
+                math.abs(meshSpan.y),
+                math.abs(meshSpan.z)
+            )
+        local count
+
+        if maxDimension <= 7 then
+            count = 1
+        elseif maxDimension <= 20 then
+            count = 2
+        elseif profile == "floor" then
+            count = 8
+        elseif profile == "panel_metal"
+            or profile == "metal"
+        then
+            count = 4
+        elseif profile == "fabric" then
+            count = 3
+        else
+            count = 2
+        end
+
         local patches = {}
 
         for index = 1, count do
@@ -24894,8 +25120,8 @@ if CLIENT then
             -- Passenger floors sit well below the roof but above most
             -- underframe equipment. This catches baked-in floors on 81-717
             -- models where there is no separate ClientProp named "floor".
-            if zFraction >= 0.18
-                and zFraction <= 0.62
+            if zFraction >= 0.08
+                and zFraction <= 0.56
             then
                 candidates[
                     #candidates + 1
@@ -24916,7 +25142,7 @@ if CLIENT then
             .. ":"
             .. key
 
-        for index = 1, 38 do
+        for index = 1, 16 do
             local patchSeed =
                 seed
                 .. ":"
@@ -24956,9 +25182,9 @@ if CLIENT then
                 )
             local maximumSize =
                 math.Clamp(
-                    surfaceSize * 1.15,
-                    2.4,
-                    22
+                    surfaceSize * 1.85,
+                    4.0,
+                    34
                 )
             local kind =
                 util.SharedRandom(
@@ -24981,16 +25207,16 @@ if CLIENT then
                     maximumSize
                     * util.SharedRandom(
                         patchSeed .. ":w",
-                        0.38,
-                        0.86,
+                        0.58,
+                        0.96,
                         index
                     ),
                 height =
                     maximumSize
                     * util.SharedRandom(
                         patchSeed .. ":h",
-                        0.30,
-                        0.74,
+                        0.48,
+                        0.88,
                         index
                     ),
                 rotation =
@@ -25003,8 +25229,8 @@ if CLIENT then
                 threshold =
                     util.SharedRandom(
                         patchSeed .. ":threshold",
-                        0.06,
-                        0.82,
+                        0.03,
+                        0.70,
                         index
                     ),
             }
@@ -25013,6 +25239,248 @@ if CLIENT then
         train.MEXDamageMainFloorNeglectKey =
             key
         train.MEXDamageMainFloorNeglectPatches =
+            patches
+
+        return patches
+    end
+
+    function MEXD.BuildMainInteriorNeglectPatches(
+        train
+    )
+        if not IsSubwayTrain(train) then
+            return {}
+        end
+
+        local key =
+            "v1|"
+            .. tostring(
+                train:GetModel() or ""
+            )
+            .. "|"
+            .. tostring(
+                train:GetSkin() or 0
+            )
+            .. "|"
+            .. InteriorNeglectBodygroupKey(
+                train
+            )
+
+        if train.MEXDamageMainInteriorNeglectKey
+                == key
+            and istable(
+                train.MEXDamageMainInteriorNeglectPatches
+            )
+        then
+            return train.MEXDamageMainInteriorNeglectPatches
+        end
+
+        local meshData =
+            GetInteriorNeglectRenderMesh(
+                train
+            )
+
+        if not istable(meshData)
+            or not istable(meshData.triangles)
+            or not isvector(meshData.mins)
+            or not isvector(meshData.maxs)
+        then
+            train.MEXDamageMainInteriorNeglectKey =
+                key
+            train.MEXDamageMainInteriorNeglectPatches =
+                {}
+            return {}
+        end
+
+        local center =
+            (
+                meshData.mins
+                + meshData.maxs
+            ) * 0.5
+        local half =
+            (
+                meshData.maxs
+                - meshData.mins
+            ) * 0.5
+        half.x =
+            math.max(
+                math.abs(half.x),
+                1
+            )
+        half.y =
+            math.max(
+                math.abs(half.y),
+                1
+            )
+        half.z =
+            math.max(
+                math.abs(half.z),
+                1
+            )
+
+        local candidates = {}
+
+        for _, tri in ipairs(
+            meshData.triangles
+        ) do
+            if tri.materialProfile == "glass"
+                or tri.materialProfile == "hidden"
+            then
+                continue
+            end
+
+            local rel =
+                tri.center - center
+            local nx =
+                rel.x / half.x
+            local ny =
+                rel.y / half.y
+            local nz =
+                rel.z / half.z
+            local normal =
+                tri.normal
+
+            local inwardSide =
+                math.abs(ny) > 0.42
+                and math.abs(normal.y) > 0.22
+                and normal.y * ny < -0.10
+                and nz > -0.48
+                and nz < 0.92
+            local inwardEnd =
+                math.abs(nx) > 0.56
+                and math.abs(normal.x) > 0.22
+                and normal.x * nx < -0.10
+                and nz > -0.48
+                and nz < 0.92
+            local ceiling =
+                nz > 0.48
+                and normal.z < -0.22
+
+            if inwardSide
+                or inwardEnd
+                or ceiling
+            then
+                candidates[
+                    #candidates + 1
+                ] = tri
+            end
+        end
+
+        local patches = {}
+        local seed =
+            "MEXMainInteriorV1:"
+            .. tostring(
+                train:EntIndex()
+            )
+            .. ":"
+            .. key
+
+        for index = 1, 18 do
+            local patchSeed =
+                seed
+                .. ":"
+                .. tostring(index)
+            local tri =
+                PickInteriorNeglectTriangle(
+                    candidates,
+                    patchSeed,
+                    index
+                )
+
+            if not tri then
+                continue
+            end
+
+            local pos,
+                normal,
+                tangentU,
+                tangentV =
+                InteriorPointOnTriangle(
+                    tri,
+                    patchSeed,
+                    index
+                )
+
+            if not pos then
+                continue
+            end
+
+            local roll =
+                util.SharedRandom(
+                    patchSeed .. ":kind",
+                    0,
+                    1,
+                    index
+                )
+            local rustable =
+                tri.materialProfile
+                    == "metal"
+            local kind =
+                rustable
+                    and roll > 0.82
+                    and "rust"
+                    or (
+                        roll < 0.34
+                        and "mold"
+                        or "grime"
+                    )
+            local surfaceSize =
+                math.sqrt(
+                    math.max(
+                        tonumber(tri.area)
+                            or 1,
+                        0.2
+                    )
+                )
+            local size =
+                math.Clamp(
+                    surfaceSize * 1.45,
+                    4.5,
+                    26
+                )
+
+            patches[#patches + 1] = {
+                kind = kind,
+                seed = patchSeed,
+                pos = pos,
+                normal = normal,
+                tangentU = tangentU,
+                tangentV = tangentV,
+                width =
+                    size
+                    * util.SharedRandom(
+                        patchSeed .. ":w",
+                        0.58,
+                        1.0,
+                        index
+                    ),
+                height =
+                    size
+                    * util.SharedRandom(
+                        patchSeed .. ":h",
+                        0.42,
+                        0.88,
+                        index
+                    ),
+                rotation =
+                    util.SharedRandom(
+                        patchSeed .. ":r",
+                        -22,
+                        22,
+                        index
+                    ),
+                threshold =
+                    util.SharedRandom(
+                        patchSeed .. ":threshold",
+                        0.08,
+                        0.74,
+                        index
+                    ),
+            }
+        end
+
+        train.MEXDamageMainInteriorNeglectKey =
+            key
+        train.MEXDamageMainInteriorNeglectPatches =
             patches
 
         return patches
@@ -25052,36 +25520,60 @@ if CLIENT then
             return
         end
 
-        local eye = EyePos()
-
-        if isvector(eye)
+        local eye =
+            EyePos()
+        local inside =
+            MEXD.IsEyeInsideTrainBounds(
+                train,
+                eye
+            )
+        local distanceSqr =
+            isvector(eye)
             and eye:DistToSqr(
                 train:WorldSpaceCenter()
-            ) > 2300 * 2300
+            )
+            or 0
+
+        if not inside
+            and distanceSqr > 1050 * 1050
         then
             return
         end
 
-        local floorPatches =
-            BuildMainFloorNeglectPatches(
-                train
+        local quality =
+            MEXD.GetWeatherRenderQuality()
+
+        MEXD._weatherDrawDetail =
+            inside
+            and math.Clamp(
+                quality * 0.82,
+                0.24,
+                0.82
+            )
+            or math.Clamp(
+                quality * 0.45,
+                0.18,
+                0.52
             )
 
+        -- Baked passenger floor: large, low-count dark grime/mold stains.
         for _, patch in ipairs(
-            floorPatches or {}
+            BuildMainFloorNeglectPatches(
+                train
+            ) or {}
         ) do
             local level =
                 patch.kind == "mold"
                 and math.Clamp(
-                    decay * 0.96
-                        + dirt * 0.18,
+                    decay
+                        + dirt * 0.22,
                     0,
                     1
                 )
                 or math.Clamp(
                     math.max(
-                        decay * 0.90,
-                        dirt * 0.78
+                        decay * 0.94,
+                        dirt * 0.86
                     ),
                     0,
                     1
@@ -25091,39 +25583,111 @@ if CLIENT then
                     patch.threshold
                 ) or 1
 
-            if level >= threshold then
-                local maturity =
-                    math.Clamp(
-                        (
-                            level - threshold
-                        ) / math.max(
-                            1 - threshold,
-                            0.18
-                        ),
-                        0,
-                        1
-                    )
-
-                DrawWeatherCluster(
-                    train,
-                    patch,
-                    maturity,
-                    patch.kind == "mold"
-                        and WEATHER_COLORS.mold
-                        or WEATHER_COLORS.dirt,
-                    8,
-                    patch.kind == "mold"
-                        and 0.72
-                        or 0.64,
-                    false
-                )
+            if level < threshold then
+                continue
             end
+
+            local maturity =
+                math.Clamp(
+                    (
+                        level - threshold
+                    ) / math.max(
+                        1 - threshold,
+                        0.16
+                    ),
+                    0,
+                    1
+                )
+
+            DrawWeatherCluster(
+                train,
+                patch,
+                maturity,
+                patch.kind == "mold"
+                    and WEATHER_COLORS.mold
+                    or WEATHER_COLORS.grime,
+                3,
+                patch.kind == "mold"
+                    and 0.78
+                    or 0.74,
+                false
+            )
         end
+
+        -- Main body interior surfaces are often baked directly into the train
+        -- model. A few broad inward-facing stains make the saloon visibly old
+        -- without rendering hundreds of little cards.
+        for _, patch in ipairs(
+            MEXD.BuildMainInteriorNeglectPatches(
+                train
+            ) or {}
+        ) do
+            local level =
+                patch.kind == "rust"
+                and corrosion
+                or math.Clamp(
+                    decay * 0.96
+                        + dirt * 0.18,
+                    0,
+                    1
+                )
+            local threshold =
+                tonumber(
+                    patch.threshold
+                ) or 1
+
+            if level < threshold then
+                continue
+            end
+
+            local maturity =
+                math.Clamp(
+                    (
+                        level - threshold
+                    ) / math.max(
+                        1 - threshold,
+                        0.16
+                    ),
+                    0,
+                    1
+                )
+
+            DrawWeatherCluster(
+                train,
+                patch,
+                maturity,
+                patch.kind == "rust"
+                    and WEATHER_COLORS.rust
+                    or (
+                        patch.kind == "mold"
+                        and WEATHER_COLORS.mold
+                        or WEATHER_COLORS.grime
+                    ),
+                2,
+                patch.kind == "rust"
+                    and 0.62
+                    or 0.68,
+                false
+            )
+        end
+
+        local propDistanceSqr =
+            inside
+            and 850 * 850
+            or 520 * 520
 
         for name, prop in pairs(
             train.ClientEnts or {}
         ) do
             if not IsValid(prop) then
+                continue
+            end
+
+            if isvector(eye)
+                and eye:DistToSqr(
+                    prop:WorldSpaceCenter()
+                ) > propDistanceSqr
+            then
                 continue
             end
 
@@ -25157,14 +25721,14 @@ if CLIENT then
                         profile == "panel_metal"
                         and math.max(
                             panelCorrosion,
-                            corrosion * 0.72
+                            corrosion * 0.76
                         )
                         or corrosion
                 elseif patch.kind == "mold" then
                     level =
                         math.Clamp(
-                            decay * 0.94
-                                + dirt * 0.12,
+                            decay
+                                + dirt * 0.14,
                             0,
                             1
                         )
@@ -25172,8 +25736,8 @@ if CLIENT then
                     level =
                         math.Clamp(
                             math.max(
-                                decay * 0.88,
-                                dirt * 0.62
+                                decay * 0.92,
+                                dirt * 0.72
                             ),
                             0,
                             1
@@ -25181,8 +25745,9 @@ if CLIENT then
                 end
 
                 local threshold =
-                    tonumber(patch.threshold)
-                    or 1
+                    tonumber(
+                        patch.threshold
+                    ) or 1
 
                 if level < threshold then
                     continue
@@ -25194,51 +25759,35 @@ if CLIENT then
                             level - threshold
                         ) / math.max(
                             1 - threshold,
-                            0.18
+                            0.16
                         ),
                         0,
                         1
                     )
 
-                if patch.kind == "rust" then
-                    DrawWeatherCluster(
-                        prop,
-                        patch,
-                        maturity,
-                        WEATHER_COLORS.rust,
-                        profile == "panel_metal"
-                            and 7
-                            or 5,
-                        0.74,
-                        false
-                    )
-                elseif patch.kind == "mold" then
-                    DrawWeatherCluster(
-                        prop,
-                        patch,
-                        maturity,
-                        WEATHER_COLORS.mold,
-                        profile == "floor"
-                            and 7
-                            or 5,
-                        0.62,
-                        false
-                    )
-                else
-                    DrawWeatherCluster(
-                        prop,
-                        patch,
-                        maturity,
-                        WEATHER_COLORS.dirt,
-                        profile == "floor"
-                            and 7
-                            or 4,
-                        0.55,
-                        false
-                    )
-                end
+                DrawWeatherCluster(
+                    prop,
+                    patch,
+                    maturity,
+                    patch.kind == "rust"
+                        and WEATHER_COLORS.rust
+                        or (
+                            patch.kind == "mold"
+                            and WEATHER_COLORS.mold
+                            or WEATHER_COLORS.grime
+                        ),
+                    profile == "floor"
+                        and 3
+                        or 2,
+                    patch.kind == "rust"
+                        and 0.62
+                        or 0.58,
+                    false
+                )
             end
         end
+
+        MEXD._weatherDrawDetail = nil
     end
 
     ---------------------------------------------------------------------------
@@ -26041,7 +26590,7 @@ if CLIENT then
             )
         local patches = {}
 
-        for index = 1, 288 do
+        for index = 1, 168 do
             local patchSeed =
                 seed
                 .. ":"
@@ -26420,13 +26969,22 @@ if CLIENT then
         local distanceSqr = 0
 
         if isvector(eye) then
+            -- When the camera is in the saloon/cab, almost none of the exterior
+            -- growth is visible. Skipping it is a very large FPS win.
+            if MEXD.IsEyeInsideTrainBounds(
+                train,
+                eye
+            ) then
+                return
+            end
+
             distanceSqr =
                 eye:DistToSqr(
                     train:WorldSpaceCenter()
                 )
 
             if distanceSqr
-                > 5200 * 5200
+                > 3000 * 3000
             then
                 return
             end
@@ -26451,12 +27009,49 @@ if CLIENT then
                 )
         end
 
-        local drawGrassBlades =
-            distanceSqr <= 2850 * 2850
+        local quality =
+            MEXD.GetWeatherRenderQuality()
+        local lod
 
-        for _, patch in ipairs(
+        if distanceSqr <= 900 * 900 then
+            lod = 1
+        elseif distanceSqr <= 1700 * 1700 then
+            lod = 0.58
+        else
+            lod = 0.30
+        end
+
+        local detail =
+            math.Clamp(
+                quality * lod,
+                0.16,
+                1
+            )
+        local stride =
+            detail < 0.28
+            and 4
+            or (
+                detail < 0.48
+                and 2
+                or 1
+            )
+
+        MEXD._weatherDrawDetail =
+            detail
+
+        local drawGrassBlades =
+            distanceSqr <= 1450 * 1450
+            and detail >= 0.28
+
+        for index, patch in ipairs(
             patches or {}
         ) do
+            if stride > 1
+                and index % stride ~= 1
+            then
+                continue
+            end
+
             if not istable(patch)
                 or not isvector(patch.pos)
                 or not isvector(patch.normal)
@@ -26533,15 +27128,23 @@ if CLIENT then
                     patch,
                     maturity,
                     WEATHER_COLORS.moss,
-                    8
+                    5
                         + math.floor(
-                            maturity * 8
+                            maturity * 3
                         ),
-                    0.88,
+                    0.82,
                     false
                 )
             end
+
+            if MEXD._weatherQuadBudget
+                and MEXD._weatherQuadBudget <= 0
+            then
+                break
+            end
         end
+
+        MEXD._weatherDrawDetail = nil
     end
 
     hook.Add(
@@ -26554,18 +27157,69 @@ if CLIENT then
                 return
             end
 
+            local quality =
+                MEXD.GetWeatherRenderQuality()
+
+            -- Strict global budget: procedural weather can never explode into
+            -- several thousand render.DrawQuad calls per frame again.
+            MEXD._weatherQuadBudget =
+                math.floor(
+                    430
+                    + quality * 520
+                )
+
+            local eye =
+                EyePos()
+            local trains = {}
+
             for _, train in ipairs(
                 ents.GetAll()
             ) do
                 if IsSubwayTrain(train) then
-                    MEXD.DrawGrowthOverlay(
+                    trains[#trains + 1] =
                         train
+                end
+            end
+
+            -- Draw the train containing the camera first so its floor/walls do
+            -- not lose detail because a distant exterior consumed the budget.
+            if isvector(eye) then
+                for _, train in ipairs(trains) do
+                    if MEXD.IsEyeInsideTrainBounds(
+                        train,
+                        eye
+                    ) then
+                        MEXD.DrawInteriorNeglectOverlay(
+                            train
+                        )
+                    end
+                end
+            end
+
+            for _, train in ipairs(trains) do
+                MEXD.DrawGrowthOverlay(
+                    train
+                )
+
+                if not (
+                    isvector(eye)
+                    and MEXD.IsEyeInsideTrainBounds(
+                        train,
+                        eye
                     )
+                ) then
                     MEXD.DrawInteriorNeglectOverlay(
                         train
                     )
                 end
+
+                if MEXD._weatherQuadBudget <= 0 then
+                    break
+                end
             end
+
+            MEXD._weatherDrawDetail = nil
+            MEXD._weatherQuadBudget = nil
         end
     )
 
