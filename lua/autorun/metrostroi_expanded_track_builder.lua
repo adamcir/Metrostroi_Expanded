@@ -243,6 +243,20 @@ if CLIENT then
         local axisIsX = math.abs(size.x - 16) <= math.abs(size.y - 16)
         local tileLength = math.max(axisIsX and size.x or size.y, 4)
 
+        -- If railroad16.mdl exposes the two rails directly in its OBB, make
+        -- their visible outer width agree with the exact geometry used by
+        -- Metrostroi rerailing: gauge 80 + one rail width 5.8. We only apply
+        -- this when the cross-width looks like an actual rail pair; wide
+        -- sleeper/base models are intentionally left unscaled.
+        local crossWidth = axisIsX and size.y or size.x
+        local desiredOuterWidth = METROSTROI_TRACK_GAUGE
+            + METROSTROI_RAIL_WIDTH
+        local lateralScale = 1
+
+        if crossWidth >= 70 and crossWidth <= 110 then
+            lateralScale = desiredOuterWidth / crossWidth
+        end
+
         -- Full-size Metrostroi tiles are repeated. Their spacing is at most
         -- their real length, so adjacent pieces may overlap slightly but can
         -- never leave a visible gap.
@@ -253,6 +267,10 @@ if CLIENT then
         local firstX = -length * 0.5 + step * 0.5
         local localCorrection = axisIsX and Angle(0, 0, 0) or Angle(0, -90, 0)
         local pieceAng = self:LocalToWorldAngles(localCorrection)
+        local railSurface = self:GetNW2Float(
+            "MEXRailSurfaceOffset",
+            METROSTROI_RAIL_HEIGHT
+        )
 
         for i = 1, count do
             local piece = self.MEXModelPieces[i]
@@ -261,13 +279,30 @@ if CLIENT then
                 local pmaxs = piece:OBBMaxs()
                 local center = (pmins + pmaxs) * 0.5
 
-                -- Anchor the model by the center of its bottom face so models
-                -- with a non-centered origin still sit on the spline plane.
-                local anchor = Vector(center.x, center.y, pmins.z)
+                -- Non-uniform render scaling is safe here because this is a
+                -- clientside decoration only. Server collision remains the
+                -- canonical 80/5.8/10 Metrostroi rail geometry.
+                local matrix = Matrix()
+                if axisIsX then
+                    matrix:Scale(Vector(1, lateralScale, 1))
+                else
+                    matrix:Scale(Vector(lateralScale, 1, 1))
+                end
+                piece:EnableMatrix("RenderMultiply", matrix)
+
+                -- The previous renderer placed MODEL BOTTOM at the spline
+                -- plane. That assumes the model's height equals Metrostroi's
+                -- 10-SU running surface, which is not guaranteed. Anchor the
+                -- MODEL TOP to the exact physical/rerail rail surface instead.
+                -- Thus what the wheel visually touches is the same Z used by
+                -- collision and RerailGetTrackData.
+                local anchor = Vector(center.x, center.y, pmaxs.z)
                 anchor:Rotate(pieceAng)
 
                 local x = firstX + (i - 1) * step
-                local target = self:LocalToWorld(Vector(x, 0, 0))
+                local target = self:LocalToWorld(
+                    Vector(x, 0, railSurface)
+                )
 
                 piece:SetRenderOrigin(target - anchor)
                 piece:SetRenderAngles(pieceAng)
