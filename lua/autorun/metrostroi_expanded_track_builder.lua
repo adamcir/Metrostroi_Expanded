@@ -12,9 +12,11 @@ local Builder = MEXTrackBuilder
 local TRACK_CLASS = "mex_track_segment"
 local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad16.mdl"
 
--- Must match Metrostroi sh_rerail.lua. Rerailing assumes the rail running
--- surface is exactly 10 Source units above the track base.
-local METROSTROI_TRACK_GAUGE = 80
+-- railroad16.mdl was authored for Metrostroi's 80-SU track. The MEX
+-- builder offers a wider 100-SU gauge; visuals and physics must use the same
+-- selected gauge. Keep the rail running surface at the rerailer's 10-SU height.
+local METROSTROI_MODEL_GAUGE = 80
+local DEFAULT_TRACK_GAUGE = 100
 local METROSTROI_RAIL_WIDTH = 5.8
 local METROSTROI_RAIL_HEIGHT = 10
 
@@ -57,9 +59,9 @@ function TrackEntity:Initialize()
     if not SERVER then return end
 
     local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
-    local gauge = math.max(self:GetNW2Float("MEXGauge", 80), 8)
-    local railWidth = math.max(self:GetNW2Float("MEXRailWidth", 4), 1)
-    local railHeight = math.max(self:GetNW2Float("MEXRailHeight", 7), 1)
+    local gauge = math.Clamp(self:GetNW2Float("MEXGauge", DEFAULT_TRACK_GAUGE), 8, 200)
+    local railWidth = math.Clamp(self:GetNW2Float("MEXRailWidth", METROSTROI_RAIL_WIDTH), 1, 24)
+    local railHeight = math.max(self:GetNW2Float("MEXRailHeight", METROSTROI_RAIL_HEIGHT), 1)
     local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
     local model = SafeTrackModel(self:GetNW2String("MEXTrackModel", DEFAULT_TRACK_MODEL))
 
@@ -78,8 +80,8 @@ function TrackEntity:Initialize()
     -- Do not derive this from the model OBB. railroad16.mdl contains more
     -- geometry than the running rail surface, so OBBMaxs().z is not the
     -- rerail height. Stock Metrostroi uses a 10-SU-high rail in sh_rerail.lua.
-    local effectiveGauge = METROSTROI_TRACK_GAUGE
-    local effectiveRailWidth = METROSTROI_RAIL_WIDTH
+    local effectiveGauge = gauge
+    local effectiveRailWidth = railWidth
     local railTop = METROSTROI_RAIL_HEIGHT
     local railBottom = 0
     local halfRail = effectiveRailWidth * 0.5
@@ -171,8 +173,7 @@ if CLIENT then
             METROSTROI_RAIL_HEIGHT
         )
         local railBottom = 0
-        local halfRail = METROSTROI_RAIL_WIDTH * 0.5
-        gauge = METROSTROI_TRACK_GAUGE
+        local halfRail = railWidth * 0.5
 
         render.DrawBox(
             self:GetPos(),
@@ -243,19 +244,20 @@ if CLIENT then
         local axisIsX = math.abs(size.x - 16) <= math.abs(size.y - 16)
         local tileLength = math.max(axisIsX and size.x or size.y, 4)
 
-        -- If railroad16.mdl exposes the two rails directly in its OBB, make
-        -- their visible outer width agree with the exact geometry used by
-        -- Metrostroi rerailing: gauge 80 + one rail width 5.8. We only apply
-        -- this when the cross-width looks like an actual rail pair; wide
-        -- sleeper/base models are intentionally left unscaled.
+        -- Expand the entire tile laterally when gauge is increased, including
+        -- tiles whose OBB includes sleepers (their width is usually > 110 SU).
+        -- The old check skipped those tiles, leaving visuals and solid rail
+        -- heads at different positions. Preserve native alignment at 80 SU.
         local crossWidth = axisIsX and size.y or size.x
-        local desiredOuterWidth = METROSTROI_TRACK_GAUGE
-            + METROSTROI_RAIL_WIDTH
-        local lateralScale = 1
-
+        local nativeOuterWidth = METROSTROI_MODEL_GAUGE + METROSTROI_RAIL_WIDTH
+        local nativeScale = 1
         if crossWidth >= 70 and crossWidth <= 110 then
-            lateralScale = desiredOuterWidth / crossWidth
+            nativeScale = nativeOuterWidth / crossWidth
         end
+
+        local gauge = self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE)
+        local railWidth = self:GetNW2Float("MEXPhysicalRailWidth", METROSTROI_RAIL_WIDTH)
+        local lateralScale = nativeScale * (gauge + railWidth) / nativeOuterWidth
 
         -- Full-size Metrostroi tiles are repeated. Their spacing is at most
         -- their real length, so adjacent pieces may overlap slightly but can
@@ -279,9 +281,8 @@ if CLIENT then
                 local pmaxs = piece:OBBMaxs()
                 local center = (pmins + pmaxs) * 0.5
 
-                -- Non-uniform render scaling is safe here because this is a
-                -- clientside decoration only. Server collision remains the
-                -- canonical 80/5.8/10 Metrostroi rail geometry.
+                -- Client-only scaling: the server's twin-rail convexes use
+                -- the selected gauge and width, matching these visible rails.
                 local matrix = Matrix()
                 if axisIsX then
                     matrix:Scale(Vector(1, lateralScale, 1))
@@ -296,7 +297,11 @@ if CLIENT then
                 -- MODEL TOP to the exact physical/rerail rail surface instead.
                 -- Thus what the wheel visually touches is the same Z used by
                 -- collision and RerailGetTrackData.
-                local anchor = Vector(center.x, center.y, pmaxs.z)
+                local anchor = Vector(
+                    axisIsX and center.x or center.x * lateralScale,
+                    axisIsX and center.y * lateralScale or center.y,
+                    pmaxs.z
+                )
                 anchor:Rotate(pieceAng)
 
                 local x = firstX + (i - 1) * step
@@ -321,9 +326,9 @@ if CLIENT then
 
     function TrackEntity:Draw()
         local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
-        local gauge = math.max(self:GetNW2Float("MEXGauge", 80), 8)
-        local railWidth = math.max(self:GetNW2Float("MEXRailWidth", 4), 1)
-        local railHeight = math.max(self:GetNW2Float("MEXRailHeight", 7), 1)
+        local gauge = math.max(self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE), 8)
+        local railWidth = math.max(self:GetNW2Float("MEXPhysicalRailWidth", METROSTROI_RAIL_WIDTH), 1)
+        local railHeight = math.max(self:GetNW2Float("MEXRailHeight", METROSTROI_RAIL_HEIGHT), 1)
         local sleeperSpacing = math.max(self:GetNW2Float("MEXSleeperSpacing", 32), 8)
         local sleeperLength = math.max(self:GetNW2Float("MEXSleeperLength", 128), gauge + 16)
         local sleeperWidth = math.max(self:GetNW2Float("MEXSleeperWidth", 10), 2)
@@ -659,7 +664,7 @@ end
 local function CopySettings(settings)
     settings = settings or {}
     return {
-        gauge = math.Clamp(tonumber(settings.gauge) or METROSTROI_TRACK_GAUGE, 8, 200),
+        gauge = math.Clamp(tonumber(settings.gauge) or DEFAULT_TRACK_GAUGE, 8, 200),
         rail_width = math.Clamp(tonumber(settings.rail_width) or METROSTROI_RAIL_WIDTH, 1, 24),
         rail_height = math.Clamp(tonumber(settings.rail_height) or METROSTROI_RAIL_HEIGHT, 1, 32),
         sleeper_spacing = math.Clamp(tonumber(settings.sleeper_spacing) or 32, 8, 256),
@@ -918,7 +923,7 @@ function Builder.SaveLayout()
     EnsureDirectories()
 
     local payload = {
-        version = 2,
+        version = 3,
         routes = Builder.Routes,
     }
 
@@ -933,6 +938,9 @@ function Builder.LoadLayout()
     local decoded = util.JSONToTable(file.Read(LayoutPath(), "DATA") or "")
     if not istable(decoded) or not istable(decoded.routes) then return end
 
+    local previousVersion = tonumber(decoded.version) or 1
+    local migrated = false
+
     for _, routeEntry in ipairs(OrderedNumericValues(decoded.routes)) do
         local route = routeEntry.value
 
@@ -941,16 +949,27 @@ function Builder.LoadLayout()
             local generated = ReadPointArray(route.generated_points)
 
             if #points >= 2 or #generated >= 2 then
+                local settings = CopySettings(route.settings)
+                -- Upgrade previously saved routes made with the old 80-SU
+                -- default, otherwise their narrow track would be left behind.
+                if previousVersion < 3 and settings.gauge == METROSTROI_MODEL_GAUGE then
+                    settings.gauge = DEFAULT_TRACK_GAUGE
+                    migrated = true
+                end
                 Builder.Routes[#Builder.Routes + 1] = {
                     points = points,
                     generated_points = #generated >= 2 and generated or nil,
                     anchors = ReadAnchors(route.anchors),
-                    settings = CopySettings(route.settings),
+                    settings = settings,
                     network = route.network ~= false,
                     kind = isstring(route.kind) and route.kind or nil,
                 }
             end
         end
+    end
+
+    if migrated then
+        Builder.SaveLayout()
     end
 end
 
@@ -2335,6 +2354,32 @@ hook.Add("Think", "MEXTrackBuilderInstallRerailSupport", function()
 end)
 
 
+function Builder.ApplyGaugeToRoutes(gauge, ply)
+    gauge = math.Clamp(tonumber(gauge) or DEFAULT_TRACK_GAUGE, 40, 160)
+    local changed = 0
+
+    for _, route in ipairs(Builder.Routes) do
+        route.settings = CopySettings(route.settings)
+        if math.abs(route.settings.gauge - gauge) > 0.01 then
+            route.settings.gauge = gauge
+            changed = changed + 1
+        end
+    end
+
+    if changed > 0 then
+        Builder.SaveLayout()
+        Builder.RespawnAll()
+    end
+
+    if IsValid(ply) then
+        ply:ChatPrint(string.format(
+            "[MEX Track Builder] Gauge: %.1f SU. Updated %d saved route(s).",
+            gauge, changed
+        ))
+    end
+    return changed
+end
+
 function Builder.RemoveRoute(routeID, ply)
     routeID = math.floor(tonumber(routeID) or 0)
     if routeID < 1 or not Builder.Routes[routeID] then return false end
@@ -2391,6 +2436,11 @@ end)
 concommand.Add("mex_track_builder_cancel_loop", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     Builder.CancelAutoLoop(ply)
+end)
+
+concommand.Add("mex_track_builder_apply_gauge", function(ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    Builder.ApplyGaugeToRoutes(ply:GetInfoNum("mex_track_builder_gauge", DEFAULT_TRACK_GAUGE), ply)
 end)
 
 concommand.Add("mex_track_builder_rebuild", function(ply)
