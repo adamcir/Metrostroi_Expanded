@@ -8,7 +8,7 @@ TOOL.Command = nil
 TOOL.ConfigName = ""
 
 TOOL.ClientConVar = {
-    gauge = "80",
+    gauge = "100",
     rail_width = "5.8",
     rail_height = "10",
     sleeper_spacing = "32",
@@ -38,7 +38,7 @@ end
 
 local function ReadSettings(tool)
     return {
-        gauge = tool:GetClientNumber("gauge", 80),
+        gauge = tool:GetClientNumber("gauge", 100),
         rail_width = tool:GetClientNumber("rail_width", 4),
         rail_height = tool:GetClientNumber("rail_height", 7),
         sleeper_spacing = tool:GetClientNumber("sleeper_spacing", 32),
@@ -182,9 +182,9 @@ function TOOL.BuildCPanel(panel)
     panel:CheckBox("Use Metrostroi track model", "mex_track_builder_use_track_model")
     panel:Help("Smooth track uses the real Metrostroi railroad16.mdl tile. Long 1024-SU models are intentionally not used on curves.")
 
-    panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 40, 120, 1)
+    panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 60, 160, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
-    panel:Help("Physical rail geometry follows Metrostroi rerailer dimensions: 80 SU gauge, 5.8 SU rail width and 10 SU running-surface height. No wide invisible sleeper block is used.")
+    panel:Help("Default 100 SU (wider than Metrostroi's original 80 SU). The gauge now changes both visible model rails and solid rails; rail surface stays 10 SU high. If your saved setting is still 80, move the slider to 100.")
     panel:NumSlider("Fallback rail height", "mex_track_builder_rail_height", 1, 16, 1)
     panel:NumSlider("Fallback sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
     panel:NumSlider("Fallback sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
@@ -206,10 +206,12 @@ function TOOL.BuildCPanel(panel)
 
     panel:Help("railroad16.mdl is repeated along the spline, so track pieces keep their normal proportions without the long-model fan effect.")
     panel:Help("If a selected Metrostroi model is missing, the tool falls back to procedural rails using Metrostroi materials.")
-    panel:Help("The default gauge 80 SU is close to 1520 mm in Metrostroi scale.")
+    panel:Help("100 SU is a wider experimental gauge for MEX rails. The original Metrostroi gauge is 80 SU; you can fine-tune this to match the bogey wheel positions.")
 
     panel:Button("Finish current route", "mex_track_builder_finish")
     panel:Button("Cancel unfinished route", "mex_track_builder_cancel")
+    panel:Button("Apply selected gauge to saved routes", "mex_track_builder_apply_gauge")
+    panel:Help("Widen existing track without deleting it: choose a gauge and click Apply. Older 80-SU routes also migrate to 100 SU the next time the map loads.")
     panel:Button("Rebuild Metrostroi network", "mex_track_builder_rebuild")
     panel:Button("Rerail aimed Metrostroi train", "metrostroi_rerail")
     panel:Help("The normal Metrostroi rerailer and train spawner now also recognize saved MEX Track Builder rails.")
