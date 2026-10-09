@@ -590,6 +590,7 @@ end
 Builder.Routes = Builder.Routes or {}
 Builder.Active = Builder.Active or {}
 Builder.LoopStart = Builder.LoopStart or {}
+Builder.LastRoute = Builder.LastRoute or {}
 
 local DATA_DIR = "metrostroi_expanded"
 local NETWORK_DIR = "metrostroi_data"
@@ -907,12 +908,46 @@ end
 local function RebuildActiveRoute(active)
     if not active then return end
 
-    RemoveEntities(active.entities)
     active.render_points = Builder.BuildSmoothPoints(
         active.points,
         active.settings,
         active.anchors
     )
+
+    -- Editing an already saved track after R must keep its route ID and
+    -- update the saved geometry/network, not create a second overlapping
+    -- route or turn the entire surviving track into a disposable preview.
+    if active.edit_route then
+        local routeID
+        for id, route in ipairs(Builder.Routes) do
+            if route == active.edit_route then
+                routeID = id
+                break
+            end
+        end
+        if not routeID then return end
+
+        local route = active.edit_route
+        route.points = active.points
+        route.anchors = active.anchors
+        route.settings = CopySettings(active.settings)
+        route.generated_points = nil
+        route.kind = nil
+
+        for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
+            if IsValid(ent) and ent:GetNW2Int("MEXRouteID", 0) == routeID then
+                ent:Remove()
+            end
+        end
+        SpawnPolyline(active.render_points, route.settings, routeID)
+        Builder.SaveLayout()
+        if route.network then
+            Builder.RebuildMetrostroiNetwork()
+        end
+        return
+    end
+
+    RemoveEntities(active.entities)
     active.entities = SpawnPolyline(active.render_points, active.settings, 0)
 end
 
@@ -1616,6 +1651,7 @@ function Builder.AutoLoopClick(
     }
 
     Builder.Routes[#Builder.Routes + 1] = route
+    Builder.LastRoute[ply] = route
     local routeID = #Builder.Routes
 
     SpawnPolyline(
@@ -1650,12 +1686,18 @@ function Builder.CancelRoute(ply, silent)
     local active = Builder.Active[ply]
     if not active then return false end
 
-    RemoveEntities(active.entities)
+    -- An edited, already saved route is kept. Cancel only exits edit mode;
+    -- do not erase the existing track that R stepped back into.
+    if not active.edit_route then
+        RemoveEntities(active.entities)
+    end
     Builder.Active[ply] = nil
     SetActiveStart(ply, nil)
 
     if IsValid(ply) and not silent then
-        ply:ChatPrint("[MEX Track Builder] Unfinished route cancelled.")
+        ply:ChatPrint(active.edit_route
+            and "[MEX Track Builder] Editing stopped; saved track kept."
+            or "[MEX Track Builder] Unfinished route cancelled.")
     end
 
     return true
@@ -1664,6 +1706,17 @@ end
 function Builder.FinishRoute(ply, network)
     local active = Builder.Active[ply]
     if not active then return false end
+
+    -- Undoing a saved route puts its endpoint back into edit mode. Adding
+    -- points edits that same route in place; RMB only finishes the edit.
+    if active.edit_route and #active.points >= 2 then
+        Builder.Active[ply] = nil
+        SetActiveStart(ply, nil)
+        if IsValid(ply) then
+            ply:ChatPrint("[MEX Track Builder] Saved route editing finished.")
+        end
+        return true
+    end
 
     if #active.points < 2 then
         Builder.CancelRoute(ply, true)
@@ -1683,6 +1736,7 @@ function Builder.FinishRoute(ply, network)
     }
 
     Builder.Routes[#Builder.Routes + 1] = route
+    Builder.LastRoute[ply] = route
     local routeID = #Builder.Routes
     local smoothPoints = RouteRenderPoints(route)
     SpawnPolyline(smoothPoints, route.settings, routeID)
@@ -1704,6 +1758,96 @@ function Builder.FinishRoute(ply, network)
         ))
     end
 
+    return true
+end
+
+-- R (tool Reload) undoes exactly one construction step. For an active route
+-- this is its last control point. For a saved route we reopen the selected
+-- (or most recently finished) route, remove one step and leave its surviving
+-- endpoint selected so the next left click continues from there.
+function Builder.UndoLastPoint(ply, routeID)
+    if not IsValid(ply) or not ply:IsAdmin() then return false end
+
+    if Builder.LoopStart[ply] then
+        return Builder.CancelAutoLoop(ply)
+    end
+
+    local active = Builder.Active[ply]
+    if not active then
+        local route = Builder.Routes[tonumber(routeID) or 0]
+        if not route then
+            local previous = Builder.LastRoute[ply]
+            for _, saved in ipairs(Builder.Routes) do
+                if saved == previous then
+                    route = saved
+                    break
+                end
+            end
+        end
+
+        if not route then
+            ply:ChatPrint("[MEX Track Builder] Nothing to undo. Aim at a saved MEX rail or place a point.")
+            return false
+        end
+
+        local generated = ReadPointArray(route.generated_points)
+        local fromLoop = #generated >= 2
+        local points = fromLoop and generated or ReadPointArray(route.points)
+        if #points < 2 then return false end
+
+        local settings = CopySettings(route.settings)
+        if fromLoop then
+            -- Auto Loop was created in one action. Its generated track
+            -- consists of short pieces; make these editable steps, keeping
+            -- the original loop shape instead of deleting the whole loop.
+            settings.smooth = false
+        end
+
+        active = {
+            points = points,
+            anchors = fromLoop and {} or ReadAnchors(route.anchors),
+            entities = {},
+            render_points = {},
+            settings = settings,
+            edit_route = route,
+        }
+        Builder.Active[ply] = active
+        Builder.LastRoute[ply] = route
+    end
+
+    local previousCount = #active.points
+    if previousCount <= 1 then
+        Builder.CancelRoute(ply, true)
+        ply:ChatPrint("[MEX Track Builder] Starting point undone; route is no longer active.")
+        return true
+    end
+
+    table.remove(active.points, previousCount)
+    active.anchors[previousCount] = nil
+
+    if active.edit_route and #active.points < 2 then
+        -- One saved segment has been undone. Preserve its start point as
+        -- an active drawing anchor, but remove that now-empty saved route.
+        for id, route in ipairs(Builder.Routes) do
+            if route == active.edit_route then
+                table.remove(Builder.Routes, id)
+                break
+            end
+        end
+        Builder.LastRoute[ply] = nil
+        active.edit_route = nil
+        Builder.SaveLayout()
+        Builder.RespawnAll()
+        Builder.RebuildMetrostroiNetwork()
+    else
+        RebuildActiveRoute(active)
+    end
+
+    SetActiveStart(ply, active.points[#active.points])
+    ply:ChatPrint(string.format(
+        "[MEX Track Builder] Undid 1 step. Endpoint selected (%d point(s) remain); LMB continues track.",
+        #active.points
+    ))
     return true
 end
 
@@ -2400,6 +2544,7 @@ end
 hook.Add("PlayerDisconnected", "MEXTrackBuilderPlayerDisconnected", function(ply)
     Builder.CancelRoute(ply, true)
     Builder.CancelAutoLoop(ply, true)
+    Builder.LastRoute[ply] = nil
 end)
 
 hook.Add("PostCleanupMap", "MEXTrackBuilderRespawn", function()
@@ -2419,6 +2564,28 @@ hook.Add("InitPostEntity", "MEXTrackBuilderLoad", function()
             end)
         end
     end)
+end)
+
+-- Removing a whole saved route is deliberately separate from Undo (R).
+concommand.Add("mex_track_builder_delete_aimed_route", function(ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    local tr = ply:GetEyeTrace()
+    local ent = tr and tr.Entity
+    if not IsValid(ent) or ent:GetClass() ~= TRACK_CLASS then
+        ply:ChatPrint("[MEX Track Builder] Aim at a saved MEX rail to delete its entire route.")
+        return
+    end
+    local routeID = ent:GetNW2Int("MEXRouteID", 0)
+    if routeID <= 0 then
+        ply:ChatPrint("[MEX Track Builder] Finish this unfinished route first, or press R to undo.")
+        return
+    end
+
+    local active = Builder.Active[ply]
+    if active and active.edit_route == Builder.Routes[routeID] then
+        Builder.CancelRoute(ply, true)
+    end
+    Builder.RemoveRoute(routeID, ply)
 end)
 
 concommand.Add("mex_track_builder_finish", function(ply)
