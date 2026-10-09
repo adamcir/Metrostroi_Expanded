@@ -2588,6 +2588,18 @@ concommand.Add("mex_track_builder_delete_aimed_route", function(ply)
     Builder.RemoveRoute(routeID, ply)
 end)
 
+concommand.Add("mex_track_builder_undo", function(ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    local tr = ply:GetEyeTrace()
+    local ent = tr and tr.Entity
+    local routeID
+    if IsValid(ent) and ent:GetClass() == TRACK_CLASS then
+        local id = ent:GetNW2Int("MEXRouteID", 0)
+        if id > 0 then routeID = id end
+    end
+    Builder.UndoLastPoint(ply, routeID)
+end)
+
 concommand.Add("mex_track_builder_finish", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     Builder.FinishRoute(ply, ply:GetInfoNum("mex_track_builder_network", 1) > 0)
