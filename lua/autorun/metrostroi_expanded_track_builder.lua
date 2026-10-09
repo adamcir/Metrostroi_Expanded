@@ -12,13 +12,15 @@ local Builder = MEXTrackBuilder
 local TRACK_CLASS = "mex_track_segment"
 local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad16.mdl"
 
--- railroad16.mdl was authored for Metrostroi's 80-SU track. The MEX
--- builder offers a wider 100-SU gauge; visuals and physics must use the same
--- selected gauge. Keep the rail running surface at the rerailer's 10-SU height.
-local METROSTROI_MODEL_GAUGE = 80
-local DEFAULT_TRACK_GAUGE = 100
+-- Metrostroi sh_rerail.lua: TRACK_GAUGE=80 measures the CLEAR GAP between
+-- the two inner rail faces. TRACK_WIDTH=5.8 is the rail head width. Therefore
+-- the rail CENTRE-TO-CENTRE distance used by our twin convexes is 85.8 SU.
+-- Use exactly the native railroad16.mdl track width, no artificial widening.
+local METROSTROI_INNER_GAUGE = 80
 local METROSTROI_RAIL_WIDTH = 5.8
 local METROSTROI_RAIL_HEIGHT = 10
+local DEFAULT_TRACK_GAUGE = METROSTROI_INNER_GAUGE + METROSTROI_RAIL_WIDTH
+local METROSTROI_MODEL_GAUGE = DEFAULT_TRACK_GAUGE
 
 -- Curved MEX track is built from Metrostroi's short 16-SU tile.
 -- Long 1024/4096 models cannot bend and caused the huge rail "fan".
@@ -244,11 +246,10 @@ if CLIENT then
         local axisIsX = math.abs(size.x - 16) <= math.abs(size.y - 16)
         local tileLength = math.max(axisIsX and size.x or size.y, 4)
 
-        -- The Metrostroi tile has native 80-SU rail spacing. Its OBB can
-        -- include sleepers, so the OBB width is NOT the distance between the
-        -- rails. Scale the tile using the actual requested rail spacing.
-        -- This also widens the visible rails on sleepers/base models that the
-        -- previous OBB heuristic skipped entirely.
+        -- The native model has an 80-SU inner gap, i.e. 85.8 SU between rail
+        -- centres (sh_rerail.lua). Keep its native dimensions at the default.
+        -- Scale only if a player deliberately selects a custom gauge; the
+        -- model OBB also contains sleepers, so it cannot measure the gauge.
         local gauge = self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE)
         local lateralScale = gauge / METROSTROI_MODEL_GAUGE
 
@@ -919,7 +920,7 @@ function Builder.SaveLayout()
     EnsureDirectories()
 
     local payload = {
-        version = 3,
+        version = 4,
         routes = Builder.Routes,
     }
 
@@ -946,9 +947,13 @@ function Builder.LoadLayout()
 
             if #points >= 2 or #generated >= 2 then
                 local settings = CopySettings(route.settings)
-                -- Upgrade previously saved routes made with the old 80-SU
-                -- default, otherwise their narrow track would be left behind.
-                if previousVersion < 3 and settings.gauge == METROSTROI_MODEL_GAUGE then
+                -- Previously saved defaults used 80 SU (v1/v2), then an
+                -- overly wide 100 SU (v3). Bring both to the real Metrostroi
+                -- rail-centre distance, while preserving custom gauges.
+                local oldDefaultGauge = previousVersion < 3 and 80 or 100
+                if previousVersion < 4
+                    and math.abs(settings.gauge - oldDefaultGauge) < 0.01
+                then
                     settings.gauge = DEFAULT_TRACK_GAUGE
                     migrated = true
                 end
