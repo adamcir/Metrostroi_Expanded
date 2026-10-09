@@ -244,20 +244,13 @@ if CLIENT then
         local axisIsX = math.abs(size.x - 16) <= math.abs(size.y - 16)
         local tileLength = math.max(axisIsX and size.x or size.y, 4)
 
-        -- Expand the entire tile laterally when gauge is increased, including
-        -- tiles whose OBB includes sleepers (their width is usually > 110 SU).
-        -- The old check skipped those tiles, leaving visuals and solid rail
-        -- heads at different positions. Preserve native alignment at 80 SU.
-        local crossWidth = axisIsX and size.y or size.x
-        local nativeOuterWidth = METROSTROI_MODEL_GAUGE + METROSTROI_RAIL_WIDTH
-        local nativeScale = 1
-        if crossWidth >= 70 and crossWidth <= 110 then
-            nativeScale = nativeOuterWidth / crossWidth
-        end
-
+        -- The Metrostroi tile has native 80-SU rail spacing. Its OBB can
+        -- include sleepers, so the OBB width is NOT the distance between the
+        -- rails. Scale the tile using the actual requested rail spacing.
+        -- This also widens the visible rails on sleepers/base models that the
+        -- previous OBB heuristic skipped entirely.
         local gauge = self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE)
-        local railWidth = self:GetNW2Float("MEXPhysicalRailWidth", METROSTROI_RAIL_WIDTH)
-        local lateralScale = nativeScale * (gauge + railWidth) / nativeOuterWidth
+        local lateralScale = gauge / METROSTROI_MODEL_GAUGE
 
         -- Full-size Metrostroi tiles are repeated. Their spacing is at most
         -- their real length, so adjacent pieces may overlap slightly but can
@@ -336,9 +329,12 @@ if CLIENT then
         local model = SafeTrackModel(self:GetNW2String("MEXTrackModel", DEFAULT_TRACK_MODEL))
 
         if self.SetRenderBounds then
+            local scaledHalfWidth = sleeperLength * 0.5
+                * math.max(1, gauge / METROSTROI_MODEL_GAUGE)
+            local halfWidth = math.max(sleeperLength * 0.5, scaledHalfWidth, gauge * 0.5 + railWidth) + 32
             self:SetRenderBounds(
-                Vector(-length * 0.5 - 32, -sleeperLength * 0.5 - 32, -16),
-                Vector(length * 0.5 + 32, sleeperLength * 0.5 + 32, sleeperHeight + railHeight + 32)
+                Vector(-length * 0.5 - 32, -halfWidth, -16),
+                Vector(length * 0.5 + 32, halfWidth, sleeperHeight + railHeight + 32)
             )
         end
 
