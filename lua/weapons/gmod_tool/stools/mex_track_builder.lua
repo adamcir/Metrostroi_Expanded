@@ -34,6 +34,19 @@ if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
     language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
     language.Add("tool.mex_track_builder.0", "LMB: add/snap point (Auto Loop: start/end) | RMB: finish/cancel loop | Reload: delete route or cancel")
+
+    -- TOOL.ClientConVar is persistent. Upgrade old 80-SU defaults once so
+    -- existing players see the corrected width without resetting settings.
+    timer.Simple(1, function()
+        local key = "mex_track_builder_gauge_migrated_v3"
+        if cookie.GetNumber(key, 0) ~= 0 then return end
+        local cv = GetConVar("mex_track_builder_gauge")
+        if not cv then return end
+        if math.abs(cv:GetFloat() - 80) < 0.01 then
+            RunConsoleCommand("mex_track_builder_gauge", "100")
+        end
+        cookie.Set(key, "1")
+    end)
 end
 
 local function ReadSettings(tool)
@@ -184,7 +197,7 @@ function TOOL.BuildCPanel(panel)
 
     panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 60, 160, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
-    panel:Help("Default 100 SU (wider than Metrostroi's original 80 SU). The gauge now changes both visible model rails and solid rails; rail surface stays 10 SU high. If your saved setting is still 80, move the slider to 100.")
+    panel:Help("Default 100 SU (wider than Metrostroi's original 80 SU). The gauge changes both visible model rails and solid rails; rail surface stays 10 SU high.")
     panel:NumSlider("Fallback rail height", "mex_track_builder_rail_height", 1, 16, 1)
     panel:NumSlider("Fallback sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
     panel:NumSlider("Fallback sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
