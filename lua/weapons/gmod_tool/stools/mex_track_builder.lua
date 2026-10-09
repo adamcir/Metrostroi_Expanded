@@ -33,7 +33,7 @@ TOOL.ClientConVar = {
 if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
     language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
-    language.Add("tool.mex_track_builder.0", "LMB: add/snap point (Auto Loop: start/end) | RMB: finish/cancel loop | Reload: delete route or cancel")
+    language.Add("tool.mex_track_builder.0", "LMB: add/snap point | RMB: finish | R: undo last step, select endpoint (saved routes supported)")
 
     -- TOOL.ClientConVar is persistent. Upgrade the former 80/100 SU defaults
     -- to the native 85.8 SU rail-centre spacing, keeping custom settings.
@@ -92,7 +92,9 @@ function TOOL:LeftClick(trace)
 
     local ok
 
-    if self:GetClientNumber("auto_loop", 0) > 0 then
+    if self:GetClientNumber("auto_loop", 0) > 0
+        and not (MEXTrackBuilder.Active and MEXTrackBuilder.Active[ply])
+    then
         if not MEXTrackBuilder.AutoLoopClick then return false end
 
         ok = MEXTrackBuilder.AutoLoopClick(
@@ -129,7 +131,9 @@ function TOOL:RightClick(trace)
     if not IsValid(ply) or not ply:IsAdmin() then return false end
     if not MEXTrackBuilder then return false end
 
-    if self:GetClientNumber("auto_loop", 0) > 0 then
+    if self:GetClientNumber("auto_loop", 0) > 0
+        and not (MEXTrackBuilder.Active and MEXTrackBuilder.Active[ply])
+    then
         if MEXTrackBuilder.CancelAutoLoop then
             return MEXTrackBuilder.CancelAutoLoop(ply)
         end
@@ -155,27 +159,24 @@ function TOOL:Reload(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if not MEXTrackBuilder then return false end
+    if not MEXTrackBuilder or not MEXTrackBuilder.UndoLastPoint then return false end
 
-    if ply:GetNW2Bool("MEXTrackBuilderLoopActive", false)
-        and MEXTrackBuilder.CancelAutoLoop
-    then
-        return MEXTrackBuilder.CancelAutoLoop(ply)
-    end
-
-    local ent = trace.Entity
+    -- If a route is currently being drawn/edited, R undoes its last
+    -- control point regardless of where the player is looking.
+    -- Otherwise choose the aimed saved MEX route; if none is aimed,
+    -- UndoLastPoint falls back to the most recently completed route.
+    local routeID
+    local ent = trace and trace.Entity
     if IsValid(ent) and ent:GetClass() == "mex_track_segment" then
-        local routeID = ent:GetNW2Int("MEXRouteID", 0)
-        if routeID > 0 and MEXTrackBuilder.RemoveRoute then
-            return MEXTrackBuilder.RemoveRoute(routeID, ply)
-        end
+        local id = ent:GetNW2Int("MEXRouteID", 0)
+        if id > 0 then routeID = id end
     end
 
-    if MEXTrackBuilder.CancelRoute then
-        return MEXTrackBuilder.CancelRoute(ply)
+    local ok = MEXTrackBuilder.UndoLastPoint(ply, routeID)
+    if ok then
+        ply:EmitSound("buttons/button14.wav", 55, 110, 0.35)
     end
-
-    return false
+    return ok
 end
 
 function TOOL.BuildCPanel(panel)
@@ -188,7 +189,8 @@ function TOOL.BuildCPanel(panel)
     panel:Help("Normal mode: LMB places control points; RMB finishes the route.")
     panel:Help("Auto Loop mode: first LMB marks the start, second LMB marks the end and immediately creates a safe loop.")
     panel:Help("RMB cancels a waiting Auto Loop start.")
-    panel:Help("Reload on a MEX track removes the whole saved route; elsewhere it cancels unfinished work.")
+    panel:Help("R / Reload: undo just ONE step, then the previous track endpoint is automatically selected for the next LMB. On a saved route, aim at its rail and press R to reopen and shorten it; further R presses step backward.")
+    panel:Help("R never deletes a whole route at once. To remove an entire saved route, use the separate Delete aimed route button below.")
 
     panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
     panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.1, 0.85, 2)
@@ -224,8 +226,10 @@ function TOOL.BuildCPanel(panel)
     panel:Help("If a selected Metrostroi model is missing, the tool falls back to procedural rails using Metrostroi materials.")
     panel:Help("At 85.8 SU, native Metrostroi tiles are not stretched. Only change this if you use custom rolling stock with a different wheel spacing.")
 
+    panel:Button("Undo last step (R)", "mex_track_builder_undo")
     panel:Button("Finish current route", "mex_track_builder_finish")
-    panel:Button("Cancel unfinished route", "mex_track_builder_cancel")
+    panel:Button("Cancel drawing / stop editing", "mex_track_builder_cancel")
+    panel:Button("Delete aimed route (entire route)", "mex_track_builder_delete_aimed_route")
     panel:Button("Apply selected gauge to saved routes", "mex_track_builder_apply_gauge")
     panel:Help("Apply gauge to saved routes without deleting them. Previous default 80/100-SU layouts migrate automatically to 85.8 SU when reloaded.")
     panel:Button("Rebuild Metrostroi network", "mex_track_builder_rebuild")
