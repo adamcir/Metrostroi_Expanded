@@ -8,7 +8,7 @@ TOOL.Command = nil
 TOOL.ConfigName = ""
 
 TOOL.ClientConVar = {
-    gauge = "100",
+    gauge = "85.8",
     rail_width = "5.8",
     rail_height = "10",
     sleeper_spacing = "32",
@@ -35,15 +35,18 @@ if CLIENT then
     language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
     language.Add("tool.mex_track_builder.0", "LMB: add/snap point (Auto Loop: start/end) | RMB: finish/cancel loop | Reload: delete route or cancel")
 
-    -- TOOL.ClientConVar is persistent. Upgrade old 80-SU defaults once so
-    -- existing players see the corrected width without resetting settings.
+    -- TOOL.ClientConVar is persistent. Upgrade the former 80/100 SU defaults
+    -- to the native 85.8 SU rail-centre spacing, keeping custom settings.
     timer.Simple(1, function()
-        local key = "mex_track_builder_gauge_migrated_v3"
+        local key = "mex_track_builder_gauge_migrated_v4"
         if cookie.GetNumber(key, 0) ~= 0 then return end
         local cv = GetConVar("mex_track_builder_gauge")
         if not cv then return end
-        if math.abs(cv:GetFloat() - 80) < 0.01 then
-            RunConsoleCommand("mex_track_builder_gauge", "100")
+        local previousGauge = cv:GetFloat()
+        if math.abs(previousGauge - 80) < 0.01
+            or math.abs(previousGauge - 100) < 0.01
+        then
+            RunConsoleCommand("mex_track_builder_gauge", "85.8")
         end
         cookie.Set(key, "1")
     end)
@@ -51,9 +54,9 @@ end
 
 local function ReadSettings(tool)
     return {
-        gauge = tool:GetClientNumber("gauge", 100),
-        rail_width = tool:GetClientNumber("rail_width", 4),
-        rail_height = tool:GetClientNumber("rail_height", 7),
+        gauge = tool:GetClientNumber("gauge", 85.8),
+        rail_width = tool:GetClientNumber("rail_width", 5.8),
+        rail_height = tool:GetClientNumber("rail_height", 10),
         sleeper_spacing = tool:GetClientNumber("sleeper_spacing", 32),
         sleeper_length = tool:GetClientNumber("sleeper_length", 128),
         sleeper_width = tool:GetClientNumber("sleeper_width", 10),
@@ -195,9 +198,9 @@ function TOOL.BuildCPanel(panel)
     panel:CheckBox("Use Metrostroi track model", "mex_track_builder_use_track_model")
     panel:Help("Smooth track uses the real Metrostroi railroad16.mdl tile. Long 1024-SU models are intentionally not used on curves.")
 
-    panel:NumSlider("Track gauge (Source units)", "mex_track_builder_gauge", 60, 160, 1)
+    panel:NumSlider("Track gauge - rail centres (SU)", "mex_track_builder_gauge", 60, 120, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
-    panel:Help("Default 100 SU (wider than Metrostroi's original 80 SU). The gauge changes both visible model rails and solid rails; rail surface stays 10 SU high.")
+    panel:Help("Correct Metrostroi spacing: 80 SU between the inner rail faces + 5.8 SU rail-head width = 85.8 SU from centre to centre. The default matches the 81-717 bogey and the native railroad16.mdl model.")
     panel:NumSlider("Fallback rail height", "mex_track_builder_rail_height", 1, 16, 1)
     panel:NumSlider("Fallback sleeper spacing", "mex_track_builder_sleeper_spacing", 12, 96, 0)
     panel:NumSlider("Fallback sleeper length", "mex_track_builder_sleeper_length", 80, 180, 0)
@@ -219,12 +222,12 @@ function TOOL.BuildCPanel(panel)
 
     panel:Help("railroad16.mdl is repeated along the spline, so track pieces keep their normal proportions without the long-model fan effect.")
     panel:Help("If a selected Metrostroi model is missing, the tool falls back to procedural rails using Metrostroi materials.")
-    panel:Help("100 SU is a wider experimental gauge for MEX rails. The original Metrostroi gauge is 80 SU; you can fine-tune this to match the bogey wheel positions.")
+    panel:Help("At 85.8 SU, native Metrostroi tiles are not stretched. Only change this if you use custom rolling stock with a different wheel spacing.")
 
     panel:Button("Finish current route", "mex_track_builder_finish")
     panel:Button("Cancel unfinished route", "mex_track_builder_cancel")
     panel:Button("Apply selected gauge to saved routes", "mex_track_builder_apply_gauge")
-    panel:Help("Widen existing track without deleting it: choose a gauge and click Apply. Older 80-SU routes also migrate to 100 SU the next time the map loads.")
+    panel:Help("Apply gauge to saved routes without deleting them. Previous default 80/100-SU layouts migrate automatically to 85.8 SU when reloaded.")
     panel:Button("Rebuild Metrostroi network", "mex_track_builder_rebuild")
     panel:Button("Rerail aimed Metrostroi train", "metrostroi_rerail")
     panel:Help("The normal Metrostroi rerailer and train spawner now also recognize saved MEX Track Builder rails.")
