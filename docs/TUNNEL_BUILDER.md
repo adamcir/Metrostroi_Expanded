@@ -25,6 +25,9 @@ material set:
 
 The runtime uses toned UnlitGeneric material variants so that walls still
 have visible detail when a construction map has **no baked tunnel lighting**.
+On original straight native MDLs, **Illuminate stock MDL tunnels on dark maps**
+temporarily suppresses the missing baked lighting and tints the model to
+match the procedural sections.
 If the installed source texture is missing, it falls back to a neutral engine
 white material instead of the error checkerboard. All stock materials and
 native models are referenced from the player's installed Metrostroi content,
@@ -54,6 +57,11 @@ per route, and separate from the running rail gauge:
 - It draws a metal contact conductor, insulating feet every ~128 SU,
   and a dark protective top/side guard. Outside places one rail at the
   exterior of *each* lane in double-track sections.
+- The **circular shell and rectangular clearance are enlarged automatically**
+  if necessary to fit the side-mounted conductor/cover: the default round
+  two-track profile can be significantly bigger than a normal single-bore
+  tunnel. Use **Wide/Rectangular** when a more plausible double-track tunnel
+  envelope is desired.
 - Contact rails are also rendered next to original/native tunnel MDLs,
   which by design do not include the separate third rail.
 - **Visual only:** electric power distribution, safety/shock effects,
