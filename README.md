@@ -14,10 +14,18 @@ ends. Double-to-double snapping connects the tunnels on their common
 centerline and inherits the opening/track spacing.
 
 Enable **Rigid section** to create a straight non-bendable station module.
-An installed **Track Pack** compiled `.mdl` can be selected via the on-demand
-mounted-model scanner and placed at native scale on a matching rigid section.
-Curves are still procedural and cannot bend static Track Pack MDLs.
-Tunnel dimensions and route settings are saved along with the line.
+A native **Metrostroi tunnel64/256/1024 .mdl** can be used automatically on
+straight segments of an exact supported length; third-party **Track Pack**
+models can be selected in the on-demand installed-model browser for rigid
+modules. Curves are still procedural and use original Metrostroi tunnelwall
+and rail-bed textures when mounted, with safe non-checker fallback materials.
+
+A covered **third (contact) rail** is now part of each route by default:
+the rail, insulating supports and protective guard render on either side
+(or the OUTSIDE of both tracks). Side, offset and mounting height are
+configurable. Electrical pickup is not yet simulated by this new geometry.
+Tunnel dimensions, contact rails and route settings are saved along with
+the line.
 
 The fast renderer uses cached procedural meshes and reduces the number of
 static rail physics entities while keeping the Metrostroi rail graph dense.
