@@ -149,12 +149,89 @@ local function MakeMesh(vertices)
 end
 
 function G.ClearClientMeshes(ent)
+    if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
+    ent.MEXPackPiece = nil
+    ent.MEXPackModel = nil
     if not ent.MEXFastMeshes then return end
     for _, entry in ipairs(ent.MEXFastMeshes) do
         if entry.mesh and entry.mesh:IsValid() then entry.mesh:Destroy() end
     end
     ent.MEXFastMeshes = nil
     ent.MEXFastKey = nil
+end
+
+-- Track Pack provides *rigid compiled MDLs*. Draw exactly one installed model
+-- on a straight two-point section, never stretch it along a spline and never
+-- guess file paths. Curves continue to use our dynamic procedural geometry.
+-- The selected MDL is only a visual skin: MEX's separate rail collision and
+-- Metrostroi route graph remain authoritative.
+function G.DrawPackModel(ent)
+    local requested = ent:GetNW2String("MEXPackModel", "")
+    if requested == "" or not ent:GetNW2Bool("MEXRigidSection", false) then
+        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
+        ent.MEXPackPiece, ent.MEXPackModel = nil, nil
+        return false
+    end
+    local path = string.lower(requested)
+    if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") or not util.IsValidModel(requested) then
+        return false
+    end
+    local count = ent:GetNW2Int("MEXTrackCount", 1)
+    if count == 2 and not (string.find(path, "_ns", 1, true)
+        or string.find(path, "double", 1, true)
+        or string.find(path, "2track", 1, true)
+        or string.find(path, "2_track", 1, true))
+    then
+        return false
+    end
+    -- Non-straight pre-bent kit pieces cannot replace a straight physics
+    -- chord; never make those models act like rails they do not represent.
+    if string.find(path, "curve", 1, true) or string.find(path, "turnout", 1, true)
+        or string.find(path, "switch", 1, true) then
+        return false
+    end
+
+    if ent.MEXPackModel ~= requested or not IsValid(ent.MEXPackPiece) then
+        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
+        local piece = ClientsideModel(requested, RENDERGROUP_OPAQUE)
+        if not IsValid(piece) then
+            ent.MEXPackModel = nil
+            return false
+        end
+        piece:SetNoDraw(true)
+        piece:DrawShadow(false)
+        ent.MEXPackPiece, ent.MEXPackModel = piece, requested
+    end
+
+    local piece = ent.MEXPackPiece
+    local mins, maxs = piece:OBBMins(), piece:OBBMaxs()
+    local size = maxs - mins
+    local length = ent:GetNW2Float("MEXLength", 1)
+    local isX = math.abs(size.x - length) <= math.abs(size.y - length)
+    local nativeLength = isX and size.x or size.y
+    -- A 1024-SU prefab cannot be placed on a 256-SU route. Fallback to MEX
+    -- generated graphics rather than silently stretching/misaligning it.
+    if math.abs(nativeLength - length) > math.max(8, length * 0.06) then
+        return false
+    end
+    local correction = isX and Angle(0, 0, 0) or Angle(0, -90, 0)
+    local ang = ent:LocalToWorldAngles(correction)
+    local center = (mins + maxs) * 0.5
+    local pivot = Vector(center.x, center.y, 0)
+    pivot:Rotate(ang)
+    local target = ent:GetPos() + ent:GetAngles():Up() * ent:GetNW2Float("MEXPackZOffset", 0)
+    piece:SetRenderOrigin(target - pivot)
+    piece:SetRenderAngles(ang)
+    -- The imported prefab can be wider/taller than the invisible track tile.
+    if ent.SetRenderBounds then
+        local halfSize = math.max(size.x, size.y, size.z, length) + 48
+        ent:SetRenderBounds(Vector(-halfSize, -halfSize, -halfSize),
+                            Vector(halfSize, halfSize, halfSize))
+    end
+    piece:DrawModel()
+    piece:SetRenderOrigin(nil)
+    piece:SetRenderAngles(nil)
+    return true
 end
 
 local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
