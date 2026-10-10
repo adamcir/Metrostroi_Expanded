@@ -11,6 +11,61 @@ The existing **Metrostroi Expanded → Track Builder** tool now supports the tun
 5. Click with LMB to create control points, RMB to finish, R to undo the latest point. An auto-loop inherits the chosen tunnel profile.
 6. Routes/tunnel settings are persisted in `data/metrostroi_expanded/tracks_<map>.txt`.
 
+## Realistic Metro tunnel rendering and third contact rail
+
+The tunnel used to render as a completely black shell, and the rails/pieces
+could show pink checkerboards when incompatible/missing materials were used.
+The fast renderer now resolves textures from the installed **original Metrostroi**
+material set:
+
+- `materials/models/metrostroi_tunnels/tunnelwall_002.vtf` – textured lining
+- `materials/models/metrostroi_tunnels/tunnelfloor_001.vtf` – floor/deck
+- `materials/models/metrostroi_tunnels/railroad_001.vtf` – rail bed
+- `materials/metrostroi/metro_contactrail_001.vtf` – contact rail
+
+The runtime uses toned UnlitGeneric material variants so that walls still
+have visible detail when a construction map has **no baked tunnel lighting**.
+If the installed source texture is missing, it falls back to a neutral engine
+white material instead of the error checkerboard. All stock materials and
+native models are referenced from the player's installed Metrostroi content,
+not bundled or redistributed by this repository.
+
+**Classic Metrostroi** appearance includes tubbing seams, side service
+walkways, a floor deck that hides grass below the bore, and the characteristic
+circular or rectangular profile. **Basic geometry** suppresses the panel seam
+ribs. The shell is still a procedural approximation on freely curved track.
+
+**Real installed Metrostroi MDLs**: a straight tunnel of the correct native
+length will automatically use mounted stock `tunnel64.mdl`,
+`tunnel256.mdl`, `tunnel1024.mdl` and their matching rectangular or double
+variants, without deforming the model. Straight routes are split into native
+lengths only when they are truly straight. Missing/incompatible models, curves,
+and route remainders fall back to textured procedural geometry. This is
+toggleable via **Use real Metrostroi models on exact straight sections**.
+On fixed station sections you can instead select a valid custom Track Pack
+MDL via the existing on-demand scanner.
+
+The **third (contact) rail** is enabled by default for new routes, configurable
+per route, and separate from the running rail gauge:
+
+- Side: **Outside**, Left, Right, or Both.
+- Offset from the **individual track center**: default **112 SU**.
+- Contact height above the spline baseline: default **20 SU**.
+- It draws a metal contact conductor, insulating feet every ~128 SU,
+  and a dark protective top/side guard. Outside places one rail at the
+  exterior of *each* lane in double-track sections.
+- Contact rails are also rendered next to original/native tunnel MDLs,
+  which by design do not include the separate third rail.
+- **Visual only:** electric power distribution, safety/shock effects,
+  current collection, conductor-rail gaps and proper contact-rail collisions
+  are not yet simulated. For now there is NO additional rail physics hull
+  that could cause train bogeys to bounce.
+
+In open grassy maps, a circular tube can intersect world terrain because its
+bottom extends ~55 SU below the baseline, and Lua cannot cut BSP holes.
+Place the route above ground if you want the *whole round exterior* visible;
+the new tunnel deck hides most of the map ground from the inside.
+
 ## Real double-track tunnels
 
 Choose **Track count → DOUBLE**. This is a REAL pair of independently
