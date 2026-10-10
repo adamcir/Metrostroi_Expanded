@@ -388,60 +388,63 @@ scripted_ents.Register(TrackEntity, TRACK_CLASS)
 -- geometry, so the point the player sees is the point the new track uses.
 local function CollectTrackSnapNodes(spacing)
     spacing = math.Clamp(tonumber(spacing) or 192, 32, 1024)
-
     local routes = {}
     for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
         if IsValid(ent) then
-            local routeID = ent:GetNW2Int("MEXRouteID", 0)
-            local segmentIndex = ent:GetNW2Int("MEXSegmentIndex", 0)
-
-            if routeID > 0 and segmentIndex > 0 then
-                routes[routeID] = routes[routeID] or {}
-                routes[routeID][#routes[routeID] + 1] = {
-                    ent = ent,
-                    index = segmentIndex,
-                }
+            local id = ent:GetNW2Int("MEXRouteID", 0)
+            local index = ent:GetNW2Int("MEXSegmentIndex", 0)
+            if id > 0 and index > 0 then
+                routes[id] = routes[id] or {}
+                routes[id][#routes[id] + 1] = {ent = ent, index = index}
             end
         end
     end
 
-    local nodes = {}
-
-    local function AddNode(pos, dir, routeID, kind)
-        if not isvector(pos) or not isvector(dir) then return end
-        if dir:LengthSqr() <= 0.000001 then return end
-
-        if #nodes > 0 and nodes[#nodes].pos:DistToSqr(pos) < 4 then
-            if kind == "end" then
-                nodes[#nodes].kind = "end"
+    local nodes, seen = {}, {}
+    local function AddNodes(center, dir, ent, routeID, kind)
+        if not isvector(center) or not isvector(dir) or dir:LengthSqr() < 0.000001 then return end
+        dir = dir:GetNormalized()
+        local right = dir:Cross(Vector(0, 0, 1))
+        if right:LengthSqr() < 0.001 then right = ent:GetAngles():Right() end
+        right:Normalize()
+        local count = ent:GetNW2Int("MEXTrackCount", 1) == 2 and 2 or 1
+        local distance = ent:GetNW2Float("MEXTrackSpacing", 240)
+        for lane = 1, count do
+            local offset = count == 2 and (lane == 1 and -distance * 0.5 or distance * 0.5) or 0
+            local point = center + right * offset
+            -- Uniqueness is PER LANE, not per tunnel center. Double-track
+            -- layouts must expose both their separate attachment points.
+            local key = string.format("%d:%d:%d:%d:%d", routeID, lane,
+                math.Round(point.x), math.Round(point.y), math.Round(point.z))
+            local previous = seen[key]
+            if previous then
+                if kind == "start" or kind == "end" then previous.kind = kind end
+            else
+                local node = {
+                    pos = point,
+                    center_pos = center,
+                    dir = dir,
+                    route_id = routeID,
+                    kind = kind or "mid",
+                    track_count = count,
+                    track_spacing = distance,
+                    lane = lane,
+                }
+                nodes[#nodes + 1] = node
+                seen[key] = node
             end
-            return
         end
-
-        nodes[#nodes + 1] = {
-            pos = pos,
-            dir = dir:GetNormalized(),
-            route_id = routeID,
-            kind = kind or "mid",
-        }
     end
 
     for routeID, pieces in pairs(routes) do
-        table.sort(pieces, function(a, b)
-            return a.index < b.index
-        end)
-
+        table.sort(pieces, function(a, b) return a.index < b.index end)
         local first = pieces[1] and pieces[1].ent
         local last = pieces[#pieces] and pieces[#pieces].ent
-
         if IsValid(first) and IsValid(last) then
-            local firstLength = first:GetNW2Float("MEXLength", 0)
+            local firstLen = first:GetNW2Float("MEXLength", 0)
             local firstDir = first:GetAngles():Forward():GetNormalized()
-            local firstPos = first:GetPos() - firstDir * firstLength * 0.5
-            AddNode(firstPos, firstDir, routeID, "start")
-
+            AddNodes(first:GetPos() - firstDir * firstLen * 0.5, firstDir, first, routeID, "start")
             local untilNext = spacing
-
             for pieceIndex, entry in ipairs(pieces) do
                 local ent = entry.ent
                 if IsValid(ent) then
@@ -449,41 +452,28 @@ local function CollectTrackSnapNodes(spacing)
                     local dir = ent:GetAngles():Forward():GetNormalized()
                     local segStart = ent:GetPos() - dir * length * 0.5
                     local cursor = 0
-
                     while length > 0 and cursor + untilNext <= length do
                         cursor = cursor + untilNext
-                        local pos = segStart + dir * cursor
-
                         local tangent = dir
                         if cursor >= length - 0.5 and pieces[pieceIndex + 1] then
                             local nextEnt = pieces[pieceIndex + 1].ent
                             if IsValid(nextEnt) then
-                                local nextDir = nextEnt:GetAngles():Forward():GetNormalized()
-                                local blended = dir + nextDir
-                                if blended:LengthSqr() > 0.000001 then
-                                    tangent = blended:GetNormalized()
-                                end
+                                local blended = dir + nextEnt:GetAngles():Forward():GetNormalized()
+                                if blended:LengthSqr() > 0.00001 then tangent = blended:GetNormalized() end
                             end
                         end
-
-                        AddNode(pos, tangent, routeID, "mid")
+                        AddNodes(segStart + dir * cursor, tangent, ent, routeID, "mid")
                         untilNext = spacing
                     end
-
                     untilNext = untilNext - (length - cursor)
-                    if untilNext <= 0.001 then
-                        untilNext = spacing
-                    end
+                    if untilNext <= 0.001 then untilNext = spacing end
                 end
             end
-
-            local lastLength = last:GetNW2Float("MEXLength", 0)
+            local lastLen = last:GetNW2Float("MEXLength", 0)
             local lastDir = last:GetAngles():Forward():GetNormalized()
-            local lastPos = last:GetPos() + lastDir * lastLength * 0.5
-            AddNode(lastPos, lastDir, routeID, "end")
+            AddNodes(last:GetPos() + lastDir * lastLen * 0.5, lastDir, last, routeID, "end")
         end
     end
-
     return nodes
 end
 
@@ -803,7 +793,7 @@ function Builder.BuildSmoothPoints(controlPoints, settings, anchors)
         local directLength = a:Distance(b)
         local steps = math.max(1, math.ceil(directLength / settings.segment_length))
 
-        if not settings.smooth then
+        if not settings.smooth or settings.rigid_section then
             for step = 1, steps do
                 output[#output + 1] = LerpVector(step / steps, a, b)
             end
@@ -943,7 +933,10 @@ end
 -- spikes and unstable wheel contacts on long manually built routes.
 function Builder.BuildGeometryPoints(points, settings)
     settings = CopySettings(settings)
-    if settings.rigid_section or #points < 3 then return points end
+    if settings.rigid_section then
+        return #points >= 2 and {points[1], points[#points]} or points
+    end
+    if #points < 3 then return points end
     local result = {points[1]}
     local i = 1
     local maxLength = settings.geometry_max_length
@@ -2055,7 +2048,7 @@ function Builder.GetMEXTrackData(pos, roughForward, maxDistance, routeID)
 
     -- Spatial query instead of scanning EVERY generated rail in the map on
     -- every Metrostroi rail lookup. Add half a maximum chord for its origin.
-    for _, ent in ipairs(ents.FindInSphere(pos, maxDistance + 256)) do
+    for _, ent in ipairs(ents.FindInSphere(pos, maxDistance + 520)) do
         local entRouteID = IsValid(ent)
             and ent:GetNW2Int("MEXRouteID", 0)
             or 0
@@ -2095,39 +2088,32 @@ function Builder.GetMEXTrackData(pos, roughForward, maxDistance, routeID)
                         railTop = METROSTROI_RAIL_HEIGHT
                     end
 
-                    local centerpos = basePos + up * railTop
-                    local offset = pos - centerpos
-                    local sideways = math.abs(offset:Dot(right))
-                    local vertical = math.abs(offset:Dot(up))
-                    local distance = offset:LengthSqr()
-
+                    local count = ent:GetNW2Int("MEXTrackCount", 1) == 2 and 2 or 1
+                    local laneGap = ent:GetNW2Float("MEXTrackSpacing", 240)
                     local alignment = 1
-                    if roughDir then
-                        alignment = math.abs(forward:Dot(roughDir))
-                    end
+                    if roughDir then alignment = math.abs(forward:Dot(roughDir)) end
 
-                    -- Prefer the nearby segment whose tangent agrees with the
-                    -- train. This prevents a loop or parallel piece of the same
-                    -- route from being selected just because it is a few units
-                    -- closer in 3D.
-                    if sideways <= 220
-                        and vertical <= maxDistance
-                        and distance <= maxDistanceSqr
-                        and alignment >= 0.30
-                    then
-                        local score = distance
-                            + (1 - alignment) * 96 * 96
-
-                        if score < bestScore then
-                            bestScore = score
-                            best = {
-                                forward = forward,
-                                right = right,
-                                up = up,
-                                centerpos = centerpos,
-                                entity = ent,
-                                route_id = entRouteID,
-                            }
+                    for lane = 1, count do
+                        local side = count == 2 and (lane == 1 and -laneGap * 0.5 or laneGap * 0.5) or 0
+                        local centerpos = basePos + up * railTop + right * side
+                        local offset = pos - centerpos
+                        local sideways = math.abs(offset:Dot(right))
+                        local vertical = math.abs(offset:Dot(up))
+                        local distance = offset:LengthSqr()
+                        if sideways <= 220
+                            and vertical <= maxDistance
+                            and distance <= maxDistanceSqr
+                            and alignment >= 0.30
+                        then
+                            local score = distance + (1 - alignment) * 96 * 96
+                            if score < bestScore then
+                                bestScore = score
+                                best = {
+                                    forward = forward, right = right, up = up,
+                                    centerpos = centerpos, entity = ent,
+                                    route_id = entRouteID, lane = lane,
+                                }
+                            end
                         end
                     end
                 end
