@@ -100,6 +100,8 @@ function TrackEntity:Initialize()
     self:SetNW2Float("MEXRailSurfaceOffset", railTop)
     self:SetNW2Float("MEXPhysicalGauge", effectiveGauge)
     self:SetNW2Float("MEXPhysicalRailWidth", effectiveRailWidth)
+    -- The 3rd (contact) rail deliberately has no VPhysics hull here: adding
+    -- a fifth rail to bogey collision created additional derail/bounce points.
 
     local leftY = effectiveGauge * 0.5
     local rightY = -effectiveGauge * 0.5
@@ -333,10 +335,14 @@ if CLIENT then
     function TrackEntity:Draw()
         if self:GetNW2Bool("MEXRigidSection", false)
             and Builder.Geometry.DrawPackModel(self) then
+            -- Real Metrostroi / Track Pack .mdl never includes the separate
+            -- contact rail; draw it in one cached supplemental GPU mesh.
+            Builder.Geometry.DrawContactRailOnly(self)
             return
         end
         if self:GetNW2Bool("MEXFastGeometry", true)
-            or self:GetNW2Int("MEXTrackCount", 1) == 2 then
+            or self:GetNW2Int("MEXTrackCount", 1) == 2
+            or self:GetNW2Bool("MEXThirdRail", false) then
             Builder.Geometry.Draw(self)
             return
         end
@@ -433,6 +439,11 @@ local function CollectTrackSnapNodes(spacing)
                     tunnel_width = ent:GetNW2Float("MEXTunnelWidth", 360),
                     tunnel_height = ent:GetNW2Float("MEXTunnelHeight", 280),
                     tunnel_wall = ent:GetNW2Float("MEXTunnelWall", 12),
+                    tunnel_style = ent:GetNW2String("MEXTunnelStyle", "metrostroi"),
+                    third_rail = ent:GetNW2Bool("MEXThirdRail", true),
+                    third_rail_side = ent:GetNW2String("MEXThirdRailSide", "outside"),
+                    third_rail_offset = ent:GetNW2Float("MEXThirdRailOffset", 112),
+                    third_rail_height = ent:GetNW2Float("MEXThirdRailHeight", 20),
                     lane = lane,
                 }
                 nodes[#nodes + 1] = node
@@ -700,6 +711,13 @@ local function CopySettings(settings)
         tunnel_width = math.Clamp(tonumber(settings.tunnel_width) or 360, 300, 640),
         tunnel_height = math.Clamp(tonumber(settings.tunnel_height) or 280, 230, 480),
         tunnel_wall = math.Clamp(tonumber(settings.tunnel_wall) or 12, 6, 32),
+        tunnel_style = tostring(settings.tunnel_style) == "plain" and "plain" or "metrostroi",
+        -- Side conductor rail is separate from the two running rails; rendering
+        -- it does not create a conflicting wheel/bogey collision surface.
+        third_rail = settings.third_rail ~= false and tonumber(settings.third_rail or 1) ~= 0,
+        third_rail_side = Builder.Geometry.SafeThirdRailSide(settings.third_rail_side),
+        third_rail_offset = math.Clamp(tonumber(settings.third_rail_offset) or 112, 95, 155),
+        third_rail_height = math.Clamp(tonumber(settings.third_rail_height) or 20, 12, 36),
         -- Keep a high-resolution Metrostroi rail graph, but use fewer
         -- physical entities on long straight and gently curved sections.
         geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
@@ -909,6 +927,11 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     ent:SetNW2Float("MEXTunnelWidth", settings.tunnel_width)
     ent:SetNW2Float("MEXTunnelHeight", settings.tunnel_height)
     ent:SetNW2Float("MEXTunnelWall", settings.tunnel_wall)
+    ent:SetNW2String("MEXTunnelStyle", settings.tunnel_style)
+    ent:SetNW2Bool("MEXThirdRail", settings.third_rail)
+    ent:SetNW2String("MEXThirdRailSide", settings.third_rail_side)
+    ent:SetNW2Float("MEXThirdRailOffset", settings.third_rail_offset)
+    ent:SetNW2Float("MEXThirdRailHeight", settings.third_rail_height)
     ent:SetNW2Int("MEXTrackCount", settings.track_count)
     ent:SetNW2Float("MEXTrackSpacing", settings.track_spacing)
     ent:SetNW2Bool("MEXRigidSection", settings.rigid_section)
@@ -1279,6 +1302,11 @@ function Builder.AddPoint(ply, pos, settings, anchor)
                 newSettings.tunnel_width = anchor.tunnel_width or newSettings.tunnel_width
                 newSettings.tunnel_height = anchor.tunnel_height or newSettings.tunnel_height
                 newSettings.tunnel_wall = anchor.tunnel_wall or newSettings.tunnel_wall
+                newSettings.tunnel_style = anchor.tunnel_style or newSettings.tunnel_style
+                newSettings.third_rail = anchor.third_rail
+                newSettings.third_rail_side = anchor.third_rail_side or newSettings.third_rail_side
+                newSettings.third_rail_offset = anchor.third_rail_offset or newSettings.third_rail_offset
+                newSettings.third_rail_height = anchor.third_rail_height or newSettings.third_rail_height
             end
         end
         active = {
