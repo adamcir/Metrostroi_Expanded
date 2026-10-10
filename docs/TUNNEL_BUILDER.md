@@ -11,7 +11,68 @@ The existing **Metrostroi Expanded → Track Builder** tool now supports the tun
 5. Click with LMB to create control points, RMB to finish, R to undo the latest point. An auto-loop inherits the chosen tunnel profile.
 6. Routes/tunnel settings are persisted in `data/metrostroi_expanded/tracks_<map>.txt`.
 
-The first release builds a **single track centered in each tunnel**. The `Wide` preset is only a *wide tunnel profile* for now: it does NOT automatically lay two tracks. Two tracks must be laid as separate routes, and a future double-track profile must place one large envelope around both.
+## Real double-track tunnels
+
+Choose **Track count → DOUBLE**. This is a REAL pair of independently
+spaced running tracks (four rails, two sleeper lines, four rail collision
+hulls). The generated Metrostroi rail-network file has **two separate
+paths**, so each track can rerail/route a train separately.
+
+- **Track centre spacing** defaults to 240 SU (editable 180–400).
+- **Two nodes per end** (one per track), plus intermediate nodes on each
+  track, are drawn by the existing snapping preview.
+- For **DOUBLE → DOUBLE**, aim near either lane's connection node with DOUBLE
+  selected: the next tunnel is placed on the **same centreline**, not shifted
+  sideways onto one track. Spacing and tunnel dimensions/type are inherited by
+  default to avoid mismatched connections.
+- For **SINGLE → DOUBLE**, choosing SINGLE attaches one new single track to
+  the selected lane. A complete physical split/transition prefab is still
+  unsupported and must be built separately.
+- Snapping to a middle node does not create a mechanical turnout. Treat the
+  node as a geometric attachment point only.
+
+Double-track rectangular/round tunnel profiles automatically expand when
+needed for clearance. A wide tunnel is no longer a single-track-only shell.
+
+## Rigid / stationary stations
+
+**Rigid section** constructs ONE straight section between two points.
+LMB picks start, second LMB picks end, **RMB finishes**. Additional control
+points are not allowed on that rigid section, so later spline operations can
+never deform it. To continue the track, uncheck Rigid, select a compatible
+track type and click either endpoint node as the beginning of a new route.
+
+**Rigid section length**: set 0 to use the exact distance between clicks,
+or select 64 / 256 / 1024 SU to place a native straight prefab length.
+Snapping to another saved endpoint takes priority over automatic fixed length.
+
+## Mounted Track Pack models
+
+**Track Pack by Alex Skayler (Workshop item 3536801478) is optional, not
+shipped or rehosted in MEX.** If installed and mounted, the Track Builder
+can draw one **REAL compiled MDL** on a rigid straight route without
+stretching/warping it. The procedural MEX rails remain authoritative for
+physics and routing.
+
+Click **Scan installed rail / tunnel models** in the tool panel to search
+the selected mounted GAME models folder. Search starts at `models`; set a
+narrower **Model scan root** if needed. Paths come from files actually
+mounted in GMod, rather than imaginary hard-coded prefab names. Select an
+entry from the detected-model dropdown, or paste its exact file name into
+**Track Pack model path**. The server checks that the requested .mdl exists.
+
+The rigid section's length must match the MDL's horizontal axis length
+(roughly within 6%, minimum 8 SU). E.g., a 1024-SU prefab needs a 1024-SU
+rigid section. **Pack MDL height adjustment** compensates for model-specific
+origin conventions. Models that do not meet the constraints fall back to
+procedural tunnel/track graphics.
+
+**Important:** Hammer Track Pack curved pieces, junctions and turnouts cannot
+simply be warped to match arbitrary curves. The current integration only draws
+native straight models on rigid sections. For flexible curved connections,
+MEX's procedural mesh is still used; actual Track Pack curved prefab
+alignment will need additional model-specific topology/attachment metadata.
+
 
 ## Performance changes
 
@@ -28,6 +89,12 @@ Previously each 48-SU spline sample created one networked physics entity with tw
 The rail/tunnel geometry is reconstructed after map cleanup and normal restart. Changing settings applies to **newly created routes**. Existing routes retain their saved per-route settings; respawning old tracks changes their renderer to the fast default unless they were explicitly saved with the legacy option.
 
 ## Adjustments and tradeoffs
+
+- **Runtime validation still required**: test double-track train clearance,
+  rerail in both lanes, the precise native .mdl alignment, and reopening saved
+  rigid sections. This code was edited through GitHub and has not been loaded
+  in a live GMod session here.
+
 
 - **Smooth spline sampling** controls rail-network path precision; **Physical chord length/deviation** controls the optimized render/physics geometry. Never set a very large physical deviation on tight curves, or the collision rails can diverge from the finer graph.
 - For highly curved sections, reduce physical max length to 96–128 SU and deviation to 0.25 SU. This increases collision bodies.
