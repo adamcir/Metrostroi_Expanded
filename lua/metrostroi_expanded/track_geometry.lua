@@ -353,7 +353,8 @@ function G.DrawPackModel(ent)
         end
         if name then requested = prefix .. name end
     end
-    if requested == "" or not ent:GetNW2Bool("MEXRigidSection", false) then
+    if requested == "" or not (ent:GetNW2Bool("MEXRigidSection", false)
+        or ent:GetNW2Bool("MEXAutoNativeModels", true)) then
         if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
         ent.MEXPackPiece, ent.MEXPackModel = nil, nil
         return false
