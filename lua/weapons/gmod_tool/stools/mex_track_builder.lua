@@ -34,6 +34,11 @@ TOOL.ClientConVar = {
     tunnel_width = "360",
     tunnel_height = "280",
     tunnel_wall = "12",
+    tunnel_style = "metrostroi",
+    third_rail = "1",
+    third_rail_side = "outside",
+    third_rail_offset = "112",
+    third_rail_height = "20",
     use_track_model = "1",
     track_model = "models/metrostroi/tracks/railroad16.mdl",
     track_count = "1",
@@ -88,6 +93,11 @@ local function ReadSettings(tool)
         tunnel_width = tool:GetClientNumber("tunnel_width", 360),
         tunnel_height = tool:GetClientNumber("tunnel_height", 280),
         tunnel_wall = tool:GetClientNumber("tunnel_wall", 12),
+        tunnel_style = tool:GetClientInfo("tunnel_style"),
+        third_rail = tool:GetClientNumber("third_rail", 1),
+        third_rail_side = tool:GetClientInfo("third_rail_side"),
+        third_rail_offset = tool:GetClientNumber("third_rail_offset", 112),
+        third_rail_height = tool:GetClientNumber("third_rail_height", 20),
         use_track_model = tool:GetClientNumber("use_track_model", 1),
         track_model = tool:GetClientInfo("track_model"),
         track_count = tool:GetClientNumber("track_count", 1),
@@ -332,6 +342,25 @@ function TOOL.BuildCPanel(panel)
     panel:AddItem(scanButton)
     panel:Help("Track Pack Workshop 3536801478 is OPTIONAL and must be mounted. This uses actual files discovered in your installed GMod content; no fake model names are hardcoded. Non-rigid curves still use generated rails/tunnels.")
     panel:Help("A selected model must have approximately the same native length as the rigid section. Other models fall back to generated geometry; curved .mdl pieces are not stretched.")
+
+    panel:Help("Classic Metrostroi tunnel")
+    local style = panel:ComboBox("Tunnel appearance", "mex_track_builder_tunnel_style")
+    style:AddChoice("Classic Metrostroi / Track Pack lining", "metrostroi")
+    style:AddChoice("Basic geometry", "plain")
+    panel:Help("Classic uses installed Metrostroi tunnelwall / tunnelfloor materials and joint rings. Straight Rigid sections can automatically use the original installed tunnel .mdl of the exact same length.")
+    panel:Help("Missing materials fall back to an opaque neutral material, never checkerboards or a completely black tunnel.")
+
+    panel:Help("Third (contact / power) rail")
+    panel:CheckBox("Add third contact rail", "mex_track_builder_third_rail")
+    local side = panel:ComboBox("Contact rail side", "mex_track_builder_third_rail_side")
+    side:AddChoice("Outside each track (recommended)", "outside")
+    side:AddChoice("Left of travel direction", "left")
+    side:AddChoice("Right of travel direction", "right")
+    side:AddChoice("Both sides (special sections)", "both")
+    panel:NumSlider("Contact rail offset from track centre (SU)", "mex_track_builder_third_rail_offset", 95, 155, 0)
+    panel:NumSlider("Contact rail contact height above track base (SU)", "mex_track_builder_third_rail_height", 12, 36, 0)
+    panel:Help("Contact rail includes support insulators and protective top cover. For DOUBLE, Outside puts one rail on the outer side of each running track.")
+    panel:Help("Power rail is currently a visual track component only: it does not yet simulate electricity/current collection or third-rail collisions.")
 
     panel:Help("Tunnel construction")
     local tunnel = panel:ComboBox("Tunnel type", "mex_track_builder_tunnel_type")
