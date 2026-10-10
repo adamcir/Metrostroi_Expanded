@@ -120,7 +120,11 @@ function TrackEntity:Initialize()
         self:GetNW2Float("MEXTunnelHeight", 280),
         self:GetNW2Float("MEXTunnelWall", 12),
         self:GetNW2Int("MEXTrackCount", 1),
-        self:GetNW2Float("MEXTrackSpacing", 240)
+        self:GetNW2Float("MEXTrackSpacing", 240),
+        self:GetNW2Bool("MEXThirdRail", true),
+        self:GetNW2String("MEXThirdRailSide", "outside"),
+        self:GetNW2Float("MEXThirdRailOffset", 112),
+        self:GetNW2Float("MEXThirdRailHeight", 20)
     )
 
     self:PhysicsInitMultiConvex(convexes)
