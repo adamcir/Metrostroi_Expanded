@@ -470,6 +470,13 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
         end
     end
 
+    if tunnelType ~= "none" and trackCount == 2 then
+        if tunnelType == "round" then
+            radius = math.max(radius, trackSpacing * 0.5 + 135)
+        else
+            width = math.max(width, trackSpacing + 270)
+        end
+    end
     if tunnelType ~= "none" then
         -- The ordinary map terrain at z=0 used to be visible through the bore.
         -- A concrete/ballast deck at z=1.2 occludes the grass without raising
@@ -584,13 +591,21 @@ function G.Draw(ent)
     local trackCount = ent:GetNW2Int("MEXTrackCount", 1) == 2 and 2 or 1
     local trackSpacing = math.Clamp(ent:GetNW2Float("MEXTrackSpacing", 240), 180, 400)
     local doubleBore = trackCount == 2
+    local tunnelStyle = ent:GetNW2String("MEXTunnelStyle", "metrostroi")
+    local thirdRail = ent:GetNW2Bool("MEXThirdRail", true)
+    local contactSide = G.SafeThirdRailSide(ent:GetNW2String("MEXThirdRailSide", "outside"))
+    local contactOffset = ent:GetNW2Float("MEXThirdRailOffset", 112)
+    local contactHeight = ent:GetNW2Float("MEXThirdRailHeight", 20)
     if doubleBore then
         if tunnelType == "round" then radius = math.max(radius, trackSpacing * 0.5 + 135) end
         if tunnelType ~= "none" and tunnelType ~= "round" then width = math.max(width, trackSpacing + 270) end
     end
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
-    local key = string.format("double-v2/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f",
-        trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh, tunnelType, radius, width, height, wall)
+    local key = string.format(
+        "metro-lining-v4/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f",
+        trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
+        tunnelType, tunnelStyle, radius, width, height, wall,
+        thirdRail and 1 or 0, contactSide, contactOffset, contactHeight)
     if ent.MEXFastKey ~= key then
         G.ClearClientMeshes(ent)
         ent.MEXFastMeshes = CreateMeshes(ent, length, gauge, rw, spacing, sl, sw, sh,
