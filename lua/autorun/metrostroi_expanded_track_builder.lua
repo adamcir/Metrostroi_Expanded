@@ -428,6 +428,11 @@ local function CollectTrackSnapNodes(spacing)
                     kind = kind or "mid",
                     track_count = count,
                     track_spacing = distance,
+                    tunnel_type = ent:GetNW2String("MEXTunnelType", "none"),
+                    tunnel_radius = ent:GetNW2Float("MEXTunnelRadius", 170),
+                    tunnel_width = ent:GetNW2Float("MEXTunnelWidth", 360),
+                    tunnel_height = ent:GetNW2Float("MEXTunnelHeight", 280),
+                    tunnel_wall = ent:GetNW2Float("MEXTunnelWall", 12),
                     lane = lane,
                 }
                 nodes[#nodes + 1] = node
@@ -528,6 +533,9 @@ if CLIENT then
             for _, node in ipairs(snapCache) do
                 if ply:GetPos():DistToSqr(node.pos) <= 5000 * 5000 then
                     local selected = node == nearest
+                    if selected and node.track_count == 2 and isvector(node.center_pos) then
+                        render.DrawLine(node.pos, node.center_pos, Color(255, 200, 70), true)
+                    end
                     local color
 
                     if selected then
@@ -700,6 +708,8 @@ local function CopySettings(settings)
         track_spacing = math.Clamp(tonumber(settings.track_spacing) or 240, 180, 400),
         rigid_section = settings.rigid_section == true or tonumber(settings.rigid_section or 0) == 1,
         rigid_length = math.Clamp(tonumber(settings.rigid_length) or 0, 0, 1024),
+        inherit_double_profile = settings.inherit_double_profile ~= false
+            and tonumber(settings.inherit_double_profile or 1) ~= 0,
         pack_model = string.sub(tostring(settings.pack_model or ""), 1, 240),
         pack_z_offset = math.Clamp(tonumber(settings.pack_z_offset) or 0, -128, 128),
     }
@@ -1263,6 +1273,13 @@ function Builder.AddPoint(ply, pos, settings, anchor)
         local newSettings = CopySettings(settings)
         if istable(anchor) and newSettings.track_count == 2 and anchor.track_count == 2 then
             newSettings.track_spacing = anchor.track_spacing
+            if newSettings.inherit_double_profile then
+                newSettings.tunnel_type = Builder.Geometry.SafeTunnelType(anchor.tunnel_type)
+                newSettings.tunnel_radius = anchor.tunnel_radius or newSettings.tunnel_radius
+                newSettings.tunnel_width = anchor.tunnel_width or newSettings.tunnel_width
+                newSettings.tunnel_height = anchor.tunnel_height or newSettings.tunnel_height
+                newSettings.tunnel_wall = anchor.tunnel_wall or newSettings.tunnel_wall
+            end
         end
         active = {
             points = {pos},
@@ -1294,7 +1311,7 @@ function Builder.AddPoint(ply, pos, settings, anchor)
     if active.settings.rigid_section
         and active.settings.rigid_length > 0
         and #active.points == 1
-        and not (istable(anchor) and anchor.kind == "end")
+        and not (istable(anchor) and (anchor.kind == "end" or anchor.kind == "start"))
     then
         local delta = pos - previous
         if delta:LengthSqr() > 0.0001 then
