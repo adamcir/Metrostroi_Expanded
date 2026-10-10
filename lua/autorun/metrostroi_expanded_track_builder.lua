@@ -60,7 +60,14 @@ local function BoxConvex(mins, maxs)
 end
 
 function TrackEntity:Initialize()
-    if not SERVER then return end
+    -- Our procedural Draw() does not draw the backing 16-SU model. Source
+    -- may still project a shadow from that hidden model for each rail entity.
+    -- Explicitly disable it on both realms to prevent phantom shadow strips.
+    if CLIENT then
+        self:DrawShadow(false)
+        return
+    end
+    self:DrawShadow(false)
 
     local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
     local gauge = math.Clamp(self:GetNW2Float("MEXGauge", DEFAULT_TRACK_GAUGE), 8, 200)
