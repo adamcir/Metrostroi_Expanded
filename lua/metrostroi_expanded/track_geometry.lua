@@ -192,6 +192,9 @@ local cvBrightNativeTunnels = CreateClientConVar(
 -- UV override is used only for circular lining: unfold theta around the
 -- entire circumference to avoid discontinuities at every triangulated face.
 local UV_TILE = 128
+-- Set only while synchronously constructing one segment mesh. Client GLua
+-- executes this sequentially; the offset is reset when generation finishes.
+local activeUVStart = 0
 
 local function AddQuad(vertices, a, b, c, d, doubleSided, suppliedUV)
     local normal = (b - a):Cross(c - a)
@@ -203,9 +206,9 @@ local function AddQuad(vertices, a, b, c, d, doubleSided, suppliedUV)
         if ax >= ay and ax >= az then
             return point.y / UV_TILE, point.z / UV_TILE
         elseif ay >= az then
-            return point.x / UV_TILE, point.z / UV_TILE
+            return (point.x + activeUVStart) / UV_TILE, point.z / UV_TILE
         end
-        return point.x / UV_TILE, point.y / UV_TILE
+        return (point.x + activeUVStart) / UV_TILE, point.y / UV_TILE
     end
 
     local points = {a, b, c, d}
@@ -377,8 +380,10 @@ function G.DrawContactRailOnly(ent)
         if ent.MEXContactMeshes then
             for _, entry in ipairs(ent.MEXContactMeshes) do entry.mesh:Destroy() end
         end
+        activeUVStart = ent:GetNW2Float("MEXUVStart", 0) + length * 0.5
         ent.MEXContactMeshes = MakeContactMeshes(length, gauge, count, spacing,
                                                   enabled, side, offset, height)
+        activeUVStart = 0
         ent.MEXContactKey = key
     end
     DrawMeshEntries(ent, ent.MEXContactMeshes)
@@ -516,6 +521,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     local contactHeight = ent:GetNW2Float("MEXThirdRailHeight", 20)
     local tunnelStyle = ent:GetNW2String("MEXTunnelStyle", "metrostroi")
     local half = length * 0.5
+    activeUVStart = ent:GetNW2Float("MEXUVStart", 0) + half
     trackCount = trackCount == 2 and 2 or 1
     trackSpacing = math.Clamp(tonumber(trackSpacing) or 240, 180, 400)
     for lane = 1, trackCount do
@@ -587,7 +593,8 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
             local yo2, zo2 = math.cos(b) * (radius + wall), zCenter + math.sin(b) * (radius + wall)
             -- Continuous cylindrical UVs: U is tunnel length, V is true
             -- perimeter distance rather than mixed Y/Z projections.
-            local u0, u1 = (-half - 0.5) / UV_TILE, (half + 0.5) / UV_TILE
+            local u0 = (-half - 0.5 + activeUVStart) / UV_TILE
+            local u1 = (half + 0.5 + activeUVStart) / UV_TILE
             local v1, v2 = a * radius / UV_TILE, b * radius / UV_TILE
             local vo1, vo2 = a * (radius + wall) / UV_TILE, b * (radius + wall) / UV_TILE
             AddQuad(tunnel,
@@ -654,6 +661,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     Keep(contact, contactMaterial)
     Keep(cover, contactCoverMaterial)
     Keep(insulators, insulatorMaterial)
+    activeUVStart = 0
     return meshes
 end
 
@@ -683,11 +691,13 @@ function G.Draw(ent)
             thirdRail, contactOffset, contactHeight)
     end
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
+    local uvStart = ent:GetNW2Float("MEXUVStart", 0)
     local key = string.format(
-        "metro-lining-uv-v5/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f",
+        "metro-lining-uv-v6/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
         tunnelType, tunnelStyle, radius, width, height, wall,
-        thirdRail and 1 or 0, contactSide, contactOffset, contactHeight)
+        thirdRail and 1 or 0, contactSide, contactOffset, contactHeight,
+        uvStart)
     if ent.MEXFastKey ~= key then
         G.ClearClientMeshes(ent)
         ent.MEXFastMeshes = CreateMeshes(ent, length, gauge, rw, spacing, sl, sw, sh,
