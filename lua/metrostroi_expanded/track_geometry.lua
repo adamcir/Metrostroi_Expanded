@@ -139,38 +139,40 @@ local function SolidMaterial(name, texturePaths, tint)
     return Material("models/debug/debugwhite")
 end
 
-local railMaterial = SolidMaterial("mex_track_rail_metro_v3", {
-    "models/metrostroi_tunnels/railroad_001",
-    "metrostroi/metro_railroad_001",
-}, "[0.75 0.75 0.75]")
-local sleeperMaterial = SolidMaterial("mex_track_tie_metro_v3", {
-    "models/metrostroi_tunnels/railroad_002",
-    "models/metrostroi_tunnels/railroad_001b",
-}, "[0.58 0.58 0.58]")
-local tunnelMaterial = SolidMaterial("mex_track_tunnel_metro_v3", {
-    "models/metrostroi_tunnels/tunnelwall_002",
-    "models/metrostroi_tunnels/tunnelwall_001",
+-- Railroad_001 and railroad_002 are texture ATLASES intended for compiled
+-- Metrostroi models. Mapping the full atlas onto each primitive rail/tie was
+-- responsible for bizarre bronze/striped segments in the screenshot. Keep
+-- procedural parts consistently shaded; native MDLs retain their own atlases.
+local railMaterial = SolidMaterial("mex_track_rail_clean_v5", {
+    "vgui/white",
+}, "[0.46 0.49 0.53]")
+local sleeperMaterial = SolidMaterial("mex_track_tie_clean_v5", {
+    "vgui/white",
+}, "[0.22 0.22 0.23]")
+-- tunnelwall_002 is a specialized model UV atlas (wood/plank-like patterns
+-- when applied to a plain box). Use a proper tileable concrete surface instead.
+local tunnelMaterial = SolidMaterial("mex_track_tunnel_concrete_v5", {
     "metro/metroconcrete001",
-}, "[0.60 0.60 0.60]")
-local tunnelSeamMaterial = SolidMaterial("mex_track_tunnel_ring_v3", {
-    "models/metrostroi_tunnels/tunnelwall_003",
+    "models/props_c17/concretewall001a",
     "models/metrostroi_tunnels/tunnelwall_001",
-}, "[0.42 0.42 0.42]")
-local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v3", {
+}, "[0.83 0.83 0.84]")
+local tunnelSeamMaterial = SolidMaterial("mex_track_tunnel_ring_v5", {
+    "metro/metroconcrete002",
+    "models/props_c17/concretewall001a",
+}, "[0.57 0.57 0.57]")
+local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v5", {
     "models/metrostroi_tunnels/tunnelfloor_001",
-    "models/metrostroi_tunnels/tunnelfloor_002",
-}, "[0.40 0.40 0.40]")
-local contactMaterial = SolidMaterial("mex_track_contact_metro_v3", {
-    "metrostroi/metro_contactrail_001",
-    "models/metrostroi_tunnels/railroad_001",
-}, "[0.80 0.72 0.59]")
-local contactCoverMaterial = SolidMaterial("mex_track_contact_cover_v3", {
-    "models/metrostroi_tunnels/railroad_006c",
-    "models/metrostroi_tunnels/railroad_001b",
-}, "[0.30 0.30 0.28]")
-local insulatorMaterial = SolidMaterial("mex_track_contact_insulator_v3", {
-    "models/metrostroi_tunnels/railroad_008",
-}, "[0.52 0.47 0.34]")
+    "models/props_wasteland/concretefloor010a",
+}, "[0.62 0.62 0.62]")
+local contactMaterial = SolidMaterial("mex_track_contact_metro_v5", {
+    "vgui/white",
+}, "[0.55 0.52 0.43]")
+local contactCoverMaterial = SolidMaterial("mex_track_contact_cover_v5", {
+    "vgui/white",
+}, "[0.21 0.21 0.20]")
+local insulatorMaterial = SolidMaterial("mex_track_contact_insulator_v5", {
+    "vgui/white",
+}, "[0.46 0.35 0.23]")
 
 -- Global visual toggle.  It never changes the saved route or collisions.
 local cvDrawSleepers = CreateClientConVar(
@@ -182,25 +184,59 @@ local cvBrightNativeTunnels = CreateClientConVar(
     "Keep installed tunnel MDLs lit on maps without baked tunnel lighting"
 )
 
-local function AddQuad(vertices, a, b, c, d, doubleSided)
+-- Correct per-FACE UV projection: the old x+z / y+z formula distorted
+-- concrete on vertical walls into diagonal plank patterns. A wall tiles in
+-- longitudinal (X) and vertical (Z), a ceiling/floor in X/Y, an end cap in
+-- Y/Z. Coordinates are local Source units, so NO face is stretched to fit.
+--
+-- UV override is used only for circular lining: unfold theta around the
+-- entire circumference to avoid discontinuities at every triangulated face.
+local UV_TILE = 128
+
+local function AddQuad(vertices, a, b, c, d, doubleSided, suppliedUV)
     local normal = (b - a):Cross(c - a)
     if normal:LengthSqr() < 0.000001 then return end
     normal:Normalize()
 
-    local function Add(p, n)
+    local ax, ay, az = math.abs(normal.x), math.abs(normal.y), math.abs(normal.z)
+    local function UV(point)
+        if ax >= ay and ax >= az then
+            return point.y / UV_TILE, point.z / UV_TILE
+        elseif ay >= az then
+            return point.x / UV_TILE, point.z / UV_TILE
+        end
+        return point.x / UV_TILE, point.y / UV_TILE
+    end
+
+    local points = {a, b, c, d}
+    local values = {}
+    for i, p in ipairs(points) do
+        local u, v
+        if suppliedUV and suppliedUV[i] then
+            u, v = suppliedUV[i][1], suppliedUV[i][2]
+        else
+            u, v = UV(p)
+        end
+        values[i] = {pos = p, u = u, v = v}
+    end
+
+    local function Add(i, n)
+        local sample = values[i]
         vertices[#vertices + 1] = {
-            pos = p, normal = n,
-            u = p.x / 128 + p.z / 256, v = p.y / 128 + p.z / 128,
+            pos = sample.pos, normal = n,
+            u = sample.u, v = sample.v,
         }
     end
-    Add(a, normal); Add(b, normal); Add(c, normal)
-    Add(a, normal); Add(c, normal); Add(d, normal)
+
+    Add(1, normal); Add(2, normal); Add(3, normal)
+    Add(1, normal); Add(3, normal); Add(4, normal)
     if doubleSided then
         local reversed = -normal
-        Add(c, reversed); Add(b, reversed); Add(a, reversed)
-        Add(d, reversed); Add(c, reversed); Add(a, reversed)
+        Add(3, reversed); Add(2, reversed); Add(1, reversed)
+        Add(4, reversed); Add(3, reversed); Add(1, reversed)
     end
 end
+
 
 local function AddBox(vertices, min, max)
     local a = Vector(min.x, min.y, min.z)
@@ -549,12 +585,19 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
             local y2, z2 = math.cos(b) * radius, zCenter + math.sin(b) * radius
             local yo1, zo1 = math.cos(a) * (radius + wall), zCenter + math.sin(a) * (radius + wall)
             local yo2, zo2 = math.cos(b) * (radius + wall), zCenter + math.sin(b) * (radius + wall)
+            -- Continuous cylindrical UVs: U is tunnel length, V is true
+            -- perimeter distance rather than mixed Y/Z projections.
+            local u0, u1 = (-half - 0.5) / UV_TILE, (half + 0.5) / UV_TILE
+            local v1, v2 = a * radius / UV_TILE, b * radius / UV_TILE
+            local vo1, vo2 = a * (radius + wall) / UV_TILE, b * (radius + wall) / UV_TILE
             AddQuad(tunnel,
                 Vector(-half - 0.5, y1, z1), Vector(half + 0.5, y1, z1),
-                Vector(half + 0.5, y2, z2), Vector(-half - 0.5, y2, z2), true)
+                Vector(half + 0.5, y2, z2), Vector(-half - 0.5, y2, z2), true,
+                {{u0, v1}, {u1, v1}, {u1, v2}, {u0, v2}})
             AddQuad(tunnel,
                 Vector(-half - 0.5, yo2, zo2), Vector(half + 0.5, yo2, zo2),
-                Vector(half + 0.5, yo1, zo1), Vector(-half - 0.5, yo1, zo1), true)
+                Vector(half + 0.5, yo1, zo1), Vector(-half - 0.5, yo1, zo1), true,
+                {{u0, vo2}, {u1, vo2}, {u1, vo1}, {u0, vo1}})
             if tunnelStyle == "metrostroi" then
                 -- Slender concrete tubbing seam rings, every ~128 Source units.
                 local ringCount = math.max(1, math.ceil(length / 128))
@@ -641,7 +684,7 @@ function G.Draw(ent)
     end
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
     local key = string.format(
-        "metro-lining-v4/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f",
+        "metro-lining-uv-v5/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
         tunnelType, tunnelStyle, radius, width, height, wall,
         thirdRail and 1 or 0, contactSide, contactOffset, contactHeight)
