@@ -365,6 +365,8 @@ function G.DrawPackModel(ent)
     end
     local path = string.lower(requested)
     if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") then return false end
+    local signature = requested .. ":" .. math.Round(ent:GetNW2Float("MEXLength", 1), 1)
+    if ent.MEXRejectedPackKey == signature then return false end
     -- Loading/validating a compiled model is expensive; do it once per path,
     -- not once per frame for every fixed station.
     if ent.MEXPackValidityPath ~= requested then
@@ -408,8 +410,14 @@ function G.DrawPackModel(ent)
     -- A 1024-SU prefab cannot be placed on a 256-SU route. Fallback to MEX
     -- generated graphics rather than silently stretching/misaligning it.
     if math.abs(nativeLength - length) > math.max(8, length * 0.06) then
+        ent.MEXRejectedPackKey = signature
+        -- An unsuitable prefab should never leave a spare invisible
+        -- ClientsideModel allocated per track chord.
+        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
+        ent.MEXPackPiece, ent.MEXPackModel = nil, nil
         return false
     end
+    ent.MEXRejectedPackKey = nil
     local correction = isX and Angle(0, 0, 0) or Angle(0, -90, 0)
     local ang = ent:LocalToWorldAngles(correction)
     local center = (mins + maxs) * 0.5
