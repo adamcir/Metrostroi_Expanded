@@ -6,10 +6,18 @@ The project is intended to grow into a larger realism/gameplay layer for Metrost
 
 ## Track & Tunnel Builder (prototype)
 
-The **Tools → Metrostroi Expanded → Track Builder** tool now lets you choose
-an open track, circular bored tunnel, rectangular tunnel or wide tunnel profile.
-Tunnel size and wall thickness are adjustable; construction remains entirely
-in-game with saved editable routes.
+The **Tools → Metrostroi Expanded → Track Builder** tool lets you choose
+surface track, circular bored, rectangular or wide tunnel profiles. **Single
+or real DOUBLE track** is supported: double routes have two physical rails
+per lane, two independent Metrostroi path lines and two snap nodes at both
+ends. Double-to-double snapping connects the tunnels on their common
+centerline and inherits the opening/track spacing.
+
+Enable **Rigid section** to create a straight non-bendable station module.
+An installed **Track Pack** compiled `.mdl` can be selected via the on-demand
+mounted-model scanner and placed at native scale on a matching rigid section.
+Curves are still procedural and cannot bend static Track Pack MDLs.
+Tunnel dimensions and route settings are saved along with the line.
 
 The fast renderer uses cached procedural meshes and reduces the number of
 static rail physics entities while keeping the Metrostroi rail graph dense.
