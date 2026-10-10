@@ -157,6 +157,10 @@ local cvDrawSleepers = CreateClientConVar(
     "mex_track_builder_draw_sleepers", "1", true, false,
     "Render procedural railway sleepers/ties"
 )
+local cvBrightNativeTunnels = CreateClientConVar(
+    "mex_track_builder_native_tunnel_lighting", "1", true, false,
+    "Keep installed tunnel MDLs lit on maps without baked tunnel lighting"
+)
 
 local function AddQuad(vertices, a, b, c, d, doubleSided)
     local normal = (b - a):Cross(c - a)
@@ -420,7 +424,18 @@ function G.DrawPackModel(ent)
         ent:SetRenderBounds(Vector(-halfSize, -halfSize, -halfSize),
                             Vector(halfSize, halfSize, halfSize))
     end
+    -- Stock VertexLitGeneric tunnels otherwise render black on open,
+    -- dark construction maps with no precomputed light probes for new tunnels.
+    local forceLit = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
+    if forceLit then
+        render.SuppressEngineLighting(true)
+        render.SetColorModulation(0.67, 0.67, 0.67)
+    end
     piece:DrawModel()
+    if forceLit then
+        render.SetColorModulation(1, 1, 1)
+        render.SuppressEngineLighting(false)
+    end
     piece:SetRenderOrigin(nil)
     piece:SetRenderAngles(nil)
     return true
