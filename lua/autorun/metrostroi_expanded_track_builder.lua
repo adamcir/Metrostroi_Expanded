@@ -904,7 +904,7 @@ end
 
 Builder.GetRouteRenderPoints = RouteRenderPoints
 
-local function SpawnSegment(a, b, settings, routeID, segmentIndex)
+local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     if not isvector(a) or not isvector(b) then return nil end
 
     local delta = b - a
@@ -919,6 +919,9 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     ent:SetPos((a + b) * 0.5)
     ent:SetAngles(delta:Angle())
     ent:SetNW2Float("MEXLength", length)
+    -- Continuous texture U coordinate along the actual physical route, not
+    -- centered/restarted on every 48-192SU segment (previously visible seams).
+    ent:SetNW2Float("MEXUVStart", uvStart or 0)
     ent:SetNW2Float("MEXGauge", settings.gauge)
     ent:SetNW2Float("MEXRailWidth", settings.rail_width)
     ent:SetNW2Float("MEXRailHeight", settings.rail_height)
@@ -1051,11 +1054,14 @@ local function SpawnPolyline(points, settings, routeID)
     -- Physical route is intentionally simpler than the fine-grained rail graph.
     local geometryPoints = Builder.BuildGeometryPoints(points, settings)
 
+    local alongRoute = 0
     for i = 1, #geometryPoints - 1 do
-        local ent = SpawnSegment(geometryPoints[i], geometryPoints[i + 1], settings, routeID, i)
+        local from, to = geometryPoints[i], geometryPoints[i + 1]
+        local ent = SpawnSegment(from, to, settings, routeID, i, alongRoute)
         if IsValid(ent) then
             entities[#entities + 1] = ent
         end
+        alongRoute = alongRoute + from:Distance(to)
     end
 
     return entities
