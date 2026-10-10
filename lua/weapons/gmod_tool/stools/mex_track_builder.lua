@@ -38,6 +38,7 @@ TOOL.ClientConVar = {
     track_model = "models/metrostroi/tracks/railroad16.mdl",
     track_count = "1",
     track_spacing = "240",
+    inherit_double_profile = "1",
     rigid_section = "0",
     rigid_length = "256",
     pack_model = "",
@@ -91,6 +92,7 @@ local function ReadSettings(tool)
         track_model = tool:GetClientInfo("track_model"),
         track_count = tool:GetClientNumber("track_count", 1),
         track_spacing = tool:GetClientNumber("track_spacing", 240),
+        inherit_double_profile = tool:GetClientNumber("inherit_double_profile", 1),
         rigid_section = tool:GetClientNumber("rigid_section", 0),
         rigid_length = tool:GetClientNumber("rigid_length", 256),
         pack_model = tool:GetClientInfo("pack_model"),
@@ -240,6 +242,8 @@ function TOOL.BuildCPanel(panel)
     trackCount:AddChoice("Single track", "1")
     trackCount:AddChoice("DOUBLE - two independent rail paths", "2")
     panel:NumSlider("DOUBLE track centre spacing (SU)", "mex_track_builder_track_spacing", 180, 400, 0)
+    panel:CheckBox("Inherit connected DOUBLE tunnel profile", "mex_track_builder_inherit_double_profile")
+    panel:Help("Snapping a new double tunnel to a double node inherits its track spacing and (by default) tunnel size/type, keeping the connection flush.")
     panel:Help("Each double-track tunnel has two separate nodes at each end AND along both rails. Clicking either node with Double selected snaps the entire next double tunnel to the same centerline.")
     panel:Help("Single selected + clicking a double node creates a single line attached to that lane. A full single/double transition is NOT yet generated.")
 
