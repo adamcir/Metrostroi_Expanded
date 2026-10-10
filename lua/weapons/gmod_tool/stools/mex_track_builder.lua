@@ -35,6 +35,7 @@ TOOL.ClientConVar = {
     tunnel_height = "280",
     tunnel_wall = "12",
     tunnel_style = "metrostroi",
+    auto_native_models = "1",
     third_rail = "1",
     third_rail_side = "outside",
     third_rail_offset = "112",
@@ -94,6 +95,7 @@ local function ReadSettings(tool)
         tunnel_height = tool:GetClientNumber("tunnel_height", 280),
         tunnel_wall = tool:GetClientNumber("tunnel_wall", 12),
         tunnel_style = tool:GetClientInfo("tunnel_style"),
+        auto_native_models = tool:GetClientNumber("auto_native_models", 1),
         third_rail = tool:GetClientNumber("third_rail", 1),
         third_rail_side = tool:GetClientInfo("third_rail_side"),
         third_rail_offset = tool:GetClientNumber("third_rail_offset", 112),
@@ -267,8 +269,16 @@ function TOOL.BuildCPanel(panel)
     panel:NumSlider("Rigid section length (SU; 0 = click distance)", "mex_track_builder_rigid_length", 0, 1024, 0)
     panel:Help("A rigid route consists of exactly two endpoints. After second LMB, use RMB to finish. New sections can attach to either end without bending the saved station. Set length 64/256/1024 to match a Track Pack straight model.")
 
-    panel:Help("Real installed Track Pack .mdl (rigid sections only)")
-    panel:TextEntry("Track Pack model path", "mex_track_builder_pack_model")
+    panel:Help("Original Metrostroi and installed Track Pack models")
+    local presets = panel:ComboBox("Verified Metrostroi prefabs (rigid)", "mex_track_builder_pack_model")
+    presets:AddChoice("Automatic stock model (recommended)", "")
+    presets:AddChoice("Round tunnel, 64 SU", "models/metrostroi/tracks/tunnel64.mdl")
+    presets:AddChoice("Round tunnel, 256 SU", "models/metrostroi/tracks/tunnel256.mdl")
+    presets:AddChoice("Round tunnel, 1024 SU", "models/metrostroi/tracks/tunnel1024.mdl")
+    presets:AddChoice("Rectangular tunnel, 256 SU", "models/metrostroi/tracks/tunnel256_rect.mdl")
+    presets:AddChoice("Rectangular tunnel, 1024 SU", "models/metrostroi/tracks/tunnel1024_rect.mdl")
+    presets:AddChoice("Double tunnel, 1024 SU", "models/metrostroi/tracks/tunnel1024_double.mdl")
+    panel:TextEntry("Custom Track Pack model path", "mex_track_builder_pack_model")
     panel:NumSlider("Pack MDL height adjustment (SU)", "mex_track_builder_pack_z_offset", -128, 128, 0)
     panel:TextEntry("Model scan root (GAME path)", "mex_track_builder_model_root")
 
@@ -347,7 +357,9 @@ function TOOL.BuildCPanel(panel)
     local style = panel:ComboBox("Tunnel appearance", "mex_track_builder_tunnel_style")
     style:AddChoice("Classic Metrostroi / Track Pack lining", "metrostroi")
     style:AddChoice("Basic geometry", "plain")
-    panel:Help("Classic uses installed Metrostroi tunnelwall / tunnelfloor materials and joint rings. Straight Rigid sections can automatically use the original installed tunnel .mdl of the exact same length.")
+    panel:CheckBox("Use real Metrostroi models on exact straight sections", "mex_track_builder_auto_native_models")
+    panel:Help("Classic automatically uses original mounted tunnel64/256/1024.mdl assets on matching straight sections. Curves keep their lightweight procedural lining. Uncheck for procedural-only graphics.")
+    panel:Help("Classic uses original Metrostroi tunnelwall / tunnelfloor textures and segmented tunnel rings.")
     panel:Help("Missing materials fall back to an opaque neutral material, never checkerboards or a completely black tunnel.")
 
     panel:Help("Third (contact / power) rail")
