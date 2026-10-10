@@ -11,6 +11,34 @@ The existing **Metrostroi Expanded → Track Builder** tool now supports the tun
 5. Click with LMB to create control points, RMB to finish, R to undo the latest point. An auto-loop inherits the chosen tunnel profile.
 6. Routes/tunnel settings are persisted in `data/metrostroi_expanded/tracks_<map>.txt`.
 
+## Fix: distorted / badly mapped tunnel textures (October 2026)
+
+The old Track Builder used `u = x/128 + z/256` and
+`v = y/128 + z/128` for **every** face of a tunnel or rail mesh. On
+vertical walls, this sheared/twisted the texture along its height; on
+rounded tunnel sections it broke the texture at every small triangle.
+
+The updated generator now projects wall surfaces in **X/Z**, flat floors
+and ceilings in **X/Y**, and end caps in **Y/Z**, each at a consistent
+128-SU repeat scale. Circular liners are UV-unwrapped using their real
+circumference/angle, with no orientation changes between faces. The UV
+distance also advances continuously across adjacent physical segments,
+rather than restarting at each segment origin.
+
+The old choice of `tunnelwall_002` or `railroad_001/002` for unrelated
+procedural boxes was also problematic: those can be model-specific
+textures/atlases, giving giant wooden/plank-like walls and brightly colored
+rail parts. Procedural walls now prefer Metrostroi's **tileable
+`metro/metroconcrete001` concrete**, then stock Source concrete. Rails,
+ties, and contact-rail guards use consistent opaque metal/concrete shades.
+**Original unmodified Metrostroi and Track Pack MDLs retain their own
+original material/UV mapping**.
+
+The fix affects existing saved layouts after reloading the map; it does
+not change collision geometry, track centers, rails, train speed, or
+Metrostroi's rail-path data. After updating, restart GMod/reload the map
+to rebuild and release client-side cached meshes.
+
 ## Realistic Metro tunnel rendering and third contact rail
 
 The tunnel used to render as a completely black shell, and the rails/pieces
