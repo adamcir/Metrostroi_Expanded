@@ -29,15 +29,21 @@ end
 -- A static rail entity has two narrow collision hulls, never a wide invisible
 -- bed that catches the train bogeys. Extend ends slightly to bridge tiny gaps
 -- between adjacent chords (the former end-to-end butt joint caused bumps).
-function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, height, wall)
+function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, height, wall, trackCount, trackSpacing)
     local half = length * 0.5 + 0.6
     local halfRail = railWidth * 0.5
-    local convexes = {
-        BoxConvex(Vector(-half, gauge * 0.5 - halfRail, 0),
-                  Vector( half, gauge * 0.5 + halfRail, 10)),
-        BoxConvex(Vector(-half, -gauge * 0.5 - halfRail, 0),
-                  Vector( half, -gauge * 0.5 + halfRail, 10)),
-    }
+    trackCount = trackCount == 2 and 2 or 1
+    trackSpacing = math.Clamp(tonumber(trackSpacing) or 240, 180, 400)
+    local convexes = {}
+    for lane = 1, trackCount do
+        local middle = trackCount == 2 and (lane == 1 and -trackSpacing * 0.5 or trackSpacing * 0.5) or 0
+        for _, railY in ipairs({middle + gauge * 0.5, middle - gauge * 0.5}) do
+            convexes[#convexes + 1] = BoxConvex(
+                Vector(-half, railY - halfRail, 0),
+                Vector( half, railY + halfRail, 10)
+            )
+        end
+    end
     tunnelType = G.SafeTunnelType(tunnelType)
     if tunnelType == "none" then return convexes end
 
@@ -47,6 +53,8 @@ function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, 
     wall = math.Clamp(tonumber(wall) or 12, 6, 32)
 
     if tunnelType == "round" then
+        -- A double-track bore must clear both cars.
+        if trackCount == 2 then radius = math.max(radius, trackSpacing * 0.5 + 135) end
         local zCenter = radius - 55 -- tunnel invert is 55 SU BELOW the rail base
         -- 12 convex rings, not per-triangle physics. The floor is below the
         -- running rails, giving Metrostroi bogeys and wheels free clearance.
@@ -64,6 +72,7 @@ function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, 
             convexes[#convexes + 1] = points
         end
     else
+        if trackCount == 2 then width = math.max(width, trackSpacing + 270) end
         if tunnelType == "wide" then width = math.max(width, 460) end
         local y = width * 0.5
         local bottom = -55
@@ -150,13 +159,18 @@ end
 
 local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                             sleeperLength, sleeperWidth, sleeperHeight,
-                            tunnelType, radius, width, height, wall)
+                            tunnelType, radius, width, height, wall, trackCount, trackSpacing)
     local rails, sleepers, tunnel = {}, {}, {}
     local half = length * 0.5
-    for _, y in ipairs({-gauge * 0.5, gauge * 0.5}) do
-        AddBox(rails,
-            Vector(-half - 0.3, y - railWidth * 0.5, 0),
-            Vector(half + 0.3, y + railWidth * 0.5, 10))
+    trackCount = trackCount == 2 and 2 or 1
+    trackSpacing = math.Clamp(tonumber(trackSpacing) or 240, 180, 400)
+    for lane = 1, trackCount do
+        local middle = trackCount == 2 and (lane == 1 and -trackSpacing * 0.5 or trackSpacing * 0.5) or 0
+        for _, y in ipairs({middle - gauge * 0.5, middle + gauge * 0.5}) do
+            AddBox(rails,
+                Vector(-half - 0.3, y - railWidth * 0.5, 0),
+                Vector(half + 0.3, y + railWidth * 0.5, 10))
+        end
     end
 
     -- The previous mesh put every sleeper between -sleeperHeight and z=0.
@@ -174,12 +188,16 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     local step = length / ties
     for i = 0, ties - 1 do
         local x = -half + (i + 0.5) * step
-        AddBox(sleepers,
-            Vector(x - sleeperWidth * 0.5, -sleeperLength * 0.5, sleeperBase),
-            Vector(x + sleeperWidth * 0.5, sleeperLength * 0.5, sleeperTop))
+        for lane = 1, trackCount do
+            local middle = trackCount == 2 and (lane == 1 and -trackSpacing * 0.5 or trackSpacing * 0.5) or 0
+            AddBox(sleepers,
+                Vector(x - sleeperWidth * 0.5, middle - sleeperLength * 0.5, sleeperBase),
+                Vector(x + sleeperWidth * 0.5, middle + sleeperLength * 0.5, sleeperTop))
+        end
     end
 
     if tunnelType == "round" then
+        if trackCount == 2 then radius = math.max(radius, trackSpacing * 0.5 + 135) end
         local zCenter = radius - 55
         -- Both sides of the lining are visible (viewed from inside/outside).
         for i = 0, 31 do
@@ -197,6 +215,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                 Vector(half + 0.5, yo1, zo1), Vector(-half - 0.5, yo1, zo1), true)
         end
     elseif tunnelType ~= "none" then
+        if trackCount == 2 then width = math.max(width, trackSpacing + 270) end
         if tunnelType == "wide" then width = math.max(width, 460) end
         local y, bottom = width * 0.5, -55
         AddBox(tunnel, Vector(-half, -y - wall, bottom), Vector(half, -y, height))
@@ -233,17 +252,24 @@ function G.Draw(ent)
     local width = math.Clamp(ent:GetNW2Float("MEXTunnelWidth", 360), 300, 640)
     local height = math.Clamp(ent:GetNW2Float("MEXTunnelHeight", 280), 230, 480)
     local wall = math.Clamp(ent:GetNW2Float("MEXTunnelWall", 12), 6, 32)
+    local trackCount = ent:GetNW2Int("MEXTrackCount", 1) == 2 and 2 or 1
+    local trackSpacing = math.Clamp(ent:GetNW2Float("MEXTrackSpacing", 240), 180, 400)
+    local doubleBore = trackCount == 2
+    if doubleBore then
+        if tunnelType == "round" then radius = math.max(radius, trackSpacing * 0.5 + 135) end
+        if tunnelType ~= "none" and tunnelType ~= "round" then width = math.max(width, trackSpacing + 270) end
+    end
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
-    local key = string.format("zfight-fix-v2/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f",
-        length, gauge, rw, spacing, sl, sw, sh, tunnelType, radius, width, height, wall)
+    local key = string.format("double-v1/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f/%.2f",
+        trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh, tunnelType, radius, width, height, wall)
     if ent.MEXFastKey ~= key then
         G.ClearClientMeshes(ent)
         ent.MEXFastMeshes = CreateMeshes(ent, length, gauge, rw, spacing, sl, sw, sh,
-                                         tunnelType, radius, width, height, wall)
+                                         tunnelType, radius, width, height, wall, trackCount, trackSpacing)
         ent.MEXFastKey = key
         local halfWidth = tunnelType == "round" and radius + wall
             or (tunnelType ~= "none" and math.max(width, tunnelType == "wide" and 460 or 0) * 0.5 + wall)
-            or math.max(sl * 0.5, gauge * 0.5 + rw)
+            or math.max(sl * 0.5 + (doubleBore and trackSpacing * 0.5 or 0), gauge * 0.5 + rw + (doubleBore and trackSpacing * 0.5 or 0))
         local roof = tunnelType == "round" and (2 * radius - 55 + wall)
             or (tunnelType ~= "none" and height + wall)
             or 24
