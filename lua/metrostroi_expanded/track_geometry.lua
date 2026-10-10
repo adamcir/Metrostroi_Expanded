@@ -173,9 +173,14 @@ function G.DrawPackModel(ent)
         return false
     end
     local path = string.lower(requested)
-    if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") or not util.IsValidModel(requested) then
-        return false
+    if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") then return false end
+    -- Loading/validating a compiled model is expensive; do it once per path,
+    -- not once per frame for every fixed station.
+    if ent.MEXPackValidityPath ~= requested then
+        ent.MEXPackValidityPath = requested
+        ent.MEXPackValidity = util.IsValidModel(requested)
     end
+    if not ent.MEXPackValidity then return false end
     local count = ent:GetNW2Int("MEXTrackCount", 1)
     if count == 2 and not (string.find(path, "_ns", 1, true)
         or string.find(path, "double", 1, true)
@@ -337,7 +342,7 @@ function G.Draw(ent)
         if tunnelType ~= "none" and tunnelType ~= "round" then width = math.max(width, trackSpacing + 270) end
     end
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
-    local key = string.format("double-v1/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f/%.2f",
+    local key = string.format("double-v2/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh, tunnelType, radius, width, height, wall)
     if ent.MEXFastKey ~= key then
         G.ClearClientMeshes(ent)
