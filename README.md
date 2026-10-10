@@ -4,6 +4,21 @@
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
+## Track & Tunnel Builder (prototype)
+
+The **Tools → Metrostroi Expanded → Track Builder** tool now lets you choose
+an open track, circular bored tunnel, rectangular tunnel or wide tunnel profile.
+Tunnel size and wall thickness are adjustable; construction remains entirely
+in-game with saved editable routes.
+
+The fast renderer uses cached procedural meshes and reduces the number of
+static rail physics entities while keeping the Metrostroi rail graph dense.
+This targets severe FPS spikes and unstable bogey contact on long constructed
+lines, but **gameplay validation is still required**.
+
+See [Tunnel Builder documentation](docs/TUNNEL_BUILDER.md) for the full
+description, limitations and testing procedure.
+
 ## Passenger Seats
 
 Current passenger-seat module version: **0.2.0**
