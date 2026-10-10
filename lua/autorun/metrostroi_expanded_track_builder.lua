@@ -4,10 +4,12 @@
 
 if SERVER then
     AddCSLuaFile()
+    AddCSLuaFile("metrostroi_expanded/track_geometry.lua")
 end
 
 MEXTrackBuilder = MEXTrackBuilder or {}
 local Builder = MEXTrackBuilder
+include("metrostroi_expanded/track_geometry.lua")
 
 local TRACK_CLASS = "mex_track_segment"
 local DEFAULT_TRACK_MODEL = "models/metrostroi/tracks/railroad16.mdl"
@@ -99,16 +101,16 @@ function TrackEntity:Initialize()
     -- created one wide rectangular collision bed under every segment. Subway
     -- bogeys hit that invisible bed before the wheels reached the rail model,
     -- which made trains visibly float above MEX track.
-    local convexes = {
-        BoxConvex(
-            Vector(-halfLength, leftY - halfRail, railBottom),
-            Vector(halfLength, leftY + halfRail, railTop)
-        ),
-        BoxConvex(
-            Vector(-halfLength, rightY - halfRail, railBottom),
-            Vector(halfLength, rightY + halfRail, railTop)
-        ),
-    }
+    -- One shared collision body per simplified chord; optional tunnel lining
+    -- is hollow and keeps the rail running surface completely unobstructed.
+    local convexes = Builder.Geometry.PhysicsConvexes(
+        length, effectiveGauge, effectiveRailWidth,
+        self:GetNW2String("MEXTunnelType", "none"),
+        self:GetNW2Float("MEXTunnelRadius", 170),
+        self:GetNW2Float("MEXTunnelWidth", 360),
+        self:GetNW2Float("MEXTunnelHeight", 280),
+        self:GetNW2Float("MEXTunnelWall", 12)
+    )
 
     self:PhysicsInitMultiConvex(convexes)
     self:EnableCustomCollisions(true)
@@ -316,9 +318,14 @@ if CLIENT then
 
     function TrackEntity:OnRemove()
         RemoveModelPieces(self)
+        Builder.Geometry.ClearClientMeshes(self)
     end
 
     function TrackEntity:Draw()
+        if self:GetNW2Bool("MEXFastGeometry", true) then
+            Builder.Geometry.Draw(self)
+            return
+        end
         local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
         local gauge = math.max(self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE), 8)
         local railWidth = math.max(self:GetNW2Float("MEXPhysicalRailWidth", METROSTROI_RAIL_WIDTH), 1)
@@ -674,6 +681,17 @@ local function CopySettings(settings)
         segment_length = math.Clamp(tonumber(settings.segment_length) or 48, 16, 256),
         use_track_model = settings.use_track_model ~= false and tonumber(settings.use_track_model or 1) ~= 0,
         track_model = SafeTrackModel(settings.track_model),
+        fast_geometry = settings.fast_geometry ~= false and tonumber(settings.fast_geometry or 1) ~= 0,
+        -- Tunnel construction is part of the route and survives save/load.
+        tunnel_type = Builder.Geometry.SafeTunnelType(settings.tunnel_type),
+        tunnel_radius = math.Clamp(tonumber(settings.tunnel_radius) or 170, 140, 320),
+        tunnel_width = math.Clamp(tonumber(settings.tunnel_width) or 360, 300, 640),
+        tunnel_height = math.Clamp(tonumber(settings.tunnel_height) or 280, 230, 480),
+        tunnel_wall = math.Clamp(tonumber(settings.tunnel_wall) or 12, 6, 32),
+        -- Keep a high-resolution Metrostroi rail graph, but use fewer
+        -- physical entities on long straight and gently curved sections.
+        geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
+        geometry_max_length = math.Clamp(tonumber(settings.geometry_max_length) or 192, 64, 256),
     }
 end
 
@@ -865,6 +883,12 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     ent:SetNW2Float("MEXSleeperHeight", settings.sleeper_height)
     ent:SetNW2String("MEXTrackModel", settings.track_model)
     ent:SetNW2Bool("MEXUseTrackModel", settings.use_track_model)
+    ent:SetNW2Bool("MEXFastGeometry", settings.fast_geometry)
+    ent:SetNW2String("MEXTunnelType", settings.tunnel_type)
+    ent:SetNW2Float("MEXTunnelRadius", settings.tunnel_radius)
+    ent:SetNW2Float("MEXTunnelWidth", settings.tunnel_width)
+    ent:SetNW2Float("MEXTunnelHeight", settings.tunnel_height)
+    ent:SetNW2Float("MEXTunnelWall", settings.tunnel_wall)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
@@ -880,11 +904,52 @@ local function RemoveEntities(entities)
     end
 end
 
+-- Approximate the dense spline by long, low-error collision/render chords.
+-- The original dense points are left unchanged for Metrostroi's rail network.
+-- An individual static physics entity per 48 SU was the major cause of frame
+-- spikes and unstable wheel contacts on long manually built routes.
+function Builder.BuildGeometryPoints(points, settings)
+    settings = CopySettings(settings)
+    if #points < 3 then return points end
+    local result = {points[1]}
+    local i = 1
+    local maxLength = settings.geometry_max_length
+    local maxErrorSqr = settings.geometry_tolerance * settings.geometry_tolerance
+    while i < #points do
+        local lastGood = i + 1
+        local accumulated = 0
+        for j = i + 1, #points do
+            accumulated = accumulated + points[j]:Distance(points[j - 1])
+            if accumulated > maxLength and j > i + 1 then break end
+            local from, to = points[i], points[j]
+            local delta = to - from
+            local lengthSqr = delta:LengthSqr()
+            if lengthSqr < 0.00001 then break end
+            local accurate = true
+            for k = i + 1, j - 1 do
+                local fraction = math.Clamp((points[k] - from):Dot(delta) / lengthSqr, 0, 1)
+                local projection = from + delta * fraction
+                if projection:DistToSqr(points[k]) > maxErrorSqr then
+                    accurate = false
+                    break
+                end
+            end
+            if not accurate then break end
+            lastGood = j
+        end
+        result[#result + 1] = points[lastGood]
+        i = lastGood
+    end
+    return result
+end
+
 local function SpawnPolyline(points, settings, routeID)
     local entities = {}
+    -- Physical route is intentionally simpler than the fine-grained rail graph.
+    local geometryPoints = Builder.BuildGeometryPoints(points, settings)
 
-    for i = 1, #points - 1 do
-        local ent = SpawnSegment(points[i], points[i + 1], settings, routeID, i)
+    for i = 1, #geometryPoints - 1 do
+        local ent = SpawnSegment(geometryPoints[i], geometryPoints[i + 1], settings, routeID, i)
         if IsValid(ent) then
             entities[#entities + 1] = ent
         end
@@ -1069,7 +1134,10 @@ end
 
 local function NetworkPoints(route)
     local settings = CopySettings(route.settings)
-    local zOffset = settings.sleeper_height + settings.rail_height
+    -- The physics rails and rerailer use z=10 above the spline baseline.
+    -- The old sleeper_height + rail_height (15 SU by default) put Metrostroi's
+    -- rail graph 5 SU ABOVE the actual running surface, causing wheel jitter.
+    local zOffset = METROSTROI_RAIL_HEIGHT
     local points = RouteRenderPoints(route)
     local result = {}
 
@@ -1905,12 +1973,15 @@ function Builder.GetMEXTrackData(pos, roughForward, maxDistance, routeID)
         and roughForward:GetNormalized()
         or nil
 
-    for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
+    -- Spatial query instead of scanning EVERY generated rail in the map on
+    -- every Metrostroi rail lookup. Add half a maximum chord for its origin.
+    for _, ent in ipairs(ents.FindInSphere(pos, maxDistance + 256)) do
         local entRouteID = IsValid(ent)
             and ent:GetNW2Int("MEXRouteID", 0)
             or 0
 
         if IsValid(ent)
+            and ent:GetClass() == TRACK_CLASS
             and entRouteID > 0
             and (not routeID or entRouteID == routeID)
         then
