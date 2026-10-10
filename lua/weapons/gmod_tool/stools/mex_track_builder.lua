@@ -26,6 +26,14 @@ TOOL.ClientConVar = {
     smooth = "1",
     curve_tension = "0.45",
     segment_length = "48",
+    geometry_tolerance = "0.5",
+    geometry_max_length = "192",
+    fast_geometry = "1",
+    tunnel_type = "none",
+    tunnel_radius = "170",
+    tunnel_width = "360",
+    tunnel_height = "280",
+    tunnel_wall = "12",
     use_track_model = "1",
     track_model = "models/metrostroi/tracks/railroad16.mdl",
 }
@@ -64,6 +72,14 @@ local function ReadSettings(tool)
         smooth = tool:GetClientNumber("smooth", 1),
         curve_tension = tool:GetClientNumber("curve_tension", 0.45),
         segment_length = tool:GetClientNumber("segment_length", 48),
+        geometry_tolerance = tool:GetClientNumber("geometry_tolerance", 0.5),
+        geometry_max_length = tool:GetClientNumber("geometry_max_length", 192),
+        fast_geometry = tool:GetClientNumber("fast_geometry", 1),
+        tunnel_type = tool:GetClientInfo("tunnel_type"),
+        tunnel_radius = tool:GetClientNumber("tunnel_radius", 170),
+        tunnel_width = tool:GetClientNumber("tunnel_width", 360),
+        tunnel_height = tool:GetClientNumber("tunnel_height", 280),
+        tunnel_wall = tool:GetClientNumber("tunnel_wall", 12),
         use_track_model = tool:GetClientNumber("use_track_model", 1),
         track_model = tool:GetClientInfo("track_model"),
     }
@@ -194,11 +210,26 @@ function TOOL.BuildCPanel(panel)
 
     panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
     panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.1, 0.85, 2)
-    panel:NumSlider("Smooth piece length", "mex_track_builder_segment_length", 16, 256, 0)
-    panel:Help("Smaller = smoother curve. Default 48 SU; use 24-32 for tight bends.")
+    panel:NumSlider("Smooth spline sampling (SU)", "mex_track_builder_segment_length", 16, 256, 0)
+    panel:Help("The Metrostroi track graph remains densely sampled even if the physical geometry is optimized.")
+    panel:CheckBox("FAST static rail meshes (recommended)", "mex_track_builder_fast_geometry")
+    panel:NumSlider("Maximum physical chord length (SU)", "mex_track_builder_geometry_max_length", 64, 256, 0)
+    panel:NumSlider("Maximum spline deviation (SU)", "mex_track_builder_geometry_tolerance", 0.1, 2, 2)
+    panel:Help("Fewer physics bodies and cached GPU meshes reduce severe FPS drops and train judder. Keep tolerance near 0.5 SU for curves.")
+    panel:CheckBox("Use legacy Metrostroi track model (if FAST disabled)", "mex_track_builder_use_track_model")
+    panel:Help("Legacy mode repeats railroad16.mdl every 16 SU; this can be extremely slow on long lines.")
 
-    panel:CheckBox("Use Metrostroi track model", "mex_track_builder_use_track_model")
-    panel:Help("Smooth track uses the real Metrostroi railroad16.mdl tile. Long 1024-SU models are intentionally not used on curves.")
+    panel:Help("Tunnel construction")
+    local tunnel = panel:ComboBox("Tunnel type", "mex_track_builder_tunnel_type")
+    tunnel:AddChoice("None - surface rails", "none")
+    tunnel:AddChoice("Round - bored metro tunnel", "round")
+    tunnel:AddChoice("Rectangular - cut and cover", "rectangular")
+    tunnel:AddChoice("Wide - double-track-size profile", "wide")
+    panel:NumSlider("Round internal radius (SU)", "mex_track_builder_tunnel_radius", 140, 320, 0)
+    panel:NumSlider("Rectangular internal width (SU)", "mex_track_builder_tunnel_width", 300, 640, 0)
+    panel:NumSlider("Rectangular internal height (SU)", "mex_track_builder_tunnel_height", 230, 480, 0)
+    panel:NumSlider("Lining thickness (SU)", "mex_track_builder_tunnel_wall", 6, 32, 0)
+    panel:Help("Tunnel is generated with the rails on the same route. The lining has a hollow collision shape, not a solid block. Wide mode is a wider SINGLE-track tube in this first version.")
 
     panel:NumSlider("Track gauge - rail centres (SU)", "mex_track_builder_gauge", 60, 120, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
@@ -222,8 +253,8 @@ function TOOL.BuildCPanel(panel)
 
     panel:CheckBox("Add route to Metrostroi rail network", "mex_track_builder_network")
 
-    panel:Help("railroad16.mdl is repeated along the spline, so track pieces keep their normal proportions without the long-model fan effect.")
-    panel:Help("If a selected Metrostroi model is missing, the tool falls back to procedural rails using Metrostroi materials.")
+    panel:Help("Fast mode uses one cached procedural GPU mesh per material and static rail collisions. It does not spam hundreds of 16-SU ClientsideModels.")
+    panel:Help("Disable fast mode only to compare with the older detailed railroad16.mdl renderer.")
     panel:Help("At 85.8 SU, native Metrostroi tiles are not stretched. Only change this if you use custom rolling stock with a different wheel spacing.")
 
     panel:Button("Undo last step (R)", "mex_track_builder_undo")
