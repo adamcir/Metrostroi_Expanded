@@ -80,7 +80,18 @@ if not CLIENT then return end
 
 local railMaterial = Material("metrostroi/metro_railroad_001")
 if railMaterial:IsError() then railMaterial = Material("models/props_c17/metalladder003") end
-local sleeperMaterial = Material("models/props_c17/furniturefabric003a")
+-- Cloth material made the half-buried sleepers look like a continuous dark
+-- stripe on flatgrass; use an opaque timber material instead.
+local sleeperMaterial = Material("models/props_c17/furniturewood001a")
+if sleeperMaterial:IsError() then
+    sleeperMaterial = Material("models/props_debris/woodfloor01a")
+end
+
+-- Global per-client diagnostic/visual option, does not touch physics or saves.
+local cvDrawSleepers = CreateClientConVar(
+    "mex_track_builder_draw_sleepers", "1", true, false,
+    "Render procedural railway sleepers/ties (disable to diagnose dark track stripes)"
+)
 local tunnelMaterial = Material("models/props_wasteland/concretefloor010a")
 if tunnelMaterial:IsError() then tunnelMaterial = Material("models/props_c17/concretewall001a") end
 
@@ -148,12 +159,24 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
             Vector(half + 0.3, y + railWidth * 0.5, 10))
     end
 
+    -- The previous mesh put every sleeper between -sleeperHeight and z=0.
+    -- The flatgrass terrain is also at z=0: the top surfaces were co-planar
+    -- with the BSP floor and z-fought, creating a long dark "shadow" band.
+    -- Match the old fallback renderer instead: sleepers stand ABOVE z=0,
+    -- while their tops remain below the 10-SU physical rail-running surface.
+    local sleeperBase = 0.15
+    local sleeperTop = math.min(sleeperBase + sleeperHeight, 8.5)
+
+    -- Center ties within every section, never on section endpoints. Formerly
+    -- each adjacent entity drew a second tie at the same joint, creating more
+    -- overlap artifacts (especially on curves).
     local ties = math.max(1, math.ceil(length / sleeperSpacing))
-    for i = 0, ties do
-        local x = -half + i * length / ties
+    local step = length / ties
+    for i = 0, ties - 1 do
+        local x = -half + (i + 0.5) * step
         AddBox(sleepers,
-            Vector(x - sleeperWidth * 0.5, -sleeperLength * 0.5, -sleeperHeight),
-            Vector(x + sleeperWidth * 0.5, sleeperLength * 0.5, 0))
+            Vector(x - sleeperWidth * 0.5, -sleeperLength * 0.5, sleeperBase),
+            Vector(x + sleeperWidth * 0.5, sleeperLength * 0.5, sleeperTop))
     end
 
     if tunnelType == "round" then
@@ -188,7 +211,11 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
         if result then meshes[#meshes + 1] = {mesh = result, material = mat} end
     end
     Keep(rails, railMaterial)
-    Keep(sleepers, sleeperMaterial)
+    -- Separate mesh makes the diagnostic toggle free of regeneration.
+    local sleeperMesh = MakeMesh(sleepers)
+    if sleeperMesh then
+        meshes[#meshes + 1] = {mesh = sleeperMesh, material = sleeperMaterial, sleepers = true}
+    end
     Keep(tunnel, tunnelMaterial)
     return meshes
 end
@@ -207,7 +234,7 @@ function G.Draw(ent)
     local height = math.Clamp(ent:GetNW2Float("MEXTunnelHeight", 280), 230, 480)
     local wall = math.Clamp(ent:GetNW2Float("MEXTunnelWall", 12), 6, 32)
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
-    local key = string.format("%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f",
+    local key = string.format("zfight-fix-v2/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%.2f/%.2f/%.2f/%.2f",
         length, gauge, rw, spacing, sl, sw, sh, tunnelType, radius, width, height, wall)
     if ent.MEXFastKey ~= key then
         G.ClearClientMeshes(ent)
@@ -232,9 +259,12 @@ function G.Draw(ent)
     matrix:SetTranslation(ent:GetPos())
     matrix:SetAngles(ent:GetAngles())
     cam.PushModelMatrix(matrix)
+    local drawSleepers = not cvDrawSleepers or cvDrawSleepers:GetBool()
     for _, entry in ipairs(ent.MEXFastMeshes) do
-        render.SetMaterial(entry.material)
-        entry.mesh:Draw()
+        if not entry.sleepers or drawSleepers then
+            render.SetMaterial(entry.material)
+            entry.mesh:Draw()
+        end
     end
     cam.PopModelMatrix()
 end
