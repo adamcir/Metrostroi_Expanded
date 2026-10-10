@@ -17,6 +17,12 @@ function G.SafeTunnelType(name)
     return G.TunnelTypes[name] and name or "none"
 end
 
+function G.SafeThirdRailSide(side)
+    side = tostring(side or "outside")
+    return (side == "left" or side == "right" or side == "both")
+        and side or "outside"
+end
+
 local function BoxConvex(mins, maxs)
     return {
         Vector(mins.x, mins.y, mins.z), Vector(mins.x, mins.y, maxs.z),
@@ -87,22 +93,70 @@ end
 
 if not CLIENT then return end
 
-local railMaterial = Material("metrostroi/metro_railroad_001")
-if railMaterial:IsError() then railMaterial = Material("models/props_c17/metalladder003") end
--- Cloth material made the half-buried sleepers look like a continuous dark
--- stripe on flatgrass; use an opaque timber material instead.
-local sleeperMaterial = Material("models/props_c17/furniturewood001a")
-if sleeperMaterial:IsError() then
-    sleeperMaterial = Material("models/props_debris/woodfloor01a")
+-- The stock Metrostroi/Track Pack textures are REAL content paths (see
+-- models/metrostroi_tunnels/*.vmt in original Metrostroi).  Build our own
+-- visible UnlitGeneric materials from installed VTFs: imported VertexLitGeneric
+-- VMTs can become pitch-black on night/unlit construction maps, and missing
+-- workshop textures previously caused pink checkerboard sleepers/rails.
+-- We NEVER distribute the original artists' files or assume they are mounted.
+local function ExistingTexture(paths)
+    for _, path in ipairs(paths) do
+        if file.Exists("materials/" .. path .. ".vtf", "GAME") then
+            return path
+        end
+    end
+    return "vgui/white" -- engine built-in, not a missing-file texture
 end
 
--- Global per-client diagnostic/visual option, does not touch physics or saves.
+local function SolidMaterial(name, texturePaths, tint)
+    local texture = ExistingTexture(texturePaths)
+    local mat = CreateMaterial(name, "UnlitGeneric", {
+        ["$basetexture"] = texture,
+        ["$color2"] = tint,
+        ["$nocull"] = "0",
+    })
+    if mat and not mat:IsError() then return mat end
+    return Material("models/debug/debugwhite")
+end
+
+local railMaterial = SolidMaterial("mex_track_rail_metro_v3", {
+    "models/metrostroi_tunnels/railroad_001",
+    "metrostroi/metro_railroad_001",
+}, "[0.75 0.75 0.75]")
+local sleeperMaterial = SolidMaterial("mex_track_tie_metro_v3", {
+    "models/metrostroi_tunnels/railroad_002",
+    "models/metrostroi_tunnels/railroad_001b",
+}, "[0.58 0.58 0.58]")
+local tunnelMaterial = SolidMaterial("mex_track_tunnel_metro_v3", {
+    "models/metrostroi_tunnels/tunnelwall_002",
+    "models/metrostroi_tunnels/tunnelwall_001",
+    "metro/metroconcrete001",
+}, "[0.60 0.60 0.60]")
+local tunnelSeamMaterial = SolidMaterial("mex_track_tunnel_ring_v3", {
+    "models/metrostroi_tunnels/tunnelwall_003",
+    "models/metrostroi_tunnels/tunnelwall_001",
+}, "[0.42 0.42 0.42]")
+local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v3", {
+    "models/metrostroi_tunnels/tunnelfloor_001",
+    "models/metrostroi_tunnels/tunnelfloor_002",
+}, "[0.40 0.40 0.40]")
+local contactMaterial = SolidMaterial("mex_track_contact_metro_v3", {
+    "metrostroi/metro_contactrail_001",
+    "models/metrostroi_tunnels/railroad_001",
+}, "[0.80 0.72 0.59]")
+local contactCoverMaterial = SolidMaterial("mex_track_contact_cover_v3", {
+    "models/metrostroi_tunnels/railroad_006c",
+    "models/metrostroi_tunnels/railroad_001b",
+}, "[0.30 0.30 0.28]")
+local insulatorMaterial = SolidMaterial("mex_track_contact_insulator_v3", {
+    "models/metrostroi_tunnels/railroad_008",
+}, "[0.52 0.47 0.34]")
+
+-- Global visual toggle.  It never changes the saved route or collisions.
 local cvDrawSleepers = CreateClientConVar(
     "mex_track_builder_draw_sleepers", "1", true, false,
-    "Render procedural railway sleepers/ties (disable to diagnose dark track stripes)"
+    "Render procedural railway sleepers/ties"
 )
-local tunnelMaterial = Material("models/props_wasteland/concretefloor010a")
-if tunnelMaterial:IsError() then tunnelMaterial = Material("models/props_c17/concretewall001a") end
 
 local function AddQuad(vertices, a, b, c, d, doubleSided)
     local normal = (b - a):Cross(c - a)
