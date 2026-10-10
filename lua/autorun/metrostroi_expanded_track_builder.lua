@@ -333,7 +333,8 @@ if CLIENT then
     end
 
     function TrackEntity:Draw()
-        if self:GetNW2Bool("MEXRigidSection", false)
+        if (self:GetNW2Bool("MEXRigidSection", false)
+            or self:GetNW2Bool("MEXAutoNativeModels", true))
             and Builder.Geometry.DrawPackModel(self) then
             -- Real Metrostroi / Track Pack .mdl never includes the separate
             -- contact rail; draw it in one cached supplemental GPU mesh.
@@ -712,6 +713,8 @@ local function CopySettings(settings)
         tunnel_height = math.Clamp(tonumber(settings.tunnel_height) or 280, 230, 480),
         tunnel_wall = math.Clamp(tonumber(settings.tunnel_wall) or 12, 6, 32),
         tunnel_style = tostring(settings.tunnel_style) == "plain" and "plain" or "metrostroi",
+        auto_native_models = settings.auto_native_models ~= false
+            and tonumber(settings.auto_native_models or 1) ~= 0,
         -- Side conductor rail is separate from the two running rails; rendering
         -- it does not create a conflicting wheel/bogey collision surface.
         third_rail = settings.third_rail ~= false and tonumber(settings.third_rail or 1) ~= 0,
@@ -928,6 +931,7 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     ent:SetNW2Float("MEXTunnelHeight", settings.tunnel_height)
     ent:SetNW2Float("MEXTunnelWall", settings.tunnel_wall)
     ent:SetNW2String("MEXTunnelStyle", settings.tunnel_style)
+    ent:SetNW2Bool("MEXAutoNativeModels", settings.auto_native_models)
     ent:SetNW2Bool("MEXThirdRail", settings.third_rail)
     ent:SetNW2String("MEXThirdRailSide", settings.third_rail_side)
     ent:SetNW2Float("MEXThirdRailOffset", settings.third_rail_offset)
@@ -968,6 +972,42 @@ function Builder.BuildGeometryPoints(points, settings)
     settings = CopySettings(settings)
     if settings.rigid_section then
         return #points >= 2 and {points[1], points[#points]} or points
+    end
+    -- Place AUTHENTIC native-length tunnel MDLs on actually straight routes.
+    -- We only resample the physical geometry; Metrostroi's network remains
+    -- the original fine spline. Never snap a curved spline to a prefab.
+    if settings.auto_native_models and settings.tunnel_type ~= "none"
+        and #points >= 2 then
+        local first, last = points[1], points[#points]
+        local chord = last - first
+        local length = chord:Length()
+        local nativeSize = settings.track_count == 2 and 1024 or 256
+        if length >= nativeSize and length > 0 then
+            local direction = chord / length
+            local straight = true
+            local previousAlong = -1
+            for _, point in ipairs(points) do
+                local along = (point - first):Dot(direction)
+                local nearest = first + direction * along
+                if point:DistToSqr(nearest) > settings.geometry_tolerance ^ 2
+                    or along < previousAlong - 0.25
+                then
+                    straight = false
+                    break
+                end
+                previousAlong = along
+            end
+            if straight then
+                local nativePoints = {first}
+                local d = nativeSize
+                while d < length - 0.5 do
+                    nativePoints[#nativePoints + 1] = first + direction * d
+                    d = d + nativeSize
+                end
+                nativePoints[#nativePoints + 1] = last
+                return nativePoints
+            end
+        end
     end
     if #points < 3 then return points end
     local result = {points[1]}
