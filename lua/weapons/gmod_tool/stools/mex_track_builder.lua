@@ -36,6 +36,13 @@ TOOL.ClientConVar = {
     tunnel_wall = "12",
     use_track_model = "1",
     track_model = "models/metrostroi/tracks/railroad16.mdl",
+    track_count = "1",
+    track_spacing = "240",
+    rigid_section = "0",
+    rigid_length = "256",
+    pack_model = "",
+    pack_z_offset = "0",
+    model_root = "models",
 }
 
 if CLIENT then
@@ -82,6 +89,12 @@ local function ReadSettings(tool)
         tunnel_wall = tool:GetClientNumber("tunnel_wall", 12),
         use_track_model = tool:GetClientNumber("use_track_model", 1),
         track_model = tool:GetClientInfo("track_model"),
+        track_count = tool:GetClientNumber("track_count", 1),
+        track_spacing = tool:GetClientNumber("track_spacing", 240),
+        rigid_section = tool:GetClientNumber("rigid_section", 0),
+        rigid_length = tool:GetClientNumber("rigid_length", 256),
+        pack_model = tool:GetClientInfo("pack_model"),
+        pack_z_offset = tool:GetClientNumber("pack_z_offset", 0),
     }
 end
 
@@ -102,7 +115,8 @@ function TOOL:LeftClick(trace)
         pos, anchor = MEXTrackBuilder.SnapPoint(
             pos,
             self:GetClientNumber("snap_distance", 32),
-            self:GetClientNumber("snap_node_spacing", 192)
+            self:GetClientNumber("snap_node_spacing", 192),
+            ReadSettings(self)
         )
     end
 
@@ -221,6 +235,95 @@ function TOOL.BuildCPanel(panel)
     panel:CheckBox("Use legacy Metrostroi track model (if FAST disabled)", "mex_track_builder_use_track_model")
     panel:Help("Legacy mode repeats railroad16.mdl every 16 SU; this can be extremely slow on long lines.")
 
+    panel:Help("Track layout / connections")
+    local trackCount = panel:ComboBox("Track count", "mex_track_builder_track_count")
+    trackCount:AddChoice("Single track", "1")
+    trackCount:AddChoice("DOUBLE - two independent rail paths", "2")
+    panel:NumSlider("DOUBLE track centre spacing (SU)", "mex_track_builder_track_spacing", 180, 400, 0)
+    panel:Help("Each double-track tunnel has two separate nodes at each end AND along both rails. Clicking either node with Double selected snaps the entire next double tunnel to the same centerline.")
+    panel:Help("Single selected + clicking a double node creates a single line attached to that lane. A full single/double transition is NOT yet generated.")
+
+    panel:Help("Rigid straight section / station")
+    panel:CheckBox("Rigid section (cannot curve)", "mex_track_builder_rigid_section")
+    panel:NumSlider("Rigid section length (SU; 0 = click distance)", "mex_track_builder_rigid_length", 0, 1024, 0)
+    panel:Help("A rigid route consists of exactly two endpoints. After second LMB, use RMB to finish. New sections can attach to either end without bending the saved station. Set length 64/256/1024 to match a Track Pack straight model.")
+
+    panel:Help("Real installed Track Pack .mdl (rigid sections only)")
+    panel:TextEntry("Track Pack model path", "mex_track_builder_pack_model")
+    panel:NumSlider("Pack MDL height adjustment (SU)", "mex_track_builder_pack_z_offset", -128, 128, 0)
+    panel:TextEntry("Model scan root (GAME path)", "mex_track_builder_model_root")
+
+    local foundModels = panel:ComboBox("Detected Track Pack models", "mex_track_builder_pack_model")
+    local scanButton = vgui.Create("DButton", panel)
+    scanButton:SetText("Scan installed rail / tunnel models")
+    scanButton:SetTall(26)
+    scanButton.DoClick = function()
+        -- Scan only when requested. Searching every mounted .mdl per frame
+        -- used to introduce huge lag on workshop-heavy installations.
+        local rootCvar = GetConVar("mex_track_builder_model_root")
+        local root = string.lower(rootCvar and rootCvar:GetString() or "models")
+        root = string.gsub(root, "\\\\", "/")
+        root = string.gsub(root, "/+$", "")
+        if not string.match(root, "^models[%w_/%-]*$") then
+            scanButton:SetText("Invalid model root (must start with models)")
+            return
+        end
+        local queue = {root}
+        local seen, found = {}, {}
+        local visited = 0
+        -- Never read outside the mounted GAME paths; includes Workshop addons.
+        while #queue > 0 and visited < 500 and #found < 250 do
+            local dir = table.remove(queue, 1)
+            if not seen[dir] then
+                seen[dir] = true
+                visited = visited + 1
+                local files, folders = file.Find(dir .. "/*", "GAME")
+                for _, filename in ipairs(files or {}) do
+                    local path = dir .. "/" .. filename
+                    local lower = string.lower(path)
+                    if string.EndsWith(lower, ".mdl")
+                        and (string.find(lower, "rail", 1, true)
+                        or string.find(lower, "metro", 1, true)
+                        or string.find(lower, "tunnel", 1, true)
+                        or string.find(lower, "arch", 1, true)
+                        or string.find(lower, "_ns", 1, true)
+                        or string.find(lower, "/rc", 1, true))
+                        and util.IsValidModel(path)
+                    then
+                        found[#found + 1] = path
+                        if #found >= 250 then break end
+                    end
+                end
+                for _, folder in ipairs(folders or {}) do
+                    local name = string.lower(folder)
+                    local broad = dir == "models"
+                    if not broad
+                        or string.find(name, "metro", 1, true)
+                        or string.find(name, "track", 1, true)
+                        or string.find(name, "rail", 1, true)
+                        or string.find(name, "tunnel", 1, true)
+                        or string.find(name, "skay", 1, true)
+                        or string.find(name, "alex", 1, true)
+                    then
+                        queue[#queue + 1] = dir .. "/" .. folder
+                    end
+                end
+            end
+        end
+        table.sort(found)
+        foundModels:Clear()
+        for _, path in ipairs(found) do
+            foundModels:AddChoice(path, path)
+        end
+        scanButton:SetText(string.format("Found %d models (%d folders scanned)", #found, visited))
+        if #found == 0 then
+            panel:Help("No matching models found. Set a more specific scan root, or paste the exact .mdl path from GMod's model browser.")
+        end
+    end
+    panel:AddItem(scanButton)
+    panel:Help("Track Pack Workshop 3536801478 is OPTIONAL and must be mounted. This uses actual files discovered in your installed GMod content; no fake model names are hardcoded. Non-rigid curves still use generated rails/tunnels.")
+    panel:Help("A selected model must have approximately the same native length as the rigid section. Other models fall back to generated geometry; curved .mdl pieces are not stretched.")
+
     panel:Help("Tunnel construction")
     local tunnel = panel:ComboBox("Tunnel type", "mex_track_builder_tunnel_type")
     tunnel:AddChoice("None - surface rails", "none")
@@ -231,7 +334,7 @@ function TOOL.BuildCPanel(panel)
     panel:NumSlider("Rectangular internal width (SU)", "mex_track_builder_tunnel_width", 300, 640, 0)
     panel:NumSlider("Rectangular internal height (SU)", "mex_track_builder_tunnel_height", 230, 480, 0)
     panel:NumSlider("Lining thickness (SU)", "mex_track_builder_tunnel_wall", 6, 32, 0)
-    panel:Help("Tunnel is generated with the rails on the same route. The lining has a hollow collision shape, not a solid block. Wide mode is a wider SINGLE-track tube in this first version.")
+    panel:Help("The shell follows the generated route. Double automatically widens the tunnel sufficiently for two running rails; a fitted Track Pack model replaces only the visible rigid section.")
 
     panel:NumSlider("Track gauge - rail centres (SU)", "mex_track_builder_gauge", 60, 120, 1)
     panel:NumSlider("Fallback rail width", "mex_track_builder_rail_width", 1, 12, 1)
