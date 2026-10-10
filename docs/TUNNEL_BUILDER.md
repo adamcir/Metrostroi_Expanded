@@ -36,6 +36,20 @@ The rail/tunnel geometry is reconstructed after map cleanup and normal restart. 
 - This cannot dig a hole into BSP terrain or exceed Source's map boundaries. Build within an empty / compatible map, or use separate editable terrain later.
 - Long routes and closely spaced tunnel geometry can still strain Source physics, especially with many train cars. FPS may also drop because of other addons, heavy physics, lights or expensive Metrostroi simulations. Fast meshes help but **do not guarantee fixed FPS**.
 
+## Fixing a dark stripe next to surface rails
+
+On flatgrass the original procedural ties were buried at z <= 0,
+with their top faces exactly co-planar with the map floor.
+That caused depth-buffer fighting and repeated dark patterns along the track.
+Ties are now drawn *above* the spline baseline. We also remove duplicate
+ties at segment ends and disable projected shadows of the hidden backing MDL.
+
+To isolate similar artifacts, toggle client-side console setting
+`mex_track_builder_draw_sleepers 0` (hide ties) or
+`mex_track_builder_draw_sleepers 1` (show ties).
+The Track Builder settings panel exposes the same checkbox.
+This changes only the visuals; it does not affect train physics.
+
 ## Quick verification in GMod
 
 1. Test on a flat empty map, with a short 1000–2000 SU straight route using **None**.
