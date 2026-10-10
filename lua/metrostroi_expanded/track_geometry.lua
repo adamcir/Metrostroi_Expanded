@@ -23,6 +23,26 @@ function G.SafeThirdRailSide(side)
         and side or "outside"
 end
 
+-- Calculate how much shell is needed so a protective contact-rail cover
+-- doesn't protrude THROUGH the bore at low installation height.
+-- A perfect circular double-track bore needs to be very large; wide or
+-- rectangular profiles are recommended for double-track construction.
+function G.EffectiveBore(radius, width, trackCount, spacing, contactEnabled, contactOffset, contactHeight)
+    local count = trackCount == 2 and 2 or 1
+    local halfGap = count == 2 and spacing * 0.5 or 0
+    local requiredOutside = halfGap + (contactEnabled and (contactOffset + 22) or 135)
+    local minWidth = requiredOutside * 2
+    width = math.max(width, minWidth)
+    if count == 2 then radius = math.max(radius, halfGap + 135) end
+    if contactEnabled then
+        -- Cross-section is circle center (radius-55); ring meets guarded
+        -- power rail around y=requiredOutside, z=(height+14).
+        local q = 55 + contactHeight + 14
+        radius = math.max(radius, (requiredOutside * requiredOutside + q * q) / (2 * q) + 10)
+    end
+    return radius, width
+end
+
 local function BoxConvex(mins, maxs)
     return {
         Vector(mins.x, mins.y, mins.z), Vector(mins.x, mins.y, maxs.z),
@@ -35,7 +55,8 @@ end
 -- A static rail entity has two narrow collision hulls, never a wide invisible
 -- bed that catches the train bogeys. Extend ends slightly to bridge tiny gaps
 -- between adjacent chords (the former end-to-end butt joint caused bumps).
-function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, height, wall, trackCount, trackSpacing)
+function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, height, wall,
+                            trackCount, trackSpacing, thirdRail, thirdRailSide, thirdRailOffset, thirdRailHeight)
     local half = length * 0.5 + 0.6
     local halfRail = railWidth * 0.5
     trackCount = trackCount == 2 and 2 or 1
@@ -57,10 +78,10 @@ function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, 
     width = math.Clamp(tonumber(width) or 360, 300, 640)
     height = math.Clamp(tonumber(height) or 280, 230, 480)
     wall = math.Clamp(tonumber(wall) or 12, 6, 32)
+    radius, width = G.EffectiveBore(radius, width, trackCount, trackSpacing,
+        thirdRail == true, tonumber(thirdRailOffset) or 112, tonumber(thirdRailHeight) or 20)
 
     if tunnelType == "round" then
-        -- A double-track bore must clear both cars.
-        if trackCount == 2 then radius = math.max(radius, trackSpacing * 0.5 + 135) end
         local zCenter = radius - 55 -- tunnel invert is 55 SU BELOW the rail base
         -- 12 convex rings, not per-triangle physics. The floor is below the
         -- running rails, giving Metrostroi bogeys and wheels free clearance.
@@ -78,7 +99,6 @@ function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, 
             convexes[#convexes + 1] = points
         end
     else
-        if trackCount == 2 then width = math.max(width, trackSpacing + 270) end
         if tunnelType == "wide" then width = math.max(width, 460) end
         local y = width * 0.5
         local bottom = -55
@@ -494,12 +514,9 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
         end
     end
 
-    if tunnelType ~= "none" and trackCount == 2 then
-        if tunnelType == "round" then
-            radius = math.max(radius, trackSpacing * 0.5 + 135)
-        else
-            width = math.max(width, trackSpacing + 270)
-        end
+    if tunnelType ~= "none" then
+        radius, width = G.EffectiveBore(radius, width, trackCount, trackSpacing,
+            thirdRail, contactOffset, contactHeight)
     end
     if tunnelType ~= "none" then
         -- The ordinary map terrain at z=0 used to be visible through the bore.
@@ -523,7 +540,6 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     end
 
     if tunnelType == "round" then
-        if trackCount == 2 then radius = math.max(radius, trackSpacing * 0.5 + 135) end
         local zCenter = radius - 55
         -- Both sides of the lining are visible (viewed from inside/outside).
         for i = 0, 31 do
@@ -553,7 +569,6 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
             end
         end
     elseif tunnelType ~= "none" then
-        if trackCount == 2 then width = math.max(width, trackSpacing + 270) end
         if tunnelType == "wide" then width = math.max(width, 460) end
         local y, bottom = width * 0.5, -55
         AddBox(tunnel, Vector(-half, -y - wall, bottom), Vector(half, -y, height))
@@ -620,9 +635,9 @@ function G.Draw(ent)
     local contactSide = G.SafeThirdRailSide(ent:GetNW2String("MEXThirdRailSide", "outside"))
     local contactOffset = ent:GetNW2Float("MEXThirdRailOffset", 112)
     local contactHeight = ent:GetNW2Float("MEXThirdRailHeight", 20)
-    if doubleBore then
-        if tunnelType == "round" then radius = math.max(radius, trackSpacing * 0.5 + 135) end
-        if tunnelType ~= "none" and tunnelType ~= "round" then width = math.max(width, trackSpacing + 270) end
+    if tunnelType ~= "none" then
+        radius, width = G.EffectiveBore(radius, width, trackCount, trackSpacing,
+            thirdRail, contactOffset, contactHeight)
     end
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
     local key = string.format(
