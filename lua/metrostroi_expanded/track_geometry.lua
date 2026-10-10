@@ -220,8 +220,11 @@ function G.Draw(ent)
         local roof = tunnelType == "round" and (2 * radius - 55 + wall)
             or (tunnelType ~= "none" and height + wall)
             or 24
-        ent:SetRenderBounds(Vector(-length * 0.5 - 16, -halfWidth - 16, -72),
-                            Vector(length * 0.5 + 16, halfWidth + 16, roof + 16))
+        -- Older GMod branches/models may not expose this method here.
+        if ent.SetRenderBounds then
+            ent:SetRenderBounds(Vector(-length * 0.5 - 16, -halfWidth - 16, -72),
+                                Vector(length * 0.5 + 16, halfWidth + 16, roof + 16))
+        end
     end
 
     if not ent.MEXFastMeshes then return end
