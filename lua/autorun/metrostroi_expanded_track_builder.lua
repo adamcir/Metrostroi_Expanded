@@ -116,7 +116,9 @@ function TrackEntity:Initialize()
         self:GetNW2Float("MEXTunnelRadius", 170),
         self:GetNW2Float("MEXTunnelWidth", 360),
         self:GetNW2Float("MEXTunnelHeight", 280),
-        self:GetNW2Float("MEXTunnelWall", 12)
+        self:GetNW2Float("MEXTunnelWall", 12),
+        self:GetNW2Int("MEXTrackCount", 1),
+        self:GetNW2Float("MEXTrackSpacing", 240)
     )
 
     self:PhysicsInitMultiConvex(convexes)
@@ -329,7 +331,12 @@ if CLIENT then
     end
 
     function TrackEntity:Draw()
-        if self:GetNW2Bool("MEXFastGeometry", true) then
+        if self:GetNW2Bool("MEXRigidSection", false)
+            and Builder.Geometry.DrawPackModel(self) then
+            return
+        end
+        if self:GetNW2Bool("MEXFastGeometry", true)
+            or self:GetNW2Int("MEXTrackCount", 1) == 2 then
             Builder.Geometry.Draw(self)
             return
         end
@@ -699,6 +706,12 @@ local function CopySettings(settings)
         -- physical entities on long straight and gently curved sections.
         geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
         geometry_max_length = math.Clamp(tonumber(settings.geometry_max_length) or 192, 64, 256),
+        track_count = tonumber(settings.track_count) == 2 and 2 or 1,
+        track_spacing = math.Clamp(tonumber(settings.track_spacing) or 240, 180, 400),
+        rigid_section = settings.rigid_section == true or tonumber(settings.rigid_section or 0) == 1,
+        rigid_length = math.Clamp(tonumber(settings.rigid_length) or 0, 0, 1024),
+        pack_model = string.sub(tostring(settings.pack_model or ""), 1, 240),
+        pack_z_offset = math.Clamp(tonumber(settings.pack_z_offset) or 0, -128, 128),
     }
 end
 
@@ -896,6 +909,19 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex)
     ent:SetNW2Float("MEXTunnelWidth", settings.tunnel_width)
     ent:SetNW2Float("MEXTunnelHeight", settings.tunnel_height)
     ent:SetNW2Float("MEXTunnelWall", settings.tunnel_wall)
+    ent:SetNW2Int("MEXTrackCount", settings.track_count)
+    ent:SetNW2Float("MEXTrackSpacing", settings.track_spacing)
+    ent:SetNW2Bool("MEXRigidSection", settings.rigid_section)
+    -- Only mounted models with real model metadata are accepted.
+    local packModel = settings.pack_model
+    if not settings.rigid_section
+        or not string.match(packModel, "^models/[%w_/%-%.]+%.mdl$")
+        or not util.IsValidModel(packModel)
+    then
+        packModel = ""
+    end
+    ent:SetNW2String("MEXPackModel", packModel)
+    ent:SetNW2Float("MEXPackZOffset", settings.pack_z_offset)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
@@ -917,7 +943,7 @@ end
 -- spikes and unstable wheel contacts on long manually built routes.
 function Builder.BuildGeometryPoints(points, settings)
     settings = CopySettings(settings)
-    if #points < 3 then return points end
+    if settings.rigid_section or #points < 3 then return points end
     local result = {points[1]}
     local i = 1
     local maxLength = settings.geometry_max_length
@@ -1141,17 +1167,26 @@ end
 
 local function NetworkPoints(route)
     local settings = CopySettings(route.settings)
-    -- The physics rails and rerailer use z=10 above the spline baseline.
-    -- The old sleeper_height + rail_height (15 SU by default) put Metrostroi's
-    -- rail graph 5 SU ABOVE the actual running surface, causing wheel jitter.
-    local zOffset = METROSTROI_RAIL_HEIGHT
     local points = RouteRenderPoints(route)
     local result = {}
-
-    for _, point in ipairs(points) do
-        result[#result + 1] = point + Vector(0, 0, zOffset)
+    if #points < 2 then return result end
+    local tracks = settings.track_count
+    for lane = 1, tracks do
+        local path = {}
+        local sideways = tracks == 2 and (lane == 1 and -settings.track_spacing * 0.5 or settings.track_spacing * 0.5) or 0
+        for i, point in ipairs(points) do
+            local previous = points[math.max(1, i - 1)]
+            local following = points[math.min(#points, i + 1)]
+            local tangent = following - previous
+            if tangent:LengthSqr() < 0.00001 then tangent = Vector(1, 0, 0) end
+            tangent:Normalize()
+            local right = tangent:Cross(Vector(0, 0, 1))
+            if right:LengthSqr() < 0.001 then right = Vector(0, -1, 0) end
+            right:Normalize()
+            path[#path + 1] = point + right * sideways + Vector(0, 0, METROSTROI_RAIL_HEIGHT)
+        end
+        result[#result + 1] = path
     end
-
     return result
 end
 
@@ -1174,10 +1209,11 @@ function Builder.RebuildMetrostroiNetwork(notifyPly)
 
     for _, route in ipairs(Builder.Routes) do
         if route.network ~= false then
-            local points = NetworkPoints(route)
-            if #points >= 2 then
-                maxPathID = maxPathID + 1
-                merged[maxPathID] = points
+            for _, points in ipairs(NetworkPoints(route)) do
+                if #points >= 2 then
+                    maxPathID = maxPathID + 1
+                    merged[maxPathID] = points
+                end
             end
         end
     end
@@ -1199,7 +1235,7 @@ function Builder.RebuildMetrostroiNetwork(notifyPly)
     end
 end
 
-function Builder.SnapPoint(pos, maxDistance, spacing)
+function Builder.SnapPoint(pos, maxDistance, spacing, settings)
     if not isvector(pos) then return pos, nil end
 
     maxDistance = math.Clamp(tonumber(maxDistance) or 24, 1, 256)
@@ -1207,17 +1243,20 @@ function Builder.SnapPoint(pos, maxDistance, spacing)
     local best
     local bestDistSqr = maxDistance * maxDistance
 
+    local wantDouble = istable(settings) and tonumber(settings.track_count) == 2
     for _, node in ipairs(CollectTrackSnapNodes(spacing)) do
         local distSqr = pos:DistToSqr(node.pos)
 
-        if distSqr < bestDistSqr then
+        if (not wantDouble or node.track_count == 2) and distSqr < bestDistSqr then
             best = node
             bestDistSqr = distSqr
         end
     end
 
     if best then
-        return best.pos, best
+        -- For DOUBLE, clicking either of its two rail nodes snaps the new
+        -- tunnel CENTERLINE. For SINGLE, the same click targets that one lane.
+        return wantDouble and best.center_pos or best.pos, best
     end
 
     return pos, nil
@@ -1228,12 +1267,16 @@ function Builder.AddPoint(ply, pos, settings, anchor)
 
     local active = Builder.Active[ply]
     if not active then
+        local newSettings = CopySettings(settings)
+        if istable(anchor) and newSettings.track_count == 2 and anchor.track_count == 2 then
+            newSettings.track_spacing = anchor.track_spacing
+        end
         active = {
             points = {pos},
             anchors = {},
             entities = {},
             render_points = {},
-            settings = CopySettings(settings),
+            settings = newSettings,
         }
 
         if istable(anchor) and isvector(anchor.dir) then
@@ -1247,7 +1290,37 @@ function Builder.AddPoint(ply, pos, settings, anchor)
         return true
     end
 
+    if active.settings.rigid_section and #active.points >= 2 then
+        ply:ChatPrint("[MEX Track Builder] Rigid station section has two endpoints. RMB saves it; start a new route to continue.")
+        return false
+    end
+
+    -- A rigid station is one perfectly straight structural element. A fixed
+    -- length is optional; snapping to an existing endpoint takes priority.
     local previous = active.points[#active.points]
+    if active.settings.rigid_section
+        and active.settings.rigid_length > 0
+        and #active.points == 1
+        and not (istable(anchor) and anchor.kind == "end")
+    then
+        local delta = pos - previous
+        if delta:LengthSqr() > 0.0001 then
+            local dir = delta:GetNormalized()
+            local locked = AnchorDirection(active.anchors[1])
+            if locked and math.abs(locked:Dot(dir)) > 0.7 then
+                if locked:Dot(dir) < 0 then locked = -locked end
+                dir = locked
+            end
+            pos = previous + dir * active.settings.rigid_length
+        end
+    end
+
+    if active.settings.track_count == 2 and istable(anchor) and anchor.track_count == 2
+        and math.abs(active.settings.track_spacing - anchor.track_spacing) > 0.1 then
+        ply:ChatPrint("[MEX Track Builder] Double-track spacing mismatch. Start a new route at matching spacing.")
+        return false
+    end
+
     if previous:DistToSqr(pos) < 64 then
         return false
     end
