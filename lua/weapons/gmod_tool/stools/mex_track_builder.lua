@@ -116,7 +116,12 @@ function TOOL:LeftClick(trace)
     then
         pos, anchor = MEXTrackBuilder.SnapPoint(
             pos,
-            self:GetClientNumber("snap_distance", 32),
+            -- End-node markers sit BETWEEN each pair of rails. Aiming at
+            -- one rail is 42.9 SU off-center; allow sufficient tolerance for
+            -- reliable double-to-double joins even with the old 32-SU config.
+            self:GetClientNumber("track_count", 1) == 2
+                and math.max(64, self:GetClientNumber("snap_distance", 32))
+                or self:GetClientNumber("snap_distance", 32),
             self:GetClientNumber("snap_node_spacing", 192),
             ReadSettings(self)
         )
