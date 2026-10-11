@@ -4,40 +4,39 @@
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
-## Track & Tunnel Builder (prototype)
+## Track & Tunnel Builder (native Metrostroi models)
 
-The **Tools → Metrostroi Expanded → Track Builder** tool lets you choose
-surface track, circular bored, rectangular or wide tunnel profiles. **Single
-or real DOUBLE track** is supported: double routes have two physical rails
-per lane, two independent Metrostroi path lines and two snap nodes at both
-ends. Double-to-double snapping connects the tunnels on their common
-centerline and inherits the opening/track spacing.
+**Tools → Metrostroi Expanded → Track Builder** places authentic, installed
+Metrostroi tunnel and railway models. New routes default to **Original models
+ONLY** and will **refuse unsupported angles or segment lengths** instead of
+creating synthetic grey test tunnels.
 
-Enable **Rigid section** to create a straight non-bendable station module.
-A native **Metrostroi tunnel64/256/1024 .mdl** can be used automatically on
-straight segments of an exact supported length; third-party **Track Pack**
-models can be selected in the on-demand installed-model browser for rigid
-modules. Straight routes favor the largest native 1024-SU pieces, then 256/64.
-Curved sections remain procedural, now with tiled Metrostroi concrete,
-wall-mounted dark cable bundles with clamps, roof beams, proper steel
-rail profiles and fasteners. These meshes avoid projecting stock MDL-specific
-texture atlases onto plain cuboids, while mounted original prefabs retain
-their own genuine materials.
+- Straight sections: native `tunnel64/256/1024*.mdl` or
+  `railroad1024/4096.mdl`, matched to their authored length.
+- Curved sections (experimental): calibrated stock
+  `tunnel3072/4096/8192_turn1.mdl` where the requested arc, level,
+  direction and endpoint tangents fit the corresponding original prefab.
+  Unsupported curves are rejected in the native-only mode.
+- Single/double track end nodes, route saves, native-track graph and a
+  configurable minimum curve radius remain available.
+- **No duplicate third rail:** the original Metrostroi prefab already has
+  its running rails, sleepers and conductor rail.
+- **Genuine collision:** the original stock `.phy` is spawned as an
+  invisible, frozen collision proxy at the identical pose as its visual
+  `.mdl`. Its native collision shape replaces MEX's rough boxes instead
+  of stacking physics bodies. This also lets contact rails and sleepers
+  participate in collisions, subject to the original model's PHY mesh.
+- New native-only routes lift **both the model and its collider by 5 SU**
+  while maintaining aligned track network/rerail coordinates. Historical
+  saved tracks keep their earlier alignment.
 
-A covered **third (contact) rail** is now part of each route by default:
-the rail, insulating supports and protective guard render on either side
-(or the OUTSIDE of both tracks). Side, offset and mounting height are
-configurable. Electrical pickup is not yet simulated by this new geometry.
-Tunnel dimensions, contact rails and route settings are saved along with
-the line.
+Older saved procedural tracks remain loadable, but the new UI is model-first.
+Original curved models and their compiled physics have not yet been validated
+through a live GMod train test. Performance and clearance should be tested
+with Ečs and 81-717 before building a full network.
 
-The fast renderer uses cached procedural meshes and reduces the number of
-static rail physics entities while keeping the Metrostroi rail graph dense.
-This targets severe FPS spikes and unstable bogey contact on long constructed
-lines, but **gameplay validation is still required**.
+See [Tunnel Builder documentation](docs/TUNNEL_BUILDER.md).
 
-See [Tunnel Builder documentation](docs/TUNNEL_BUILDER.md) for the full
-description, limitations and testing procedure.
 
 ## Passenger Seats
 
