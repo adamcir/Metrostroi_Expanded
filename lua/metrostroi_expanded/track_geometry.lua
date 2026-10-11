@@ -79,6 +79,147 @@ function G.EffectiveBore(radius, width, trackCount, spacing, contactEnabled, con
     return radius, width
 end
 
+-- Experimental original curved model sections. *turn1* is the first
+-- section of a 90-degree Metro curve; authored on +Y from its start. These
+-- first parts can be rotated and repeated on exactly matching circular arcs.
+-- Other turn2/3/4 pieces have different local origins and MUST NOT be treated
+-- as interchangeable with turn1 until their attachment data is calibrated.
+G.NativeCurveProfiles = {
+    {radius = 3072, parts = 3, count = 1, kind = "round", name = "tunnel3072_turn1.mdl"},
+    {radius = 4096, parts = 4, count = 1, kind = "round", name = "tunnel4096_turn1.mdl"},
+    {radius = 8192, parts = 8, count = 1, kind = "round", name = "tunnel8192_turn1.mdl"},
+    {radius = 3072, parts = 3, count = 1, kind = "rectangular", name = "tunnel3072_rect_turn1.mdl"},
+    {radius = 4096, parts = 4, count = 2, kind = "round", name = "tunnel4096_double_turn1.mdl"},
+    {radius = 8192, parts = 8, count = 2, kind = "round", name = "tunnel8192_double_turn1.mdl"},
+}
+
+-- Reject physically impossible new paths before changing the map or saves.
+-- Use the horizontal 3-point circumradius across ~64-SU samples. This
+-- ignores grade, and avoids floating-point noise on tiny spline samples.
+function G.MinimumHorizontalRadius(points, trackCount, spacing)
+    if not istable(points) or #points < 3 then return math.huge end
+    local smallest = math.huge
+    for i = 2, #points - 1 do
+        local before, after = i - 1, i + 1
+        local a, center, c = points[before], points[i], points[after]
+        while before > 1 and a:DistToSqr(center) < 64 * 64 do
+            before = before - 1
+            a = points[before]
+        end
+        while after < #points and c:DistToSqr(center) < 64 * 64 do
+            after = after + 1
+            c = points[after]
+        end
+        local abx, aby = center.x - a.x, center.y - a.y
+        local bcx, bcy = c.x - center.x, c.y - center.y
+        local acx, acy = c.x - a.x, c.y - a.y
+        local ab = math.sqrt(abx * abx + aby * aby)
+        local bc = math.sqrt(bcx * bcx + bcy * bcy)
+        local ac = math.sqrt(acx * acx + acy * acy)
+        local cross = math.abs(abx * bcy - aby * bcx)
+        if ab > 12 and bc > 12 and cross > 0.0001 then
+            local radius = ab * bc * ac / (2 * cross)
+            smallest = math.min(smallest, radius)
+        end
+    end
+    if trackCount == 2 then
+        smallest = smallest - (tonumber(spacing) or 240) * 0.5
+    end
+    return smallest
+end
+
+-- Find the *next* exact native curved module along simplified route points.
+-- It is deliberately conservative: wrong geometry must never replace the
+-- track. Real rail physics/Metrostroi paths remain independent of the visual
+-- turn1 .mdl. Only flat, right-handed arcs compatible with stock are matched.
+function G.MatchNativeCurve(points, i, settings)
+    if not istable(points) or i + 2 >= #points then return nil end
+    if not settings.experimental_native_curves or not settings.auto_native_models
+        or settings.rigid_section or settings.tunnel_style ~= "metrostroi" then
+        return nil
+    end
+
+    local a, p1, p2 = points[i], points[i + 1], points[i + 2]
+    local first = Vector(p1.x - a.x, p1.y - a.y, 0)
+    local second = Vector(p2.x - p1.x, p2.y - p1.y, 0)
+    if first:Length() < 8 or second:Length() < 8 then return nil end
+    first:Normalize()
+    second:Normalize()
+    local cross = first.x * second.y - first.y * second.x
+    -- Stock turn1 models curve to track-right (-X when authored along +Y).
+    if cross >= -0.0005 then return nil end
+
+    local yawChange = math.deg(math.atan2(cross, first:Dot(second)))
+    local heading = Vector(first.x, first.y, 0)
+    heading:Rotate(Angle(0, -yawChange * 0.5, 0))
+    heading:Normalize()
+    local right = Vector(heading.y, -heading.x, 0)
+
+    local best
+    for _, spec in ipairs(G.NativeCurveProfiles) do
+        if spec.count == settings.track_count
+            and spec.kind == settings.tunnel_type
+            and (spec.radius - (settings.track_count == 2 and settings.track_spacing * 0.5 or 0))
+                >= settings.min_curve_radius
+        then
+            local sweep = math.pi * 0.5 / spec.parts
+            local length = spec.radius * sweep
+            local expected = a + heading * (spec.radius * math.sin(sweep))
+                + right * (spec.radius * (1 - math.cos(sweep)))
+            local arcCenter = a + right * spec.radius
+            local traveled = 0
+            for edge = i, #points - 1 do
+                local from, to = points[edge], points[edge + 1]
+                local distance = from:Distance(to)
+                if distance < 0.01 then break end
+                if traveled + distance >= length - 0.2 then
+                    local ratio = math.Clamp((length - traveled) / distance, 0, 1)
+                    local boundary = LerpVector(ratio, from, to)
+                    local offset = Vector(boundary.x - expected.x, boundary.y - expected.y, 0)
+                    local error = offset:Length()
+                    local maxError = 0
+                    local flat = math.abs(boundary.z - a.z) <= 2
+                    for n = i, edge do
+                        local v = points[n]
+                        local dx, dy = v.x - arcCenter.x, v.y - arcCenter.y
+                        local radialError = math.abs(math.sqrt(dx * dx + dy * dy) - spec.radius)
+                        maxError = math.max(maxError, radialError)
+                        if math.abs(v.z - a.z) > 2 then flat = false end
+                    end
+                    local dx, dy = boundary.x - arcCenter.x, boundary.y - arcCenter.y
+                    maxError = math.max(maxError,
+                        math.abs(math.sqrt(dx * dx + dy * dy) - spec.radius))
+                    local predictedTangent = heading * math.cos(sweep)
+                        + right * math.sin(sweep)
+                    local last = Vector(to.x - from.x, to.y - from.y, 0)
+                    if last:LengthSqr() > 1 then last:Normalize() end
+                    local aligned = last:Dot(predictedTangent)
+                    if flat and error <= 18 and maxError <= 9 and aligned > 0.997 then
+                        local score = error + maxError
+                        if not best or score < best.score then
+                            best = {
+                                score = score,
+                                start_index = i,
+                                end_edge = edge,
+                                boundary = boundary,
+                                model = G.NativeModelRoot .. spec.name,
+                                model_angle = heading:Angle(),
+                                model_origin = a,
+                                radius = spec.radius,
+                                sweep = math.deg(sweep),
+                            }
+                        end
+                    end
+                    break
+                end
+                traveled = traveled + distance
+                if traveled > length + 64 then break end
+            end
+        end
+    end
+    return best
+end
+
 local function BoxConvex(mins, maxs)
     return {
         Vector(mins.x, mins.y, mins.z), Vector(mins.x, mins.y, maxs.z),
