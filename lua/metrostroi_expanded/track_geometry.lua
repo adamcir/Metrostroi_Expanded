@@ -23,6 +23,9 @@ end
 -- The old heuristic used the bounding box's longest axis, which often chose
 -- the wrong axis for short prefab pieces and silently fell back to boxes.
 G.NativeTunnelModels = {
+    none = {
+        [1] = {[4096] = "railroad4096.mdl", [1024] = "railroad1024.mdl"},
+    },
     round = {
         [1] = {[64] = "tunnel64.mdl", [256] = "tunnel256.mdl", [1024] = "tunnel1024.mdl"},
         [2] = {[1024] = "tunnel1024_double.mdl"},
@@ -30,8 +33,10 @@ G.NativeTunnelModels = {
     rectangular = {
         [1] = {[64] = "tunnel64_rect.mdl", [256] = "tunnel256_rect.mdl",
                [1024] = "tunnel1024_rect.mdl"},
+        [2] = {[1024] = "tunnel1024_double.mdl"},
     },
 }
+G.NativeTunnelModels.wide = {[2] = {[1024] = "tunnel1024_double.mdl"}}
 G.NativeModelRoot = "models/metrostroi/tracks/"
 G.NativeDoubleLateralCenter = -132 -- stock 1024_double MDL: X bounds [-408.3, 144.3]
 
@@ -39,7 +44,7 @@ function G.SelectNativeTunnel(tunnelType, trackCount, length)
     local byType = G.NativeTunnelModels[tunnelType]
     local choices = byType and byType[trackCount == 2 and 2 or 1]
     if not choices then return nil end
-    for _, nominal in ipairs({1024, 256, 64}) do
+    for _, nominal in ipairs({4096, 1024, 256, 64}) do
         local fileName = choices[nominal]
         if fileName and math.abs(length - nominal) <= 1.0 then
             return G.NativeModelRoot .. fileName, nominal
