@@ -22,9 +22,16 @@ Open **Q → Tools → Metrostroi Expanded → Track Builder**.
    remain ghosted, with collision disabled, until the route is finished.
 6. **RMB** commits the route. MEX creates networked original-model static
    entities with the matching original **compiled .phy collision**.
-7. **R** undoes one native construction step; aiming at a saved MEX native
-   piece can reopen that route for editing. Cancel retains the previous saved
-   version. Finish saves the replacement only if all its modules have physics.
+7. **R** removes **only the exact native module under the crosshair**,
+   whether a saved section or an unsaved grey module. The selected model
+   receives a red/orange highlight and contextual on-screen text.
+   Deleting a module in the middle preserves all other pieces and creates
+   two free connection endpoints at the gap.
+8. **Shift+R** undoes only the last **unsaved** module while building.
+   It never removes the last saved route or edits a different route.
+9. **Cancel** discards the unfinished grey preview without touching saved
+   rails. The advanced button **Delete entire aimed route** is separate
+   from the selective **R** delete action.
 
 Green markers indicate available starts, orange markers indicate free ends.
 Internal joined module ports are hidden. A double-track model exposes its
