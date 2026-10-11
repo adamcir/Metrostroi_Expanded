@@ -48,7 +48,11 @@ function NativePiece:Initialize()
     if CLIENT then return end
     self:SetMoveType(MOVETYPE_NONE)
     self:SetSolid(SOLID_VPHYSICS)
-    self:PhysicsInitStatic(SOLID_VPHYSICS)
+    local ok = self:PhysicsInitStatic(SOLID_VPHYSICS)
+    if not ok then
+        ErrorNoHalt("[MEX Native Track] Original model has no usable .phy: " ..
+            self:GetModel() .. "\\n")
+    end
     self:SetUseType(SIMPLE_USE)
     self:DrawShadow(false)
 end
@@ -849,9 +853,9 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
     -- switching models makes rails and collision select the same variant.
     local prior = part.model
     ent:SetModel(model)
-    ent:PhysicsInitStatic(SOLID_VPHYSICS)
+    local built = ent:PhysicsInitStatic(SOLID_VPHYSICS)
     local phys = ent:GetPhysicsObject()
-    if not IsValid(phys) then
+    if not built or not IsValid(phys) then
         ent:SetModel(prior)
         ent:PhysicsInitStatic(SOLID_VPHYSICS)
         local oldPhys = ent:GetPhysicsObject()
