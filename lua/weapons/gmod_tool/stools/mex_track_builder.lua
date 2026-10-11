@@ -470,7 +470,7 @@ function TOOL.BuildCPanel(panel)
 
     local advanced = vgui.Create("DForm", panel)
     advanced:SetLabel("Pokročilé nastavení: modely, oblouky, geometrie, výkon...")
-    advanced:SetExpanded(false)
     BuildAdvancedPanel(advanced)
+    advanced:SetExpanded(false)
     panel:AddItem(advanced)
 end
