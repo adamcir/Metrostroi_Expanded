@@ -654,10 +654,13 @@ function G.DrawPackModel(ent)
     if ent.MEXPackValidityPath ~= modelName then
         ent.MEXPackValidityPath = modelName
         ent.MEXPackValidity = util.IsValidModel(modelName)
-        if not ent.MEXPackValidity and not ent.MEXPackWarned then
-            ent.MEXPackWarned = true
-            print("[MEX Track Builder] Missing installed native model: " .. modelName
-                .. " (using procedural fallback)")
+        if not ent.MEXPackValidity then
+            G.MissingClientModels = G.MissingClientModels or {}
+            if not G.MissingClientModels[modelName] then
+                G.MissingClientModels[modelName] = true
+                print("[MEX Track Builder] Missing installed native model: " .. modelName
+                    .. " (using procedural fallback)")
+            end
         end
     end
     if not ent.MEXPackValidity then return false end
