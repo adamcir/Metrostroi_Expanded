@@ -78,6 +78,24 @@ function G.NativeCurvePose(origin, heading, trackCount, extraZ)
     return pos + Vector(0, 0, G.NativeModelLift + (tonumber(extraZ) or 0)), angles
 end
 
+-- A manually chosen model from the verified stock picker may still use
+-- its genuine .phy. Unverified third-party files require their own axis and
+-- collision calibration; never silently treat them as stock models.
+function G.IsVerifiedStockSegment(model, trackCount, length)
+    if not isstring(model) then return false end
+    local wanted = string.lower(model)
+    local count = trackCount == 2 and 2 or 1
+    for _, byCount in pairs(G.NativeTunnelModels) do
+        for nominal, filename in pairs(byCount[count] or {}) do
+            if wanted == G.NativeModelRoot .. filename
+                and math.abs((tonumber(length) or 0) - nominal) <= 1 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 function G.SafeThirdRailSide(side)
     side = tostring(side or "outside")
     return (side == "left" or side == "right" or side == "both")
