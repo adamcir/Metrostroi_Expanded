@@ -748,122 +748,38 @@ end
 
 Builder.GetRouteRenderPoints = RouteRenderPoints
 
-local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart, coveredByCurve)
+local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     if not isvector(a) or not isvector(b) then return nil end
-
     local delta = b - a
     local length = delta:Length()
     if length < 2 then return nil end
 
-    settings = CopySettings(settings)
-
     local ent = ents.Create(TRACK_CLASS)
-    if not IsValid(ent) then return nil end
-
+    if not IsValid(ent) then return nil, "Could not create a track section" end
     ent:SetPos((a + b) * 0.5)
     ent:SetAngles(delta:Angle())
     ent:SetNW2Float("MEXLength", length)
-    -- Resolve and verify mounted native Metrostroi modules on the SERVER,
-    -- rather than silently drawing procedural track without explanation.
-    -- GMod clients may still have different Workshop mounts; they validate
-    -- the same model before drawing, and fall back safely if it is missing.
-    local nativeModel = settings.auto_native_models
-        and settings.tunnel_style == "metrostroi"
-        and Builder.Geometry.SelectNativeTunnel(settings.tunnel_type, settings.track_count, length)
-        or nil
-    local available = nativeModel and util.IsValidModel(nativeModel) or false
-    ent:SetNW2String("MEXNativeModel", available and nativeModel or "")
-    ent:SetNW2Bool("MEXNativeExpected", nativeModel ~= nil)
-    ent:SetNW2Bool("MEXNativeAvailable", available and true or false)
-    if nativeModel and not available then
-        Builder.MissingNativeWarnings = Builder.MissingNativeWarnings or {}
-        if not Builder.MissingNativeWarnings[nativeModel] then
-            Builder.MissingNativeWarnings[nativeModel] = true
-            print("[MEX Track Builder] Model missing on server: " .. nativeModel
-                .. ". Check that the original Metrostroi content pack is installed.")
-        end
-    end
-    -- Continuous texture U coordinate along the actual physical route, not
-    -- centered/restarted on every 48-192SU segment (previously visible seams).
     ent:SetNW2Float("MEXUVStart", uvStart or 0)
-    ent:SetNW2Float("MEXGauge", settings.gauge)
-    ent:SetNW2Float("MEXRailWidth", settings.rail_width)
-    ent:SetNW2Float("MEXRailHeight", settings.rail_height)
-    ent:SetNW2Float("MEXSleeperSpacing", settings.sleeper_spacing)
-    ent:SetNW2Float("MEXSleeperLength", settings.sleeper_length)
-    ent:SetNW2Float("MEXSleeperWidth", settings.sleeper_width)
-    ent:SetNW2Float("MEXSleeperHeight", settings.sleeper_height)
-    ent:SetNW2String("MEXTrackModel", settings.track_model)
-    ent:SetNW2Bool("MEXUseTrackModel", settings.use_track_model)
-    ent:SetNW2Bool("MEXFastGeometry", settings.fast_geometry)
+    ent:SetNW2Float("MEXGauge", DEFAULT_TRACK_GAUGE)
+    ent:SetNW2Float("MEXRailWidth", METROSTROI_RAIL_WIDTH)
+    ent:SetNW2Float("MEXSleeperSpacing", 32)
+    ent:SetNW2Float("MEXSleeperLength", 128)
+    ent:SetNW2Float("MEXSleeperWidth", 10)
+    ent:SetNW2Float("MEXSleeperHeight", 5)
     ent:SetNW2String("MEXTunnelType", settings.tunnel_type)
     ent:SetNW2Float("MEXTunnelRadius", settings.tunnel_radius)
     ent:SetNW2Float("MEXTunnelWidth", settings.tunnel_width)
     ent:SetNW2Float("MEXTunnelHeight", settings.tunnel_height)
     ent:SetNW2Float("MEXTunnelWall", settings.tunnel_wall)
     ent:SetNW2String("MEXTunnelStyle", settings.tunnel_style)
-    ent:SetNW2Bool("MEXAutoNativeModels", settings.auto_native_models)
-    ent:SetNW2Bool("MEXStockModelsOnly", settings.stock_models_only)
     ent:SetNW2Int("MEXTrackCount", settings.track_count)
     ent:SetNW2Float("MEXTrackSpacing", settings.track_spacing)
-    ent:SetNW2Bool("MEXRigidSection", settings.rigid_section)
-    -- Only mounted models with real model metadata are accepted.
-    local packModel = settings.pack_model
-    if not settings.rigid_section
-        or not string.match(packModel, "^models/[%w_/%-%.]+%.mdl$")
-        or not util.IsValidModel(packModel)
-    then
-        packModel = ""
-    end
-    ent:SetNW2String("MEXPackModel", packModel)
-    if packModel ~= "" then
-        -- Count valid manually picked Track Pack modules as genuine model
-        -- pieces too; do not incorrectly report them as procedural fallbacks.
-        ent:SetNW2String("MEXNativeModel", packModel)
-        ent:SetNW2Bool("MEXNativeExpected", true)
-        ent:SetNW2Bool("MEXNativeAvailable", true)
-    end
-    ent:SetNW2Float("MEXPackZOffset", settings.pack_z_offset)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
-    if coveredByCurve then
-        -- The actual original curved .mdl/.phy is installed ONCE on the
-        -- first member of its matching group, not on every short chord.
-        -- Keep these logical segments so snapping/rerail still works.
-        ent:PhysicsDestroy()
-        ent:SetMoveType(MOVETYPE_NONE)
-        ent:SetSolid(SOLID_NONE)
-        return ent
-    end
-    local physicModel
-    if packModel ~= "" and Builder.Geometry.IsVerifiedStockSegment(
-        packModel, settings.track_count, length) then
-        physicModel = packModel
-    elseif packModel == "" and nativeModel and available then
-        physicModel = nativeModel
-    end
-    if physicModel then
-        local modelPos, modelAng = Builder.Geometry.NativeStraightPose(
-            ent:GetPos(), ent:GetAngles(), length, settings.track_count,
-            settings.pack_z_offset - (settings.stock_models_only
-                and 0 or Builder.Geometry.NativeModelLift))
-        local physicsOK, physicsError = ent:InstallNativePhysics(
-            physicModel, modelPos, modelAng)
-        if not physicsOK and settings.stock_models_only then
-            ent:Remove()
-            return nil, physicsError or ("Missing original PHY: " .. physicModel)
-        end
-        local visualOK, visualError = ent:InstallNativeVisual(
-            physicModel, modelPos, modelAng)
-        if not visualOK and settings.stock_models_only then
-            ent:Remove()
-            return nil, visualError or ("Failed to show model: " .. physicModel)
-        end
-    elseif settings.stock_models_only then
-        ent:Remove()
-        return nil, "No installed original Metrostroi model for "
-            .. string.format("%.1f", length) .. " SU"
+    if not IsValid(ent) or not IsValid(ent:GetPhysicsObject()) then
+        if IsValid(ent) then ent:Remove() end
+        return nil, "Static rail collision could not be created"
     end
     return ent
 end
@@ -918,157 +834,33 @@ function Builder.BuildGeometryPoints(points, settings)
     return result
 end
 
--- Native model layout is planned BEFORE committing the route. Unsupported
--- pieces are rejected for newly created model-only routes, rather than
--- secretly inventing cuboid tunnels or leaving invisible collision walls.
-local function PlanPolyline(points, settings)
-    settings = CopySettings(settings)
-    -- Keep physics/Metrostroi network on accurately sampled chords. Replace
-    -- only the VISUAL shell with stock curved turn1 MDLs when the route is
-    -- a verified exact-radius arc; an unsuitable prefabricated tunnel must
-    -- never distort the wheel path or rerail network.
-    local geometryPoints = Builder.BuildGeometryPoints(points, settings)
-    local modelCurves = {}
-
-    if settings.experimental_native_curves and settings.auto_native_models
-        and settings.tunnel_style == "metrostroi" and not settings.rigid_section
-    then
-        local index = 1
-        while index < #geometryPoints - 2 and #modelCurves < 256 do
-            local match = Builder.Geometry.MatchNativeCurve(geometryPoints, index, settings)
-            if match and util.IsValidModel(match.model) then
-                -- Insert the precise arc-length boundary within an existing
-                -- physical chord. Endpoints remain on the spline, and
-                -- adjoining modules cannot drift across segment seams.
-                local boundaryIndex = match.end_edge + 1
-                if match.boundary:DistToSqr(geometryPoints[boundaryIndex]) > 0.1
-                    and match.boundary:DistToSqr(geometryPoints[match.end_edge]) > 0.1
-                then
-                    table.insert(geometryPoints, boundaryIndex, match.boundary)
-                elseif match.boundary:DistToSqr(geometryPoints[match.end_edge]) <= 0.1 then
-                    boundaryIndex = match.end_edge
-                end
-                if boundaryIndex > index then
-                    match.finish = boundaryIndex - 1
-                    modelCurves[#modelCurves + 1] = match
-                    index = boundaryIndex
-                else
-                    index = index + 1
-                end
-            else
-                index = index + 1
-            end
-        end
-    end
-
-    return geometryPoints, modelCurves
-end
-
-local function CheckNativeCoverage(points, settings)
-    settings = CopySettings(settings)
-    if not settings.stock_models_only then return true end
-    local geometryPoints, modelCurves = PlanPolyline(points, settings)
-    local curved = {}
-    for _, model in ipairs(modelCurves) do
-        for i = model.start_index, model.finish do curved[i] = true end
-    end
-    for i = 1, #geometryPoints - 1 do
-        if not curved[i] then
-            local length = geometryPoints[i]:Distance(geometryPoints[i + 1])
-            local mdl = Builder.Geometry.SelectNativeTunnel(
-                settings.tunnel_type, settings.track_count, length)
-            -- Explicitly selected, dimensionally verified STOCK models are
-            -- also valid model-only segments and use the matching native PHY.
-            if settings.rigid_section
-                and Builder.Geometry.IsVerifiedStockSegment(
-                    settings.pack_model, settings.track_count, length) then
-                mdl = settings.pack_model
-            end
-            -- .phy files may be mounted in an engine search path invisible to
-            -- Lua file.Exists("GAME"). Never reject a valid installed .mdl
-            -- based on that unreliable probe: SpawnSegment attempts the REAL
-            -- physics initialization and only fails if it actually fails.
-            if not mdl or not util.IsValidModel(mdl) then
-                return false, string.format(
-                    "No matching installed original Metrostroi model for section %d (%.1f SU, %s, %d track(s)). Select a native-length fixed module or supported native curve.",
-                    i, length, settings.tunnel_type, settings.track_count)
-            end
-        end
+-- Keep the existing Metrostroi network at full spline resolution, while
+-- physical geometry is split into bounded chords using railroad16.mdl.
+local function CheckTrackAssets()
+    if not util.IsValidModel(DEFAULT_TRACK_MODEL) then
+        return false, "Original railroad16.mdl is not mounted. Install Metrostroi content."
     end
     return true
 end
-Builder.CheckNativeCoverage = CheckNativeCoverage
 
 local function SpawnPolyline(points, settings, routeID)
-    local entities = {}
+    local available, reason = CheckTrackAssets()
+    if not available then return {}, reason end
+    local pieces = {}
     settings = CopySettings(settings)
-    local geometryPoints, modelCurves = PlanPolyline(points, settings)
-    local valid, reason = CheckNativeCoverage(points, settings)
-    if not valid then return {}, reason end
-
-    local curved = {}
-    for _, model in ipairs(modelCurves) do
-        for index = model.start_index, model.finish do
-            curved[index] = true
-        end
-    end
-    local alongRoute = 0
+    local geometryPoints = Builder.BuildGeometryPoints(points, settings)
+    local distance = 0
     for i = 1, #geometryPoints - 1 do
-        local from, to = geometryPoints[i], geometryPoints[i + 1]
-        local ent, reason = SpawnSegment(from, to, settings, routeID, i,
-            alongRoute, curved[i] == true)
+        local a, b = geometryPoints[i], geometryPoints[i + 1]
+        local ent, err = SpawnSegment(a, b, settings, routeID, i, distance)
         if not IsValid(ent) then
-            for _, spawned in pairs(entities) do
-                if IsValid(spawned) then spawned:Remove() end
-            end
-            return {}, reason or ("Could not spawn Metrostroi section " .. i)
+            RemoveEntities(pieces)
+            return {}, err or ("Track section " .. i .. " could not be created")
         end
-        entities[i] = ent
-        alongRoute = alongRoute + from:Distance(to)
+        pieces[#pieces + 1] = ent
+        distance = distance + a:Distance(b)
     end
-
-    for _, model in ipairs(modelCurves) do
-        for i = model.start_index, model.finish do
-            local ent = entities[i]
-            if IsValid(ent) then
-                ent:SetNW2Bool("MEXCurveCovered", true)
-                ent:SetNW2String("MEXCurveModel", model.model)
-                if i == model.start_index then
-                    ent:SetNW2Bool("MEXCurveOwner", true)
-                    ent:SetNW2Vector("MEXCurveOrigin", model.model_origin)
-                    ent:SetNW2Angle("MEXCurveHeading", model.model_angle)
-                    -- A single real .phy represents the COMPLETE curved
-                    -- tubbing/rail/sleeper/contact-rail module.
-                    local nativePos, nativeAngle = Builder.Geometry.NativeCurvePose(
-                        model.model_origin, model.model_angle, settings.track_count,
-                        settings.pack_z_offset - (settings.stock_models_only
-                            and 0 or Builder.Geometry.NativeModelLift))
-                    local installed, physicsError = ent:InstallNativePhysics(
-                        model.model, nativePos, nativeAngle)
-                    if not installed and settings.stock_models_only then
-                        for _, spawned in pairs(entities) do
-                            if IsValid(spawned) then spawned:Remove() end
-                        end
-                        return {}, physicsError or ("Could not create curved model physics: " .. model.model)
-                    end
-                    local drawn, drawError = ent:InstallNativeVisual(
-                        model.model, nativePos, nativeAngle)
-                    if not drawn and settings.stock_models_only then
-                        for _, spawned in pairs(entities) do
-                            if IsValid(spawned) then spawned:Remove() end
-                        end
-                        return {}, drawError or ("Could not render curved model: " .. model.model)
-                    end
-                    model.native_physics_ok = installed
-                end
-            end
-        end
-    end
-    local clean = {}
-    for _, ent in ipairs(entities) do
-        if IsValid(ent) then clean[#clean + 1] = ent end
-    end
-    return clean
+    return pieces
 end
 
 local function SetActiveStart(ply, pos)
@@ -1105,8 +897,8 @@ local function RebuildActiveRoute(active)
         end
         if not routeID then return end
 
-        if active.settings.stock_models_only and Builder.CheckNativeCoverage then
-            local allowed, why = Builder.CheckNativeCoverage(
+        if active.settings.stock_models_only and CheckTrackAssets then
+            local allowed, why = Builder.CheckTrackAssets(
                 active.render_points, active.settings)
             if not allowed then
                 active.native_model_error = why
@@ -1475,7 +1267,7 @@ function Builder.AddPoint(ply, pos, settings, anchor)
         -- length/profile (notably double tracks under 1024 SU).
         local trial = {active.points[1], pos}
         local straight = Builder.BuildSmoothPoints(trial, active.settings, active.anchors)
-        local valid, reason = CheckNativeCoverage(straight, active.settings)
+        local valid, reason = CheckTrackAssets(straight, active.settings)
         if not valid then
             ply:ChatPrint("[MEX Track Builder] Cannot place original prefab: " .. reason)
             return false
@@ -1954,7 +1746,7 @@ function Builder.AutoLoopClick(
     -- collapses the whole loop to one giant straight rigid chord.
     local loopSettings = CopySettings(start.settings)
     loopSettings.rigid_section = false
-    local originalOK, modelReason = CheckNativeCoverage(result.points, loopSettings)
+    local originalOK, modelReason = CheckTrackAssets(result.points, loopSettings)
     if not originalOK then
         ply:ChatPrint("[MEX Track Builder] Loop rejected: " .. modelReason)
         return false
@@ -2075,7 +1867,7 @@ function Builder.FinishRoute(ply, network)
         return false
     end
 
-    local originalOK, modelReason = CheckNativeCoverage(checkedPoints, active.settings)
+    local originalOK, modelReason = CheckTrackAssets(checkedPoints, active.settings)
     if not originalOK then
         ply:ChatPrint("[MEX Track Builder] Construction rejected: " .. modelReason)
         return false
