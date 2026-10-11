@@ -20,12 +20,15 @@ TOOL.ClientConVar = {
     track_count = "1", track_spacing = "240",
     inherit_double_profile = "1",
     rigid_section = "0", rigid_length = "0",
+    native = "1", native_mode = "straight", native_tunnel = "round",
+    native_tracks = "1", native_radius = "4096",
+    native_junction = "", native_branch = "2",
 }
 
 if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
-    language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
-    language.Add("tool.mex_track_builder.0", "LMB: add/snap point | RMB: finish | R: undo last step, select endpoint (saved routes supported)")
+    language.Add("tool.mex_track_builder.desc", "Build using only original Metrostroi MDL modules")
+    language.Add("tool.mex_track_builder.0", "LMB: set start / place original module | RMB: finish | R: undo last module")
 
     -- Older installations kept the former fixed-prefab + rectangular
     -- tunnel defaults in archived client convars. Migrate just once so
@@ -70,57 +73,16 @@ function TOOL:LeftClick(trace)
     if not IsValid(ply) or not ply:IsAdmin() then return false end
     if not MEXTrackBuilder then return false end
 
-    local pos = trace.HitPos
-    local anchor
+    if MEXNativeTrack then return MEXNativeTrack.Add(ply, trace.HitPos, {
+            mode = self:GetClientInfo("native_mode"),
+            tunnel = self:GetClientInfo("native_tunnel"),
+            tracks = self:GetClientNumber("native_tracks", 1),
+            radius = self:GetClientNumber("native_radius", 4096),
+            junction = self:GetClientInfo("native_junction"),
+            branch = self:GetClientNumber("native_branch", 2),
+        }) end
+    return false
 
-    if self:GetClientNumber("snap", 1) > 0
-        and MEXTrackBuilder.SnapPoint
-    then
-        pos, anchor = MEXTrackBuilder.SnapPoint(
-            pos,
-            -- End-node markers sit BETWEEN each pair of rails. Aiming at
-            -- one rail is 42.9 SU off-center; allow sufficient tolerance for
-            -- reliable double-to-double joins even with the old 32-SU config.
-            self:GetClientNumber("track_count", 1) == 2
-                and math.max(64, self:GetClientNumber("snap_distance", 32))
-                or self:GetClientNumber("snap_distance", 32),
-            self:GetClientNumber("snap_node_spacing", 192),
-            ReadSettings(self)
-        )
-    end
-
-    local ok
-
-    if self:GetClientNumber("auto_loop", 0) > 0
-        and not (MEXTrackBuilder.Active and MEXTrackBuilder.Active[ply])
-    then
-        if not MEXTrackBuilder.AutoLoopClick then return false end
-
-        ok = MEXTrackBuilder.AutoLoopClick(
-            ply,
-            pos,
-            anchor,
-            ReadSettings(self),
-            self:GetClientNumber("loop_min_radius", 3072),
-            self:GetClientNumber("loop_max_grade", 4),
-            self:GetClientNumber("network", 1) > 0
-        )
-    else
-        if not MEXTrackBuilder.AddPoint then return false end
-
-        ok = MEXTrackBuilder.AddPoint(
-            ply,
-            pos,
-            ReadSettings(self),
-            anchor
-        )
-    end
-
-    if ok then
-        ply:EmitSound("buttons/button15.wav", 55, 110, 0.35)
-    end
-
-    return ok
 end
 
 function TOOL:RightClick(trace)
@@ -130,27 +92,9 @@ function TOOL:RightClick(trace)
     if not IsValid(ply) or not ply:IsAdmin() then return false end
     if not MEXTrackBuilder then return false end
 
-    if self:GetClientNumber("auto_loop", 0) > 0
-        and not (MEXTrackBuilder.Active and MEXTrackBuilder.Active[ply])
-    then
-        if MEXTrackBuilder.CancelAutoLoop then
-            return MEXTrackBuilder.CancelAutoLoop(ply)
-        end
-        return false
-    end
+    if MEXNativeTrack then return MEXNativeTrack.Finish(ply) end
+    return false
 
-    if not MEXTrackBuilder.FinishRoute then return false end
-
-    local ok = MEXTrackBuilder.FinishRoute(
-        ply,
-        self:GetClientNumber("network", 1) > 0
-    )
-
-    if ok then
-        ply:EmitSound("buttons/button14.wav", 60, 105, 0.45)
-    end
-
-    return ok
 end
 
 function TOOL:Reload(trace)
@@ -158,83 +102,45 @@ function TOOL:Reload(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if not MEXTrackBuilder or not MEXTrackBuilder.UndoLastPoint then return false end
+    if MEXNativeTrack then return MEXNativeTrack.Undo(ply, trace and trace.Entity) end
+    return false
 
-    -- If a route is currently being drawn/edited, R undoes its last
-    -- control point regardless of where the player is looking.
-    -- Otherwise choose the aimed saved MEX route; if none is aimed,
-    -- UndoLastPoint falls back to the most recently completed route.
-    local routeID
-    local ent = trace and trace.Entity
-    if IsValid(ent) and ent:GetClass() == "mex_track_segment" then
-        local id = ent:GetNW2Int("MEXRouteID", 0)
-        if id > 0 then routeID = id end
-    end
-
-    local ok = MEXTrackBuilder.UndoLastPoint(ply, routeID)
-    if ok then
-        ply:EmitSound("buttons/button14.wav", 55, 110, 0.35)
-    end
-    return ok
-end
-
-local function BuildAdvancedPanel(panel)
-    panel:Help("The builder uses original Metrostroi railroad16.mdl tiles.")
-    panel:Help("All bends and straight sections share the same renderer and collision.")
-    panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
-    panel:NumSlider("Curve tension", "mex_track_builder_curve_tension", 0.05, 0.85, 2)
-    panel:NumSlider("Spline sample length (SU)", "mex_track_builder_segment_length", 16, 128, 0)
-    panel:NumSlider("Maximum collision chord length (SU)", "mex_track_builder_geometry_max_length", 64, 256, 0)
-    panel:NumSlider("Maximum chord deviation (SU)", "mex_track_builder_geometry_tolerance", 0.1, 2, 2)
-    panel:Help("Short chords produce smooth curves without a solid track bed.")
-    panel:CheckBox("Rigid straight section", "mex_track_builder_rigid_section")
-    panel:NumSlider("Fixed straight length (0 = click distance)", "mex_track_builder_rigid_length", 0, 1024, 0)
-    panel:CheckBox("Show attachment points", "mex_track_builder_show_snap_nodes")
-    panel:CheckBox("Snap to existing track", "mex_track_builder_snap")
-    panel:NumSlider("Snap distance", "mex_track_builder_snap_distance", 8, 128, 0)
-    panel:NumSlider("Attachment spacing", "mex_track_builder_snap_node_spacing", 64, 512, 0)
-    panel:NumSlider("Double-track center spacing", "mex_track_builder_track_spacing", 180, 400, 0)
-    panel:CheckBox("Inherit connected double-track profile", "mex_track_builder_inherit_double_profile")
-    panel:Help("Optional generated tunnel SHELL - original rails are never replaced.")
-    local tunnel = panel:ComboBox("Tunnel type", "mex_track_builder_tunnel_type")
-    tunnel:AddChoice("None (surface rails)", "none")
-    tunnel:AddChoice("Round", "round")
-    tunnel:AddChoice("Rectangular", "rectangular")
-    tunnel:AddChoice("Wide", "wide")
-    panel:NumSlider("Round inner radius", "mex_track_builder_tunnel_radius", 140, 320, 0)
-    panel:NumSlider("Tunnel inside width", "mex_track_builder_tunnel_width", 300, 640, 0)
-    panel:NumSlider("Tunnel inside height", "mex_track_builder_tunnel_height", 230, 480, 0)
-    panel:NumSlider("Wall thickness", "mex_track_builder_tunnel_wall", 6, 32, 0)
-    panel:CheckBox("Auto loop: create a safe circle", "mex_track_builder_auto_loop")
-    panel:NumSlider("Auto loop minimum radius", "mex_track_builder_loop_min_radius", 1024, 8192, 0)
-    panel:NumSlider("Auto loop maximum grade (%)", "mex_track_builder_loop_max_grade", 1, 8, 1)
 end
 
 function TOOL.BuildCPanel(panel)
     panel:AddControl("Header", {
-        Text = "Metrostroi Expanded - Track Builder",
-        Description = "Draw connected routes with original Metrostroi railroad16.mdl rails.",
+        Text = "Metrostroi Expanded - Original Track Builder",
+        Description = "Real Metrostroi MDLs and their compiled physics only. No procedural tracks or tunnel shells.",
     })
-    panel:Help("LMB: add/attach point   RMB: finish   R: undo one step")
-    panel:Help("Sharp curves are rejected. No long prefabricated rail models are required.")
-    local layout = panel:ComboBox("Tracks", "mex_track_builder_track_count")
-    layout:AddChoice("Single track", "1")
-    layout:AddChoice("Double track", "2")
-    panel:CheckBox("Smooth curves", "mex_track_builder_smooth")
-    panel:NumSlider("Minimum safe curve radius", "mex_track_builder_min_curve_radius", 1024, 8192, 0)
-    panel:CheckBox("Snap to track ends", "mex_track_builder_snap")
-    panel:CheckBox("Show attachment points", "mex_track_builder_show_snap_nodes")
-    panel:CheckBox("Add Metrostroi rail network", "mex_track_builder_network")
-    local advanced = vgui.Create("DForm", panel)
-    advanced:SetLabel("Advanced routing, tunnel and loop settings")
-    BuildAdvancedPanel(advanced)
-    advanced:SetExpanded(false)
-    panel:AddItem(advanced)
-    panel:Button("Finish route", "mex_track_builder_finish")
-    panel:Button("Undo last step", "mex_track_builder_undo")
-    panel:Button("Cancel construction", "mex_track_builder_cancel")
-    panel:Button("Delete aimed route", "mex_track_builder_delete_aimed_route")
-    panel:Button("Rebuild Metrostroi network", "mex_track_builder_rebuild")
-    panel:Button("Check original track model", "mex_track_builder_model_status")
-    panel:Button("Check track collisions", "mex_track_builder_collision_status")
+    panel:Help("LMB: select start, then build | RMB: save | R: undo one module")
+    panel:Help("The grey translucent model is always a preview. Green and orange spheres are the start/end connectors.")
+    local tunnel = panel:ComboBox("Original model family", "mex_track_builder_native_tunnel")
+    tunnel:AddChoice("Round tunnel", "round")
+    tunnel:AddChoice("Rectangular tunnel", "rectangular")
+    tunnel:AddChoice("Wide double tunnel", "wide")
+    tunnel:AddChoice("Surface track", "none")
+    local tracks = panel:ComboBox("Track layout", "mex_track_builder_native_tracks")
+    tracks:AddChoice("Single track", "1")
+    tracks:AddChoice("Double track", "2")
+    local mode = panel:ComboBox("Module / junction", "mex_track_builder_native_mode")
+    mode:AddChoice("Straight - automatically combine original lengths", "straight")
+    mode:AddChoice("Curve left - original segment", "curve_left")
+    mode:AddChoice("Curve right - original segment", "curve_right")
+    mode:AddChoice("Turnout - calibrated original model", "switch")
+    mode:AddChoice("Rail crossing - calibrated original model", "crossing")
+    local radius = panel:ComboBox("Original curve radius", "mex_track_builder_native_radius")
+    radius:AddChoice("3072 SU", "3072")
+    radius:AddChoice("4096 SU", "4096")
+    radius:AddChoice("8192 SU", "8192")
+    panel:TextEntry("Registered junction profile ID", "mex_track_builder_native_junction")
+    local branch = panel:ComboBox("Junction exit", "mex_track_builder_native_branch")
+    branch:AddChoice("Port 2 - straight / main", "2")
+    branch:AddChoice("Port 3 - diverging", "3")
+    branch:AddChoice("Port 4 - crossing exit", "4")
+    panel:Help("Turnouts and crossings require a registered original MDL and measured connector coordinates; unsafe or missing models cannot be placed.")
+    panel:Help("Use server command mex_native_register_junction for custom installed Metrostroi Track Pack junctions.")
+    panel:Button("Finish route", "mex_native_finish")
+    panel:Button("Undo last module", "mex_native_undo")
+    panel:Button("Cancel construction", "mex_native_cancel")
+    panel:Button("Show original-model status", "mex_native_status")
 end
