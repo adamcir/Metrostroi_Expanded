@@ -132,7 +132,14 @@ function TOOL.BuildCPanel(panel)
     radius:AddChoice("3072 SU", "3072")
     radius:AddChoice("4096 SU", "4096")
     radius:AddChoice("8192 SU", "8192")
-    panel:TextEntry("Registered junction profile ID", "mex_track_builder_native_junction")
+    local installed = panel:ComboBox("Calibrated original junction", "mex_track_builder_native_junction")
+    if MEXNativeTrack and MEXNativeTrack.Junctions then
+        local ids = {}
+        for id in pairs(MEXNativeTrack.Junctions) do ids[#ids + 1] = id end
+        table.sort(ids)
+        for _, id in ipairs(ids) do installed:AddChoice(id, id) end
+    end
+    panel:TextEntry("Junction profile ID (manual entry)", "mex_track_builder_native_junction")
     local branch = panel:ComboBox("Junction exit", "mex_track_builder_native_branch")
     branch:AddChoice("Port 2 - straight / main", "2")
     branch:AddChoice("Port 3 - diverging", "3")
@@ -142,5 +149,7 @@ function TOOL.BuildCPanel(panel)
     panel:Button("Finish route", "mex_native_finish")
     panel:Button("Undo last module", "mex_native_undo")
     panel:Button("Cancel construction", "mex_native_cancel")
+    panel:Button("Delete aimed saved route", "mex_native_delete_aimed")
     panel:Button("Show original-model status", "mex_native_status")
+    panel:Button("List available original junction models", "mex_native_list_junction_models")
 end
