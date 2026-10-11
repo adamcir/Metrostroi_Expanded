@@ -4,27 +4,30 @@
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
-## Track & Tunnel Builder (original Metrostroi rails)
+## Track & Tunnel Builder (original Metrostroi models only)
 
-Open **Q → Tools → Metrostroi Expanded → Track Builder** to lay persistent
-connected routes with original Metrostroi `railroad16.mdl` tiles. The builder
-supports straight tracks, smooth left/right bends, two-track layouts,
-optional generated tunnel shells, snapping, auto-loops and Metrostroi's
-track network and rerail integration.
+Open **Q → Tools → Metrostroi Expanded → Track Builder** to assemble
+original Metrostroi straight and curved track/tunnel MDLs. The tool uses
+the original compiled model collision and rejects missing assets, rather
+than constructing synthetic rails, sleepers or tunnel shells.
 
-No Track Pack models, long straight/curve prefabs or duplicate generated
-rail and sleeper meshes are used. The original model is required to be
-mounted on the server and client. Collisions use separate static rail,
-sleeper and outboard contact-rail hulls, without the old invisible
-collision bed. The original model's exact contact-rail placement still
-needs in-game calibration.
+**LMB** starts the route and appends selected native modules. **RMB**
+commits it; **R** undoes a module. A grey translucent original-model
+preview appears under the tool cursor, and unfinished pieces stay ghosted.
+Free start/end connectors are shown; double-track modules expose
+independent rail endpoint nodes and two Metrostroi network paths.
 
-**LMB** adds a point, **RMB** completes a route, **R** undoes one step.
-Unreasonably tight bends are refused. Model/collision diagnostic commands
-are available in the tool panel.
+The tool has explicit **Turnout** and **Rail crossing** types. They use
+real junction models with a calibrated 3- or 4-port connector registry,
+not overlapped straight models. Because Track Pack junction asset names
+and pivots vary, administrators must register their real models and port
+data before those types can be placed. Matching original moving-switch
+model/PHY variants can be registered for state changes; Metrostroi
+signalling/dispatch integration remains to be verified.
 
-Live Garry's Mod validation is still required, especially train wheel
-height, contact-rail collisions, tile joins and performance.
+The native route layout is saved per map and restored on restart/map
+cleanup. Stock model pivot alignment, wheel fit, collisions, rerailing
+and real-world switching still require Garry's Mod playtesting.
 
 See [Track Builder documentation](docs/TUNNEL_BUILDER.md).
 
