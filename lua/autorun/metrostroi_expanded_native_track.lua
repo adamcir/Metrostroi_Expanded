@@ -217,14 +217,14 @@ function N.ModulePaths(part)
 end
 
 if CLIENT then
-    local ghost
-    local ghostName
+    local ghosts = {}
     local grey = Color(155, 155, 155, 130)
-    local function DrawGhost(part, warn)
-        if ghostName ~= part.model or not IsValid(ghost) then
+    local function DrawGhost(part, index, warn)
+        local ghost = ghosts[index]
+        if not IsValid(ghost) or ghost:GetModel() ~= part.model then
             if IsValid(ghost) then ghost:Remove() end
             ghost = ClientsideModel(part.model, RENDERGROUP_TRANSLUCENT)
-            ghostName = part.model
+            ghosts[index] = ghost
             if not IsValid(ghost) then return end
             ghost:SetNoDraw(true)
             ghost:SetRenderMode(RENDERMODE_TRANSCOLOR)
@@ -239,6 +239,29 @@ if CLIENT then
         render.SetBlend(1)
         render.SetColorModulation(1, 1, 1)
     end
+    local nodes, nextNodesRefresh = {}, 0
+    local function CollectVisibleEndpoints()
+        if CurTime() < nextNodesRefresh then return nodes end
+        nextNodesRefresh = CurTime() + 0.3
+        local all, counts = {}, {}
+        for _, ent in ipairs(ents.FindByClass("prop_physics")) do
+            if IsValid(ent) and ent:GetNW2Bool("MEXNativeModule", false) then
+                for j = 1, ent:GetNW2Int("MEXNativePorts", 0) do
+                    local pos = ent:GetNW2Vector("MEXNativePort" .. j, vector_origin)
+                    if pos ~= vector_origin then
+                        local key = PortKey(pos)
+                        counts[key] = (counts[key] or 0) + 1
+                        all[#all + 1] = {pos = pos, key = key, index = j}
+                    end
+                end
+            end
+        end
+        nodes = {}
+        for _, node in ipairs(all) do
+            if counts[node.key] == 1 then nodes[#nodes + 1] = node end
+        end
+        return nodes
+    end
     local function Tool()
         local ply = LocalPlayer()
         if not IsValid(ply) then return nil end
@@ -250,7 +273,7 @@ if CLIENT then
     hook.Add("PostDrawTranslucentRenderables", "MEXNativeTrackAlwaysGhost", function(_, skybox)
         if skybox then return end
         local tool = Tool()
-        if not tool or tool:GetClientNumber("native", 1) == 0 then return end
+        if not tool then return end
         local ply = LocalPlayer()
         local tr = ply:GetEyeTrace()
         if not tr.Hit or tr.HitSky then return end
@@ -267,7 +290,9 @@ if CLIENT then
         }
         local candidate, errorText = N.Candidate(origin, yaw, tr.HitPos, settings)
         if candidate and #candidate.parts > 0 then
-            for _, part in ipairs(candidate.parts) do DrawGhost(part, false) end
+            for i, part in ipairs(candidate.parts) do
+                if i <= 64 then DrawGhost(part, i, false) end
+            end
             render.SetColorMaterial()
             render.DrawWireframeSphere(origin, 9, 9, 9, Color(55, 245, 120), true)
             render.DrawWireframeSphere(candidate.pos, 9, 9, 9, Color(255, 185, 70), true)
@@ -283,11 +308,21 @@ if CLIENT then
                     break
                 end
             end
-            if name then DrawGhost(Placement(origin, yaw, name, 64, lane), false) end
+            if name then DrawGhost(Placement(origin, yaw, name, 64, lane), 1, false) end
+        end
+        render.SetColorMaterial()
+        for _, node in ipairs(CollectVisibleEndpoints()) do
+            if ply:GetPos():DistToSqr(node.pos) < 5000 * 5000 then
+                local c = node.index == 1 and Color(60, 245, 110) or Color(255, 175, 65)
+                render.DrawWireframeSphere(node.pos, 8, 9, 9, c, true)
+            end
+        end
+        if active then
+            render.DrawWireframeSphere(origin, 9, 9, 9, Color(60, 245, 110), true)
         end
     end)
     hook.Add("ShutDown", "MEXNativeGhostCleanup", function()
-        if IsValid(ghost) then ghost:Remove() end
+        for _, ghost in pairs(ghosts) do if IsValid(ghost) then ghost:Remove() end end
     end)
     net.Receive("MEXNativeJunctionProfiles", function()
         local decoded = util.JSONToTable(net.ReadString() or "") or {}
