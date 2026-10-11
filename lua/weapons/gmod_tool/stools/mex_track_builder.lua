@@ -29,7 +29,7 @@ TOOL.ClientConVar = {
     geometry_tolerance = "0.5",
     geometry_max_length = "192",
     fast_geometry = "1",
-    tunnel_type = "none",
+    tunnel_type = "rectangular",
     tunnel_radius = "170",
     tunnel_width = "360",
     tunnel_height = "280",
@@ -45,7 +45,7 @@ TOOL.ClientConVar = {
     track_count = "1",
     track_spacing = "240",
     inherit_double_profile = "1",
-    rigid_section = "0",
+    rigid_section = "1",
     rigid_length = "256",
     pack_model = "",
     pack_z_offset = "0",
@@ -228,11 +228,8 @@ function TOOL:Reload(trace)
     return ok
 end
 
-function TOOL.BuildCPanel(panel)
-    panel:AddControl("Header", {
-        Text = "Metrostroi Expanded - Track Builder",
-        Description = "Place control points instead of hard track corners. MEX builds a smooth curve through them and writes the same smooth path into Metrostroi's track_<map>.txt network.",
-    })
+local function BuildAdvancedPanel(panel)
+    panel:Help("Pokrocile nastaveni Track Builderu - jednotlivym hodnotam odpovidaji cvars mex_track_builder_*. V beznem rezimu je nemusis menit.")
 
     panel:Help("Controls")
     panel:Help("Normal mode: LMB places control points; RMB finishes the route.")
@@ -422,4 +419,58 @@ function TOOL.BuildCPanel(panel)
     panel:Button("Rebuild Metrostroi network", "mex_track_builder_rebuild")
     panel:Button("Rerail aimed Metrostroi train", "metrostroi_rerail")
     panel:Help("The normal Metrostroi rerailer and train spawner now also recognize saved MEX Track Builder rails.")
+end
+
+-- The first screen should help players put REAL stock .mdl pieces in the
+-- world, not bury the important selection behind 40 technical sliders.
+-- DForm inherits DCollapsibleCategory and contains the legacy full options
+-- without losing advanced control or preset/model scanner functions.
+function TOOL.BuildCPanel(panel)
+    panel:AddControl("Header", {
+        Text = "Metrostroi Expanded - Model-first Track Builder",
+        Description = "Originální Metrostroi tunely a koleje. Vyber model, pokládej části a spojuj zelené koncové body.",
+    })
+    panel:Help("1) Vyber tunel (originální modely jsou výchozí)")
+    local profile = panel:ComboBox("Typ tunelu", "mex_track_builder_tunnel_type")
+    profile:AddChoice("Obdélníkový - klasické Metrostroi", "rectangular")
+    profile:AddChoice("Kruhový - ražený tunel", "round")
+    profile:AddChoice("Široký - procedurální", "wide")
+    profile:AddChoice("Bez tunelu - povrchová trať", "none")
+
+    local layout = panel:ComboBox("Počet kolejí", "mex_track_builder_track_count")
+    layout:AddChoice("1 kolej", "1")
+    layout:AddChoice("2 koleje - samostatné trasy", "2")
+    panel:CheckBox("Použít SKUTEČNÉ modely Metrostroi (.mdl)", "mex_track_builder_auto_native_models")
+
+    panel:Help("2) Zvol způsob stavby")
+    local mode = panel:ComboBox("Stavební režim", "mex_track_builder_rigid_section")
+    mode:AddChoice("Pevný díl - originální model (doporučeno)", "1")
+    mode:AddChoice("Volná trasa / oblouky (kde nejde .mdl, použije mesh)", "0")
+    local length = panel:ComboBox("Délka pevného dílu", "mex_track_builder_rigid_length")
+    length:AddChoice("64 SU", "64")
+    length:AddChoice("256 SU (doporučeno)", "256")
+    length:AddChoice("1024 SU (rychlá stavba)", "1024")
+    length:AddChoice("Podle místa kliknutí (může použít mesh)", "0")
+    panel:Help("Pevný díl: klikni na začátek, pak na směr. Délku určuje vybraný model. RMB uloží; další díl se připojí přes uzly.")
+    panel:Help("Volná trasa: LMB přidává body, RMB ukládá, R vrací jeden krok. Originální rovné modely se skládají automaticky; nenativní oblouky jsou dosud generované.")
+
+    panel:Help("3) Koleje a napájení")
+    panel:CheckBox("Třetí napájecí kolejnice", "mex_track_builder_third_rail")
+    panel:CheckBox("Zobrazit napojovací uzly", "mex_track_builder_show_snap_nodes")
+    panel:CheckBox("Přichytávat k existujícím kolejím", "mex_track_builder_snap")
+    panel:CheckBox("Přidat do Metrostroi kolejové sítě", "mex_track_builder_network")
+    panel:Button("Ověřit originální modely v instalaci", "mex_track_builder_model_status")
+    panel:Help("Tlačítko vypíše přesné cesty a dostupnost modelů do konzole. Pokud model chybí, addon jej nemůže zobrazit.")
+
+    panel:Help("4) Stavba")
+    panel:Button("Uložit / dokončit trať (RMB)", "mex_track_builder_finish")
+    panel:Button("Vrátit poslední krok (R)", "mex_track_builder_undo")
+    panel:Button("Zrušit rozestavěnou trať", "mex_track_builder_cancel")
+    panel:Button("Smazat trať, na kterou mířím", "mex_track_builder_delete_aimed_route")
+
+    local advanced = vgui.Create("DForm", panel)
+    advanced:SetLabel("Pokročilé nastavení: modely, oblouky, geometrie, výkon...")
+    advanced:SetExpanded(false)
+    BuildAdvancedPanel(advanced)
+    panel:AddItem(advanced)
 end
