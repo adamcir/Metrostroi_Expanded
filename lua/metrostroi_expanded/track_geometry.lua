@@ -53,6 +53,31 @@ function G.SelectNativeTunnel(tunnelType, trackCount, length)
     return nil
 end
 
+-- Original Metrostroi model local +Y is the longitudinal direction,
+-- from its model origin to the end attachment. The Z lift is also shared
+-- by the visible MDL AND the original compiled .phy collision proxy.
+G.NativeModelLift = 5
+
+function G.NativeStraightPose(center, angles, length, trackCount, extraZ)
+    local modelAngles = Angle(angles.p, angles.y, angles.r)
+    modelAngles:RotateAroundAxis(modelAngles:Up(), -90)
+    local pos = center - angles:Forward() * (length * 0.5)
+    if trackCount == 2 then
+        local shift = modelAngles:Right() * (-G.NativeDoubleLateralCenter)
+        pos = pos + shift
+    end
+    return pos + angles:Up() * (G.NativeModelLift + (tonumber(extraZ) or 0)), modelAngles
+end
+
+function G.NativeCurvePose(origin, heading, trackCount, extraZ)
+    local angles = Angle(0, heading.y - 90, 0)
+    local pos = origin
+    if trackCount == 2 then
+        pos = pos + angles:Right() * (-G.NativeDoubleLateralCenter)
+    end
+    return pos + Vector(0, 0, G.NativeModelLift + (tonumber(extraZ) or 0)), angles
+end
+
 function G.SafeThirdRailSide(side)
     side = tostring(side or "outside")
     return (side == "left" or side == "right" or side == "both")
