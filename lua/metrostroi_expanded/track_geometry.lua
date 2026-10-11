@@ -379,16 +379,6 @@ local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v8", {
     "metro/metroconcrete004",
     "metro/metroconcrete001",
 }, "[0.48 0.46 0.43]")
-local contactMaterial = SolidMaterial("mex_track_contact_metal_v9", {
-    "models/props_c17/metalladder003",
-    "vgui/white",
-}, "[0.53 0.55 0.55]")
-local contactCoverMaterial = SolidMaterial("mex_track_contact_yellow_v9", {
-    "vgui/white",
-}, "[0.78 0.61 0.21]")
-local insulatorMaterial = SolidMaterial("mex_track_contact_insulator_v5", {
-    "vgui/white",
-}, "[0.46 0.35 0.23]")
 local cableMaterial = SolidMaterial("mex_track_cable_matte_v8", {
     "vgui/white",
 }, "[0.10 0.105 0.11]")
@@ -620,88 +610,9 @@ end
 
 -- Contact rail is always a SEPARATE asset from the running rails/tunnel
 -- (including the official Track Pack). It does not add bogey collisions.
-local function ContactRailVertices(length, gauge, trackCount, trackSpacing, enabled, side, offset, height)
-    local bar, cover, insulators = {}, {}, {}
-    if not enabled then return bar, cover, insulators end
-    local half = length * 0.5
-    side = G.SafeThirdRailSide(side)
-    for lane = 1, trackCount do
-        local center = trackCount == 2 and (lane == 1 and -trackSpacing * 0.5 or trackSpacing * 0.5) or 0
-        local sides = {}
-        if side == "both" then
-            sides = {-1, 1}
-        elseif side == "left" then
-            sides = {1}
-        elseif side == "right" then
-            sides = {-1}
-        elseif trackCount == 2 then
-            sides = {lane == 1 and -1 or 1} -- exterior edge of each track
-        else
-            sides = {-1} -- right side of single line
-        end
-        for _, direction in ipairs(sides) do
-            -- Offset is from TRACK center, not from tunnel center.
-            local y = center + direction * offset
-            local bottom = height - 4
-            AddBox(bar,
-                Vector(-half - 0.3, y - 4.2, bottom),
-                Vector( half + 0.3, y + 4.2, height + 4))
-            -- A covered contact rail with dark top/lateral protection and
-            -- visible supporting ceramic/insulating feet.
-            AddBox(cover,
-                Vector(-half, y - 11, height + 11),
-                Vector( half, y + 11, height + 14))
-            AddBox(cover,
-                Vector(-half, y + direction * 8 - 1.5, height + 5),
-                Vector( half, y + direction * 8 + 1.5, height + 12))
-            local supports = math.max(1, math.ceil(length / 128))
-            for i = 0, supports - 1 do
-                local x = -half + (i + 0.5) * (length / supports)
-                AddBox(insulators,
-                    Vector(x - 7, y - 8, 1.5),
-                    Vector(x + 7, y + 8, height - 4))
-                AddBox(insulators,
-                    Vector(x - 9, y - 13, 0.8),
-                    Vector(x + 9, y + 13, 3.8))
-            end
-        end
-    end
-    return bar, cover, insulators
-end
+-- Third/contact rail is part of the original Metrostroi .mdl and .phy.
+-- No separate addon conductor mesh is generated.
 
-local function MakeContactMeshes(length, gauge, count, spacing, enabled, side, offset, height)
-    local rail, cover, insulators = ContactRailVertices(
-        length, gauge, count, spacing, enabled, side, offset, height)
-    local results = {}
-    for _, item in ipairs({
-        {rail, contactMaterial},
-        {cover, contactCoverMaterial},
-        {insulators, insulatorMaterial}
-    }) do
-        local result = MakeMesh(item[1])
-        if result then results[#results + 1] = {mesh = result, material = item[2]} end
-    end
-    return results
-end
-
-local function DrawMeshEntries(ent, entries)
-    if not entries then return end
-    local matrix = Matrix()
-    matrix:SetTranslation(ent:GetPos())
-    matrix:SetAngles(ent:GetAngles())
-    cam.PushModelMatrix(matrix)
-    for _, entry in ipairs(entries) do
-        if not entry.sleepers or not cvDrawSleepers or cvDrawSleepers:GetBool() then
-            render.SetMaterial(entry.material)
-            entry.mesh:Draw()
-        end
-    end
-    cam.PopModelMatrix()
-end
-
--- Manual diagnostics: tells the player which real compiled modules are
--- actually mounted, and why a section may still be procedural. No scanning
--- all addons or expensive model checks every frame.
 concommand.Add("mex_track_builder_model_status", function()
     print("===== Metrostroi Expanded - real .mdl status =====")
     local ok, absent = 0, 0
@@ -754,92 +665,6 @@ concommand.Add("mex_track_builder_model_status", function()
         player:ChatPrint(string.format("[MEX] Stock tunnel models: %d OK / %d missing. See console for filenames.",ok,absent))
     end
 end)
-
-function G.DrawContactRailOnly(ent)
-    local enabled = ent:GetNW2Bool("MEXThirdRail", true)
-    if not enabled then return end
-    local length = math.max(ent:GetNW2Float("MEXLength", 1), 1)
-    local gauge = ent:GetNW2Float("MEXPhysicalGauge", 85.8)
-    local count = ent:GetNW2Int("MEXTrackCount", 1) == 2 and 2 or 1
-    local spacing = ent:GetNW2Float("MEXTrackSpacing", 240)
-    local side = G.SafeThirdRailSide(ent:GetNW2String("MEXThirdRailSide", "outside"))
-    local offset = ent:GetNW2Float("MEXThirdRailOffset", 112)
-    local height = ent:GetNW2Float("MEXThirdRailHeight", 20)
-    local key = string.format("%.1f/%.1f/%d/%.1f/%s/%.1f/%.1f",
-        length, gauge, count, spacing, side, offset, height)
-    if ent.MEXContactKey ~= key then
-        if ent.MEXContactMeshes then
-            for _, entry in ipairs(ent.MEXContactMeshes) do entry.mesh:Destroy() end
-        end
-        activeUVStart = ent:GetNW2Float("MEXUVStart", 0) + length * 0.5
-        ent.MEXContactMeshes = MakeContactMeshes(length, gauge, count, spacing,
-                                                  enabled, side, offset, height)
-        activeUVStart = 0
-        ent.MEXContactKey = key
-    end
-    DrawMeshEntries(ent, ent.MEXContactMeshes)
-end
-
--- Track Pack provides *rigid compiled MDLs*. Draw exactly one installed model
--- on a straight two-point section, never stretch it along a spline and never
--- guess file paths. Curves continue to use our dynamic procedural geometry.
--- The selected MDL is only a visual skin: MEX's separate rail collision and
--- Metrostroi route graph remain authoritative.
--- Pure client check for group-wide fallback. All covered segments either
--- render their original shell (when this MDL is mounted) or ALL fall back
--- to their procedural geometry; partial mixed tunnels cannot occur.
-function G.IsNativeCurveMounted(model)
-    if not isstring(model) or not string.match(model, "^models/[%w_/%-%.]+%.mdl$") then
-        return false
-    end
-    G.CurveMountCache = G.CurveMountCache or {}
-    if G.CurveMountCache[model] == nil then
-        G.CurveMountCache[model] = util.IsValidModel(model)
-        if not G.CurveMountCache[model] then
-            print("[MEX Track Builder] Original curve model missing: " .. model
-                .. " - drawing safe generated tunnel instead.")
-        end
-    end
-    return G.CurveMountCache[model] == true
-end
-
-function G.DrawNativeCurve(ent)
-    local model = ent:GetNW2String("MEXCurveModel", "")
-    if not G.IsNativeCurveMounted(model) then return false end
-    if ent.MEXNativeCurveModel ~= model or not IsValid(ent.MEXNativeCurvePiece) then
-        if IsValid(ent.MEXNativeCurvePiece) then ent.MEXNativeCurvePiece:Remove() end
-        local created = ClientsideModel(model, RENDERGROUP_OPAQUE)
-        if not IsValid(created) then return false end
-        created:SetNoDraw(true)
-        created:DrawShadow(false)
-        ent.MEXNativeCurvePiece = created
-        ent.MEXNativeCurveModel = model
-    end
-    -- Original turn1 MDLs begin at local (0,0,0), pointing along +Y.
-    -- They are NEVER scaled or bent. The model is used only if the spline
-    -- follows the radius/angle of this exact prefabricated component.
-    local position, mdlAngles = G.NativeCurvePose(
-        ent:GetNW2Vector("MEXCurveOrigin", ent:GetPos()),
-        ent:GetNW2Angle("MEXCurveHeading", Angle(0,0,0)),
-        ent:GetNW2Int("MEXTrackCount", 1),
-        ent:GetNW2Float("MEXPackZOffset", 0))
-    local piece = ent.MEXNativeCurvePiece
-    piece:SetRenderOrigin(position)
-    piece:SetRenderAngles(mdlAngles)
-    local forceLit = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
-    if forceLit then
-        render.SuppressEngineLighting(true)
-        render.SetColorModulation(0.67, 0.67, 0.67)
-    end
-    piece:DrawModel()
-    if forceLit then
-        render.SetColorModulation(1, 1, 1)
-        render.SuppressEngineLighting(false)
-    end
-    piece:SetRenderOrigin(nil)
-    piece:SetRenderAngles(nil)
-    return true
-end
 
 -- IMPORTANT: Genuine Metrostroi models have a known native orientation.
 -- Their track moves from local Y=0 to Y=64/256/1024, NOT centered around
@@ -1006,7 +831,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     local railClips = {}
     local ballast, rings, walkway = {}, {}, {}
     local cables, clamps, beams, wallSeams = {}, {}, {}, {}
-    local thirdRail = ent:GetNW2Bool("MEXThirdRail", true)
+    local thirdRail = false -- built into real stock tunnel/rail prefab
     local contactSide = G.SafeThirdRailSide(ent:GetNW2String("MEXThirdRailSide", "outside"))
     local contactOffset = ent:GetNW2Float("MEXThirdRailOffset", 112)
     local contactHeight = ent:GetNW2Float("MEXThirdRailHeight", 20)
@@ -1153,10 +978,6 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                                 cables, clamps, beams, wallSeams)
     end
 
-    local contact, cover, insulators = ContactRailVertices(
-        length, gauge, trackCount, trackSpacing, thirdRail,
-        contactSide, contactOffset, contactHeight)
-
     local meshes = {}
     local function Keep(vertices, mat)
         local result = MakeMesh(vertices)
@@ -1177,9 +998,6 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     Keep(clamps, cableBracketMaterial)
     Keep(beams, ceilingBeamMaterial)
     Keep(wallSeams, tunnelSeamMaterial)
-    Keep(contact, contactMaterial)
-    Keep(cover, contactCoverMaterial)
-    Keep(insulators, insulatorMaterial)
     activeUVStart = 0
     return meshes
 end
@@ -1201,7 +1019,7 @@ function G.Draw(ent)
     local trackSpacing = math.Clamp(ent:GetNW2Float("MEXTrackSpacing", 240), 180, 400)
     local doubleBore = trackCount == 2
     local tunnelStyle = ent:GetNW2String("MEXTunnelStyle", "metrostroi")
-    local thirdRail = ent:GetNW2Bool("MEXThirdRail", true)
+    local thirdRail = false -- built into real stock tunnel/rail prefab
     local contactSide = G.SafeThirdRailSide(ent:GetNW2String("MEXThirdRailSide", "outside"))
     local contactOffset = ent:GetNW2Float("MEXThirdRailOffset", 112)
     local contactHeight = ent:GetNW2Float("MEXThirdRailHeight", 20)
