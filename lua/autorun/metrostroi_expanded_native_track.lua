@@ -318,9 +318,10 @@ if CLIENT then
         if not tool then return end
         local ply = LocalPlayer()
         local tr = ply:GetEyeTrace()
-        if not tr.Hit or tr.HitSky then return end
+        local aim = tr.Hit and not tr.HitSky and tr.HitPos
+            or (ply:GetShootPos() + ply:GetAimVector() * 800)
         local active = ply:GetNW2Bool("MEXNativeActive", false)
-        local origin = active and ply:GetNW2Vector("MEXNativeEnd", tr.HitPos) or tr.HitPos
+        local origin = active and ply:GetNW2Vector("MEXNativeEnd", aim) or aim
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0) or ply:EyeAngles().y
         local settings = {
             mode = tool:GetClientInfo("native_mode"),
@@ -330,7 +331,7 @@ if CLIENT then
             junction = tool:GetClientInfo("native_junction"),
             branch = tool:GetClientNumber("native_branch", 2),
         }
-        local candidate, errorText = N.Candidate(origin, yaw, tr.HitPos, settings)
+        local candidate, errorText = N.Candidate(origin, yaw, aim, settings)
         if candidate and #candidate.parts > 0 then
             for i, part in ipairs(candidate.parts) do
                 if i <= 64 then DrawGhost(part, i, false) end
@@ -527,6 +528,8 @@ local function RefreshPreview(state)
             ent:SetColor(Color(145, 145, 145, 130))
             ent:SetSolid(SOLID_NONE)
             ent:Spawn()
+            ent:SetNotSolid(true)
+            ent:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
             ent:DrawShadow(false)
             ent:SetNW2Bool("MEXNativePreview", true)
             state.preview[#state.preview + 1] = ent
