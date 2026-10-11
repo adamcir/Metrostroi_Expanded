@@ -17,8 +17,12 @@ Enable **Rigid section** to create a straight non-bendable station module.
 A native **Metrostroi tunnel64/256/1024 .mdl** can be used automatically on
 straight segments of an exact supported length; third-party **Track Pack**
 models can be selected in the on-demand installed-model browser for rigid
-modules. Curves are still procedural and use original Metrostroi tunnelwall
-and rail-bed textures when mounted, with safe non-checker fallback materials.
+modules. Straight routes favor the largest native 1024-SU pieces, then 256/64.
+Curved sections remain procedural, now with tiled Metrostroi concrete,
+wall-mounted dark cable bundles with clamps, roof beams, proper steel
+rail profiles and fasteners. These meshes avoid projecting stock MDL-specific
+texture atlases onto plain cuboids, while mounted original prefabs retain
+their own genuine materials.
 
 A covered **third (contact) rail** is now part of each route by default:
 the rail, insulating supports and protective guard render on either side
