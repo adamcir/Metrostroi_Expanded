@@ -323,7 +323,9 @@ if CLIENT then
     end
 
     hook.Add("PostDrawTranslucentRenderables", "MEXTrackBuilderPreview", function()
-        if not TrackBuilderSelected() then return end
+        -- The original-MDL builder has its own endpoint-only ghost preview.
+        -- Never draw legacy mid-route nodes over the new native models.
+        if MEXNativeTrack or not TrackBuilderSelected() then return end
 
         local ply = LocalPlayer()
         local tr = ply:GetEyeTrace()
