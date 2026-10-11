@@ -1,5 +1,48 @@
 # In-game Tunnel Builder (first implementation)
 
+## Model-first controls (October 2026)
+
+Open **Q → Tools → Metrostroi Expanded → Track Builder**. The NEW short
+main panel prioritizes genuinely mounted compiled Metrostroi models:
+1. Choose **Rectangular (classic)**, **Round**, **Surface** or **Wide** and
+   **one/two tracks**.
+2. Select **Fixed module – original model**, then **256 SU** or **1024 SU**.
+   LMB start, LMB direction (fixed length), RMB save.
+3. Continue at a green terminal node. To draw a freely curving path, change
+   **Construction mode → Free route**, add several points and RMB save.
+4. Press **Check installed original models** to view actual stock
+   `.mdl` availability in the GMod developer console (also use
+   `mex_track_builder_model_status`).
+5. Expand **Advanced settings** only for custom Track Pack prefabs, power-rail
+   clearances, track gauge, curves and performance.
+
+The tool defaults to **rigid, rectangular 256-SU original model pieces**
+on new installations, with real Metrostroi MDL rendering enabled. For new
+surface tracks, it can use the real `railroad4096.mdl` and
+`railroad1024.mdl` modules.
+
+**Technical fix:** The stock compiled models' coordinate system uses
+**local +Y from Y=0 to Y=length**, not a random dominant OBB axis.
+Previous implementations guessed orientation from OBB dimensions and
+silently created surrogate procedural boxes. This version knows the
+stock prefab lengths/axes from the original MDL headers, places the
+true asset at the start endpoint, and compensates for the asymmetric
+stock double-track prefab centerline.
+
+After saving a route, the game reports **how many native pieces were
+actually used** versus fallback sections. Missing installed source models
+are logged once on the server and can be checked with the model status button.
+
+**Limitations:** Freeform splines cannot magically deform rigid stock
+models. Unsupported lengths/curves still use generated rail/tunnel mesh.
+The original curved `tunnel*turn*.mdl` prefab families do exist, but
+they require explicit curvature/endpoint/connection metadata before MEX
+can safely replace the path graph and collision geometry. Pretending
+that an arbitrary straight chord is a curved MDL would misalign trains.
+No external Track Pack model assets are redistributed.
+
+
+
 The existing **Metrostroi Expanded → Track Builder** tool now supports the tunnel profile of each newly created rail route. No Hammer compilation or replacement BSP is required; all geometry is generated as static Lua entities in the running map.
 
 ## Usage
