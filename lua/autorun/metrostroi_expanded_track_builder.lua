@@ -59,6 +59,46 @@ local function BoxConvex(mins, maxs)
     }
 end
 
+-- Install the ORIGINAL Metrostroi .phy from the exact same .mdl that is
+-- displayed. Unlike rectangular approximation hulls this collides with its
+-- actual sleepers, guarded contact rail, tunnel wall and floor. Never
+-- render the physics proxy: client rendering stays under TrackEntity:Draw.
+function TrackEntity:InstallNativePhysics(model, position, angles)
+    if not SERVER or not isstring(model) or not util.IsValidModel(model)
+        or not isvector(position) or not isangle(angles) then return false end
+
+    if IsValid(self.MEXNativePhysicsProxy) then
+        self.MEXNativePhysicsProxy:Remove()
+        self.MEXNativePhysicsProxy = nil
+    end
+    local proxy = ents.Create("prop_physics")
+    if not IsValid(proxy) then return false end
+    proxy:SetModel(model)
+    proxy:SetPos(position)
+    proxy:SetAngles(angles)
+    proxy:SetCollisionGroup(COLLISION_GROUP_NONE)
+    proxy:Spawn()
+    local phys = proxy:GetPhysicsObject()
+    if not IsValid(phys) then
+        proxy:Remove()
+        print("[MEX Track Builder] No usable native .phy collision: " .. model)
+        return false
+    end
+    proxy:SetNoDraw(true)
+    proxy:DrawShadow(false)
+    phys:EnableMotion(false)
+    phys:Sleep()
+    self.MEXNativePhysicsProxy = proxy
+    self:DeleteOnRemove(proxy)
+    -- The source MDL has its real collider; DO NOT stack an inaccurate second
+    -- physics shape on the sleepers/wheels (train jitter and floating).
+    self:PhysicsDestroy()
+    self:SetMoveType(MOVETYPE_NONE)
+    self:SetSolid(SOLID_NONE)
+    self:SetNW2Bool("MEXNativePhysics", true)
+    return true
+end
+
 function TrackEntity:Initialize()
     -- Our procedural Draw() does not draw the backing 16-SU model. Source
     -- may still project a shadow from that hidden model for each rail entity.
@@ -1017,6 +1057,15 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
+    if nativeModel and available and packModel == "" then
+        local modelPos, modelAng = Builder.Geometry.NativeStraightPose(
+            ent:GetPos(), ent:GetAngles(), length, settings.track_count,
+            settings.pack_z_offset)
+        ent:InstallNativePhysics(nativeModel, modelPos, modelAng)
+    elseif packModel ~= "" then
+        -- Track Pack custom pieces can be physics-backed by their native .phy
+        -- only after shape/axis fitting is calibrated; no blind physics.
+    end
 
     return ent
 end
@@ -1188,6 +1237,20 @@ local function SpawnPolyline(points, settings, routeID)
                     ent:SetNW2Bool("MEXCurveOwner", true)
                     ent:SetNW2Vector("MEXCurveOrigin", model.model_origin)
                     ent:SetNW2Angle("MEXCurveHeading", model.model_angle)
+                    -- A single real .phy represents the COMPLETE curved
+                    -- tubbing/rail/sleeper/contact-rail module.
+                    local nativePos, nativeAngle = Builder.Geometry.NativeCurvePose(
+                        model.model_origin, model.model_angle, settings.track_count,
+                        settings.pack_z_offset)
+                    local installed = ent:InstallNativePhysics(model.model, nativePos, nativeAngle)
+                    if installed then
+                        model.native_physics_ok = true
+                    end
+                elseif model.native_physics_ok then
+                    -- Following fine curve chords must not collide again.
+                    ent:PhysicsDestroy()
+                    ent:SetMoveType(MOVETYPE_NONE)
+                    ent:SetSolid(SOLID_NONE)
                 end
             end
         end
