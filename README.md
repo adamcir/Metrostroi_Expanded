@@ -12,8 +12,11 @@ the original compiled model collision and rejects missing assets, rather
 than constructing synthetic rails, sleepers or tunnel shells.
 
 **LMB** starts the route and appends selected native modules. **RMB**
-commits it; **R** undoes a module. A grey translucent original-model
-preview appears under the tool cursor, and unfinished pieces stay ghosted.
+commits it; **R** removes exactly the saved or grey model under the crosshair.
+**Shift+R** undoes the last unsaved placement. The targeted module is
+highlighted before deletion, while all other modules remain in the route.
+A grey translucent original-model preview appears under the tool cursor,
+and unfinished pieces stay ghosted.
 Free start/end connectors are shown; double-track modules expose
 independent rail endpoint nodes and two Metrostroi network paths.
 
