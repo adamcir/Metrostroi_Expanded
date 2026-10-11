@@ -67,13 +67,14 @@ end
 
 function TOOL:LeftClick(trace)
     if CLIENT then return true end
-    if not trace.Hit or trace.HitSky then return false end
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
     if not MEXTrackBuilder then return false end
 
-    if MEXNativeTrack then return MEXNativeTrack.Add(ply, trace.HitPos, {
+    local aim = trace.Hit and not trace.HitSky and trace.HitPos
+        or (ply:GetShootPos() + ply:GetAimVector() * 800)
+    if MEXNativeTrack then return MEXNativeTrack.Add(ply, aim, {
             mode = self:GetClientInfo("native_mode"),
             tunnel = self:GetClientInfo("native_tunnel"),
             tracks = self:GetClientNumber("native_tracks", 1),
