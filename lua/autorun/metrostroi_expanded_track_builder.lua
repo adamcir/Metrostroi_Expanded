@@ -1104,20 +1104,72 @@ end
 
 local function SpawnPolyline(points, settings, routeID)
     local entities = {}
-    -- Physical route is intentionally simpler than the fine-grained rail graph.
+    settings = CopySettings(settings)
+    -- Keep physics/Metrostroi network on accurately sampled chords. Replace
+    -- only the VISUAL shell with stock curved turn1 MDLs when the route is
+    -- a verified exact-radius arc; an unsuitable prefabricated tunnel must
+    -- never distort the wheel path or rerail network.
     local geometryPoints = Builder.BuildGeometryPoints(points, settings)
+    local modelCurves = {}
+
+    if settings.experimental_native_curves and settings.auto_native_models
+        and settings.tunnel_style == "metrostroi" and not settings.rigid_section
+    then
+        local index = 1
+        while index < #geometryPoints - 2 and #modelCurves < 256 do
+            local match = Builder.Geometry.MatchNativeCurve(geometryPoints, index, settings)
+            if match and util.IsValidModel(match.model) then
+                -- Insert the precise arc-length boundary within an existing
+                -- physical chord. Endpoints remain on the spline, and
+                -- adjoining modules cannot drift across segment seams.
+                local boundaryIndex = match.end_edge + 1
+                if match.boundary:DistToSqr(geometryPoints[boundaryIndex]) > 0.1
+                    and match.boundary:DistToSqr(geometryPoints[match.end_edge]) > 0.1
+                then
+                    table.insert(geometryPoints, boundaryIndex, match.boundary)
+                elseif match.boundary:DistToSqr(geometryPoints[match.end_edge]) <= 0.1 then
+                    boundaryIndex = match.end_edge
+                end
+                if boundaryIndex > index then
+                    match.finish = boundaryIndex - 1
+                    modelCurves[#modelCurves + 1] = match
+                    index = boundaryIndex
+                else
+                    index = index + 1
+                end
+            else
+                index = index + 1
+            end
+        end
+    end
 
     local alongRoute = 0
     for i = 1, #geometryPoints - 1 do
         local from, to = geometryPoints[i], geometryPoints[i + 1]
         local ent = SpawnSegment(from, to, settings, routeID, i, alongRoute)
-        if IsValid(ent) then
-            entities[#entities + 1] = ent
-        end
+        entities[i] = IsValid(ent) and ent or NULL
         alongRoute = alongRoute + from:Distance(to)
     end
 
-    return entities
+    for _, model in ipairs(modelCurves) do
+        for i = model.start_index, model.finish do
+            local ent = entities[i]
+            if IsValid(ent) then
+                ent:SetNW2Bool("MEXCurveCovered", true)
+                ent:SetNW2String("MEXCurveModel", model.model)
+                if i == model.start_index then
+                    ent:SetNW2Bool("MEXCurveOwner", true)
+                    ent:SetNW2Vector("MEXCurveOrigin", model.model_origin)
+                    ent:SetNW2Angle("MEXCurveHeading", model.model_angle)
+                end
+            end
+        end
+    end
+    local clean = {}
+    for _, ent in ipairs(entities) do
+        if IsValid(ent) then clean[#clean + 1] = ent end
+    end
+    return clean
 end
 
 local function SetActiveStart(ply, pos)
