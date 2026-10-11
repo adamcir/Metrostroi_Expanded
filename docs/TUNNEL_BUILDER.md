@@ -76,9 +76,11 @@ lining**. Multiple tiny MEX track physics hulls are removed on sections
 covered by an authentic native collider so they do not make train bogies
 bounce or hover.
 
-The collision entities are frozen, networked, non-rendered and removed
-with their owning route. The Physgun and most tools cannot move them;
-Track Builder can still interact with their owning track.
+The collision entities are frozen, networked, never rendered
+(their scripted entity has an empty Draw hook), and removed with
+their owning route. The Physgun and most tools cannot move them;
+Track Builder can still interact with their owning track and its
+delete/undo actions resolve an invisible collider to the owning route.
 
 **Important:** This depends on the real stock `.phy` quality and game
 physics behavior. The absence of a matching installed `.phy` prevents
@@ -100,7 +102,9 @@ frame times.
 
 To verify:
 1. Run `mex_track_builder_model_status` in GMod console to check mounted
-   stock prefabs and experimental curved models.
+   stock prefabs and experimental curved models. Then run
+   `mex_track_builder_collision_status` to count live original-physics
+   proxies and reveal missing/unusable collision entities.
 2. Build one 256-SU original rectangular tunnel and check its actual
    model, sleepers and contact rail (no duplicate yellow rail).
 3. Aim at the original model with Track Builder and confirm you can
