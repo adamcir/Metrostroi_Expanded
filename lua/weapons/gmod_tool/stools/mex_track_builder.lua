@@ -38,10 +38,8 @@ TOOL.ClientConVar = {
     tunnel_wall = "12",
     tunnel_style = "metrostroi",
     auto_native_models = "1",
-    third_rail = "1",
-    third_rail_side = "outside",
-    third_rail_offset = "112",
-    third_rail_height = "20",
+    -- Original models contain their own conductor rail.
+    stock_models_only = "1",
     use_track_model = "1",
     track_model = "models/metrostroi/tracks/railroad16.mdl",
     track_count = "1",
@@ -100,10 +98,7 @@ local function ReadSettings(tool)
         tunnel_wall = tool:GetClientNumber("tunnel_wall", 12),
         tunnel_style = tool:GetClientInfo("tunnel_style"),
         auto_native_models = tool:GetClientNumber("auto_native_models", 1),
-        third_rail = tool:GetClientNumber("third_rail", 1),
-        third_rail_side = tool:GetClientInfo("third_rail_side"),
-        third_rail_offset = tool:GetClientNumber("third_rail_offset", 112),
-        third_rail_height = tool:GetClientNumber("third_rail_height", 20),
+        stock_models_only = tool:GetClientNumber("stock_models_only", 1),
         use_track_model = tool:GetClientNumber("use_track_model", 1),
         track_model = tool:GetClientInfo("track_model"),
         track_count = tool:GetClientNumber("track_count", 1),
@@ -364,17 +359,7 @@ local function BuildAdvancedPanel(panel)
     panel:Help("Rectangular / Wide classic tunnels include 12 signal cables, support clamps, precast wall seams and concrete ceiling ribs, matching the appearance of standard Metrostroi tunnels.")
     panel:Help("Running rails have a metal head/web/base with dark sleeper fasteners. Third-rail guard is yellow as on the original Metro. If content textures are absent, the mesh uses safe replacements.")
 
-    panel:Help("Third (contact / power) rail")
-    panel:CheckBox("Add third contact rail", "mex_track_builder_third_rail")
-    local side = panel:ComboBox("Contact rail side", "mex_track_builder_third_rail_side")
-    side:AddChoice("Outside each track (recommended)", "outside")
-    side:AddChoice("Left of travel direction", "left")
-    side:AddChoice("Right of travel direction", "right")
-    side:AddChoice("Both sides (special sections)", "both")
-    panel:NumSlider("Contact rail offset from track centre (SU)", "mex_track_builder_third_rail_offset", 95, 155, 0)
-    panel:NumSlider("Contact rail contact height above track base (SU)", "mex_track_builder_third_rail_height", 12, 36, 0)
-    panel:Help("Contact rail includes support insulators and protective top cover. For DOUBLE, Outside puts one rail on the outer side of each running track.")
-    panel:Help("Power rail is currently a visual track component only: it does not yet simulate electricity/current collection or third-rail collisions.")
+    panel:Help("Original Metrostroi models include their own third rail, sleepers and collision mesh. No duplicate contact rail is generated.")
 
     panel:Help("Tunnel construction")
     local tunnel = panel:ComboBox("Tunnel type", "mex_track_builder_tunnel_type")
@@ -458,10 +443,13 @@ function TOOL.BuildCPanel(panel)
     panel:CheckBox("EXPERIMENTAL: original Metrostroi curve models", "mex_track_builder_experimental_native_curves")
     panel:NumSlider("Minimum safe curve radius (SU)", "mex_track_builder_min_curve_radius", 1024, 8192, 0)
     panel:Help("Curves sharper than the minimum are REFUSED before spawning or saving. Double-track radius is checked on the inner track.")
-    panel:Help("Native curves are experimental: exact, level right-hand turns matching an installed 3072/4096/8192-radius turn1 model use its original .mdl. Other curves use procedural geometry. Rail physics and network remain sampled.")
+    panel:Help("Original models only: match a 3072/4096/8192 SU right-hand turn. Unsupported bends are rejected, never replaced with a fake model.")
+    panel:Help("Original compiled .mdl models and matching .phy collisions are lifted together by 5 SU. No separate third rail is generated.")
 
-    panel:Help("3. TRACK EQUIPMENT")
-    panel:CheckBox("Covered third / contact rail", "mex_track_builder_third_rail")
+    panel:Help("3. ORIGINAL TRACK MODELS")
+    panel:CheckBox("Original models ONLY (reject unsupported sections)", "mex_track_builder_stock_models_only")
+    panel:Help("Default ON: No fake tunnel boxes or additional third rails are built. Unsupported curves and lengths are rejected with a useful message.")
+    panel:Help("The stock .mdl provides the original third rail, and its .phy provides collision for rails, sleepers, lining and contact rail.")
     panel:CheckBox("Show attachment nodes", "mex_track_builder_show_snap_nodes")
     panel:CheckBox("Snap to existing track ends", "mex_track_builder_snap")
     panel:CheckBox("Register Metrostroi railway network", "mex_track_builder_network")
