@@ -977,22 +977,31 @@ end
 -- spikes and unstable wheel contacts on long manually built routes.
 function Builder.BuildGeometryPoints(points, settings)
     settings = CopySettings(settings)
-    if settings.rigid_section then
+    if settings.rigid_section and not settings.auto_native_models then
         return #points >= 2 and {points[1], points[#points]} or points
     end
     -- Place AUTHENTIC native-length tunnel MDLs on actually straight routes.
     -- We only resample the physical geometry; Metrostroi's network remains
     -- the original fine spline. Never snap a curved spline to a prefab.
-    if settings.auto_native_models and settings.tunnel_type ~= "none"
-        and #points >= 2 then
+    if settings.auto_native_models and #points >= 2 then
         local first, last = points[1], points[#points]
         local chord = last - first
         local length = chord:Length()
         -- Prefer the longest genuine Metrostroi MDL to avoid spawning many
         -- tiny tunnel models. The 256/64 pieces finish short single-track
         -- runs; a 2-track original is available only as tunnel1024_double.
-        local sizes = settings.track_count == 2 and {1024} or {1024, 256, 64}
-        if length >= sizes[#sizes] and length > 0 then
+        -- Surface rail uses the real 4096/1024 Metrostroi assets; tunnel
+        -- types reuse original 1024/256/64 modules. Double has a native
+        -- 1024 module. Do NOT cut near-empty pieces into 16SU models.
+        local sizes
+        if settings.tunnel_type == "none" then
+            sizes = settings.track_count == 1 and {4096, 1024} or {}
+        elseif settings.track_count == 2 then
+            sizes = {1024}
+        else
+            sizes = {1024, 256, 64}
+        end
+        if #sizes > 0 and length >= sizes[#sizes] and length > 0 then
             local direction = chord / length
             local straight = true
             local previousAlong = -1
