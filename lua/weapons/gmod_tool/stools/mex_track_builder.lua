@@ -28,7 +28,7 @@ TOOL.ClientConVar = {
 if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
     language.Add("tool.mex_track_builder.desc", "Build using only original Metrostroi MDL modules")
-    language.Add("tool.mex_track_builder.0", "LMB: set start / place original module | RMB: finish | R: undo last module")
+    language.Add("tool.mex_track_builder.0", "LMB: start/place | RMB: finish | R: remove aimed module | Shift+R: undo last placement")
 
     -- Older installations kept the former fixed-prefab + rectangular
     -- tunnel defaults in archived client convars. Migrate just once so
@@ -103,7 +103,13 @@ function TOOL:Reload(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if MEXNativeTrack then return MEXNativeTrack.Undo(ply, trace and trace.Entity) end
+    if not MEXNativeTrack then return false end
+    -- R removes exactly the module under the crosshair, not the last module
+    -- of its route. Shift+R is the explicit undo construction shortcut.
+    if ply:KeyDown(IN_SPEED) then
+        return MEXNativeTrack.Undo(ply)
+    end
+    return MEXNativeTrack.RemoveAimedModule(ply, trace and trace.Entity)
     return false
 
 end
@@ -113,8 +119,10 @@ function TOOL.BuildCPanel(panel)
         Text = "Metrostroi Expanded - Original Track Builder",
         Description = "Real Metrostroi MDLs and their compiled physics only. No procedural tracks or tunnel shells.",
     })
-    panel:Help("LMB: select start, then build | RMB: save | R: undo one module")
-    panel:Help("The grey translucent model is always a preview. Green and orange spheres are the start/end connectors.")
+    panel:Help("LMB: set the first connector, then place original modules.")
+    panel:Help("RMB: save construction. R: delete only the module under your crosshair.")
+    panel:Help("Shift + R: undo the last unsaved module. The rest of the route stays.")
+    panel:Help("Grey = pending model. Green = start node. Orange = end node.")
     local tunnel = panel:ComboBox("Original model family", "mex_track_builder_native_tunnel")
     tunnel:AddChoice("Round tunnel", "round")
     tunnel:AddChoice("Rectangular tunnel", "rectangular")
@@ -148,9 +156,10 @@ function TOOL.BuildCPanel(panel)
     panel:Help("Turnouts and crossings require a registered original MDL and measured connector coordinates; unsafe or missing models cannot be placed.")
     panel:Help("Use server command mex_native_register_junction for custom installed Metrostroi Track Pack junctions.")
     panel:Button("Finish route", "mex_native_finish")
-    panel:Button("Undo last module", "mex_native_undo")
+    panel:Button("Undo last unsaved module (Shift+R)", "mex_native_undo")
+    panel:Button("Remove aimed single module (R)", "mex_native_remove_aimed")
     panel:Button("Cancel construction", "mex_native_cancel")
-    panel:Button("Delete aimed saved route", "mex_native_delete_aimed")
+    panel:Button("Delete entire aimed route (advanced)", "mex_native_delete_aimed")
     panel:Button("Show original-model status", "mex_native_status")
     panel:Button("List available original junction models", "mex_native_list_junction_models")
 end
