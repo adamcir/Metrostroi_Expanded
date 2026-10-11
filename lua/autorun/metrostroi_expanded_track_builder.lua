@@ -502,9 +502,6 @@ local function CopySettings(settings)
         smooth = settings.smooth ~= false and tonumber(settings.smooth or 1) ~= 0,
         curve_tension = math.Clamp(tonumber(settings.curve_tension) or 0.45, 0.05, 0.85),
         segment_length = math.Clamp(tonumber(settings.segment_length) or 48, 16, 256),
-        use_track_model = settings.use_track_model ~= false and tonumber(settings.use_track_model or 1) ~= 0,
-        track_model = SafeTrackModel(settings.track_model),
-        fast_geometry = settings.fast_geometry ~= false and tonumber(settings.fast_geometry or 1) ~= 0,
         -- Tunnel construction is part of the route and survives save/load.
         tunnel_type = Builder.Geometry.SafeTunnelType(settings.tunnel_type),
         tunnel_radius = math.Clamp(tonumber(settings.tunnel_radius) or 170, 140, 320),
