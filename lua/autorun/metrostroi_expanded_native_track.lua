@@ -301,6 +301,52 @@ function N.ModulePaths(part)
     return paths
 end
 
+-- Identify the exact preview module under the crosshair. Preview props are
+-- deliberately non-solid so a player/train can pass through; Source's normal
+-- eye trace therefore cannot hit them. Ray-test their REAL stock model OBBs.
+function N.FindAimedPreview(ply)
+    if not IsValid(ply) then return nil end
+    local origin = ply:GetShootPos()
+    local ray = ply:GetAimVector() * 8192
+    local list
+    if CLIENT then
+        list = ents.FindByClass("prop_dynamic_override")
+    else
+        local state = N.Active and N.Active[ply]
+        list = state and state.preview or {}
+    end
+    local selected, nearest = nil, ray:LengthSqr()
+    for _, ent in ipairs(list) do
+        if IsValid(ent) and ent:GetNW2Bool("MEXNativePreview", false)
+            and ent:GetNW2Entity("MEXNativePreviewOwner") == ply then
+            local hit = util.IntersectRayWithOBB(
+                origin, ray, ent:GetPos(), ent:GetAngles(),
+                ent:OBBMins(), ent:OBBMaxs()
+            )
+            if isvector(hit) then
+                local distance = origin:DistToSqr(hit)
+                if distance < nearest then
+                    nearest, selected = distance, ent
+                end
+            end
+        end
+    end
+    return selected, nearest
+end
+
+function N.GetAimedModule(ply, traced)
+    if not IsValid(ply) then return nil end
+    local saved = IsValid(traced) and traced:GetNW2Bool("MEXNativeModule", false)
+        and traced or nil
+    local ghost, ghostDist = N.FindAimedPreview(ply)
+    if not IsValid(ghost) then return saved end
+    if not IsValid(saved) then return ghost end
+    if ghostDist < ply:GetShootPos():DistToSqr(ply:GetEyeTrace().HitPos) then
+        return ghost
+    end
+    return saved
+end
+
 if CLIENT then
     local ghosts = {}
     local grey = Color(155, 155, 155, 130)
@@ -680,6 +726,8 @@ local function RefreshPreview(state)
             ent:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
             ent:DrawShadow(false)
             ent:SetNW2Bool("MEXNativePreview", true)
+            ent:SetNW2Entity("MEXNativePreviewOwner", state.owner)
+            ent:SetNW2Int("MEXNativePreviewIndex", #state.preview + 1)
             state.preview[#state.preview + 1] = ent
         end
     end
@@ -696,7 +744,8 @@ function N.Add(ply, aim, settings)
         local connector = N.FindPort(aim, 72, settings.tracks)
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
-        N.Active[ply] = {start = pos, startYaw = yaw, pos = pos, yaw = yaw, parts = {}}
+        N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
+            pos = pos, yaw = yaw, parts = {}, preview = {}}
         SyncState(ply)
         Notify(ply, connector and "Connected to an original model endpoint." or "Start node set. Aim ahead to preview an original model.")
         return true
