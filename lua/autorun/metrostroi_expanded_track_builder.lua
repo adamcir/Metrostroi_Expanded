@@ -1050,7 +1050,7 @@ end
 
 Builder.GetRouteRenderPoints = RouteRenderPoints
 
-local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
+local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart, coveredByCurve)
     if not isvector(a) or not isvector(b) then return nil end
 
     local delta = b - a
@@ -1129,6 +1129,15 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
+    if coveredByCurve then
+        -- The actual original curved .mdl/.phy is installed ONCE on the
+        -- first member of its matching group, not on every short chord.
+        -- Keep these logical segments so snapping/rerail still works.
+        ent:PhysicsDestroy()
+        ent:SetMoveType(MOVETYPE_NONE)
+        ent:SetSolid(SOLID_NONE)
+        return ent
+    end
     local physicModel
     if packModel ~= "" and Builder.Geometry.IsVerifiedStockSegment(
         packModel, settings.track_count, length) then
@@ -1357,11 +1366,24 @@ local function SpawnPolyline(points, settings, routeID)
     local valid, reason = CheckNativeCoverage(points, settings)
     if not valid then return {}, reason end
 
+    local curved = {}
+    for _, model in ipairs(modelCurves) do
+        for index = model.start_index, model.finish do
+            curved[index] = true
+        end
+    end
     local alongRoute = 0
     for i = 1, #geometryPoints - 1 do
         local from, to = geometryPoints[i], geometryPoints[i + 1]
-        local ent = SpawnSegment(from, to, settings, routeID, i, alongRoute)
-        entities[i] = IsValid(ent) and ent or NULL
+        local ent, reason = SpawnSegment(from, to, settings, routeID, i,
+            alongRoute, curved[i] == true)
+        if not IsValid(ent) then
+            for _, spawned in pairs(entities) do
+                if IsValid(spawned) then spawned:Remove() end
+            end
+            return {}, reason or ("Could not spawn Metrostroi section " .. i)
+        end
+        entities[i] = ent
         alongRoute = alongRoute + from:Distance(to)
     end
 
@@ -1381,15 +1403,23 @@ local function SpawnPolyline(points, settings, routeID)
                         model.model_origin, model.model_angle, settings.track_count,
                         settings.pack_z_offset - (settings.stock_models_only
                             and 0 or Builder.Geometry.NativeModelLift))
-                    local installed = ent:InstallNativePhysics(model.model, nativePos, nativeAngle)
-                    if installed then
-                        model.native_physics_ok = true
+                    local installed, physicsError = ent:InstallNativePhysics(
+                        model.model, nativePos, nativeAngle)
+                    if not installed and settings.stock_models_only then
+                        for _, spawned in pairs(entities) do
+                            if IsValid(spawned) then spawned:Remove() end
+                        end
+                        return {}, physicsError or ("Could not create curved model physics: " .. model.model)
                     end
-                elseif model.native_physics_ok then
-                    -- Following fine curve chords must not collide again.
-                    ent:PhysicsDestroy()
-                    ent:SetMoveType(MOVETYPE_NONE)
-                    ent:SetSolid(SOLID_NONE)
+                    local drawn, drawError = ent:InstallNativeVisual(
+                        model.model, nativePos, nativeAngle)
+                    if not drawn and settings.stock_models_only then
+                        for _, spawned in pairs(entities) do
+                            if IsValid(spawned) then spawned:Remove() end
+                        end
+                        return {}, drawError or ("Could not render curved model: " .. model.model)
+                    end
+                    model.native_physics_ok = installed
                 end
             end
         end
