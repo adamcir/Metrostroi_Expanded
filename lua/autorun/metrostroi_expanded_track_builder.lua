@@ -1084,6 +1084,17 @@ function Builder.RebuildMetrostroiNetwork(notifyPly)
         end
     end
 
+    -- Native original-model sections (including registered turnouts/crossings)
+    -- share the same Metrostroi rail-network output as legacy routes.
+    if MEXNativeTrack and MEXNativeTrack.GetNetworkPaths then
+        for _, nativePoints in ipairs(MEXNativeTrack.GetNetworkPaths()) do
+            if #nativePoints >= 2 then
+                maxPathID = maxPathID + 1
+                merged[maxPathID] = nativePoints
+            end
+        end
+    end
+
     file.Write(MetrostroiTrackPath(), util.TableToJSON(merged, true) or "[]")
 
     if IsValid(notifyPly) then
