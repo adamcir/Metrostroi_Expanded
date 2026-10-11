@@ -579,6 +579,76 @@ local function SpawnRoute(route, ghost)
     end
     return new
 end
+-- Reject an ordinary rail-line intersection. The only way to build a
+-- valid at-grade diamond or turnout is a registered original junction MDL.
+-- An end-to-end join is allowed; grade-separated routes are independent.
+local function SegmentsCross(a, b, c, d, aStart, aEnd, cStart, cEnd)
+    local ab, cd = b - a, d - c
+    local cross = ab.x * cd.y - ab.y * cd.x
+    if math.abs(cross) < 0.0001 then return false end
+    local between = c - a
+    local t = (between.x * cd.y - between.y * cd.x) / cross
+    local u = (between.x * ab.y - between.y * ab.x) / cross
+    if t <= 0.001 or t >= 0.999 or u <= 0.001 or u >= 0.999 then
+        -- A true crossing at a sampled spline node can land at t=0 or u=0.
+        -- The actual route endpoint check below distinguishes those cases.
+        if t < -0.001 or t > 1.001 or u < -0.001 or u > 1.001 then return false end
+    end
+    if t < -0.001 or t > 1.001 or u < -0.001 or u > 1.001 then return false end
+    local p = a + ab * t
+    local q = c + cd * u
+    if math.abs(p.z - q.z) > 48 then return false end
+    local atAEnd = math.min(p:DistToSqr(aStart), p:DistToSqr(aEnd)) < 16
+    local atCEnd = math.min(q:DistToSqr(cStart), q:DistToSqr(cEnd)) < 16
+    return not (atAEnd and atCEnd)
+end
+local function PathBounds(path)
+    local minX, minY, maxX, maxY = math.huge, math.huge, -math.huge, -math.huge
+    for _, p in ipairs(path) do
+        minX, minY = math.min(minX, p.x), math.min(minY, p.y)
+        maxX, maxY = math.max(maxX, p.x), math.max(maxY, p.y)
+    end
+    return minX, minY, maxX, maxY
+end
+local function CheckNativeCrossings(parts, ignoreRouteID)
+    local all = {}
+    for _, part in ipairs(parts) do
+        for _, path in ipairs(N.ModulePaths(part)) do
+            if #path > 1 then all[#all + 1] = {path = path, part = part} end
+        end
+    end
+    for routeID, route in ipairs(N.Routes) do
+        if routeID ~= ignoreRouteID then
+            for _, part in ipairs(route.parts or {}) do
+                for _, existing in ipairs(N.ModulePaths(part)) do
+                    if #existing > 1 then
+                        local cx, cy, dx, dy = PathBounds(existing)
+                        for _, entry in ipairs(all) do
+                            local proposed = entry.path
+                            local ax, ay, bx, by = PathBounds(proposed)
+                            if ax <= dx + 1 and bx + 1 >= cx
+                                and ay <= dy + 1 and by + 1 >= cy then
+                                for i = 1, #proposed - 1 do
+                                    local a, b = proposed[i], proposed[i + 1]
+                                    for j = 1, #existing - 1 do
+                                        local c, d = existing[j], existing[j + 1]
+                                        if SegmentsCross(a, b, c, d,
+                                            proposed[1], proposed[#proposed],
+                                            existing[1], existing[#existing]) then
+                                            return false, "At-grade intersection with another route. Insert a calibrated original crossing or turnout model instead."
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return true
+end
+
 local function RemoveProps(id)
     local props = N.Props[id] or {}
     for _, ent in ipairs(props) do if IsValid(ent) then ent:Remove() end end
@@ -644,6 +714,11 @@ function N.Finish(ply)
     end
     local id = state.reopenID or (#N.Routes + 1)
     local route = {id = id, parts = table.Copy(state.parts)}
+    local valid, why = CheckNativeCrossings(route.parts, state.reopenID)
+    if not valid then
+        Notify(ply, why)
+        return false
+    end
     -- Build successfully before deleting or replacing any saved route.
     local entities, err = SpawnRoute(route)
     if not entities then Notify(ply, err); return false end
