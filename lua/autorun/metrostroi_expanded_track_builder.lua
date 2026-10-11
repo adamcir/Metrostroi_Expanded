@@ -61,54 +61,19 @@ function TrackEntity:Initialize()
     end
     self:DrawShadow(false)
 
+
     local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
-    local gauge = math.Clamp(self:GetNW2Float("MEXGauge", DEFAULT_TRACK_GAUGE), 8, 200)
-    local railWidth = math.Clamp(self:GetNW2Float("MEXRailWidth", METROSTROI_RAIL_WIDTH), 1, 24)
-    local railHeight = math.max(self:GetNW2Float("MEXRailHeight", METROSTROI_RAIL_HEIGHT), 1)
-    local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
-    local model = SafeTrackModel(self:GetNW2String("MEXTrackModel", DEFAULT_TRACK_MODEL))
-
-    if util.IsValidModel(model) then
-        self:SetModel(model)
-    else
-        self:SetModel("models/hunter/blocks/cube025x025x025.mdl")
-    end
-
+    self:SetModel(DEFAULT_TRACK_MODEL)
     self:SetSolid(SOLID_VPHYSICS)
     self:SetMoveType(MOVETYPE_VPHYSICS)
     self:SetCollisionGroup(COLLISION_GROUP_NONE)
-
-    local halfLength = length * 0.5
-
-    -- Do not derive this from the model OBB. railroad16.mdl contains more
-    -- geometry than the running rail surface, so OBBMaxs().z is not the
-    -- rerail height. Stock Metrostroi uses a 10-SU-high rail in sh_rerail.lua.
-    local effectiveGauge = gauge
-    local effectiveRailWidth = railWidth
-    local railTop = METROSTROI_RAIL_HEIGHT
-        + (self:GetNW2Bool("MEXStockModelsOnly", false)
-            and (Builder.Geometry.NativeModelLift
-                + self:GetNW2Float("MEXPackZOffset", 0)) or 0)
-    local railBottom = 0
-    local halfRail = effectiveRailWidth * 0.5
-
-    self:SetNW2Float("MEXRailSurfaceOffset", railTop)
-    self:SetNW2Float("MEXPhysicalGauge", effectiveGauge)
-    self:SetNW2Float("MEXPhysicalRailWidth", effectiveRailWidth)
-    -- The 3rd (contact) rail deliberately has no VPhysics hull here: adding
-    -- a fifth rail to bogey collision created additional derail/bounce points.
-
-    local leftY = effectiveGauge * 0.5
-    local rightY = -effectiveGauge * 0.5
-
-    -- Only the two rail heads are solid. The previous implementation also
-    -- created one wide rectangular collision bed under every segment. Subway
-    -- bogeys hit that invisible bed before the wheels reached the rail model,
-    -- which made trains visibly float above MEX track.
-    -- One shared collision body per simplified chord; optional tunnel lining
-    -- is hollow and keeps the rail running surface completely unobstructed.
+    self:SetNW2Float("MEXRailSurfaceOffset", METROSTROI_RAIL_HEIGHT)
+    self:SetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE)
+    self:SetNW2Float("MEXPhysicalRailWidth", METROSTROI_RAIL_WIDTH)
+    -- A single frozen body holds precise rail strips and separated low ties.
+    -- No opaque support bed or duplicated model physics proxies.
     local convexes = Builder.Geometry.PhysicsConvexes(
-        length, effectiveGauge, effectiveRailWidth,
+        length, DEFAULT_TRACK_GAUGE, METROSTROI_RAIL_WIDTH,
         self:GetNW2String("MEXTunnelType", "none"),
         self:GetNW2Float("MEXTunnelRadius", 170),
         self:GetNW2Float("MEXTunnelWidth", 360),
@@ -116,10 +81,8 @@ function TrackEntity:Initialize()
         self:GetNW2Float("MEXTunnelWall", 12),
         self:GetNW2Int("MEXTrackCount", 1),
         self:GetNW2Float("MEXTrackSpacing", 240),
-        false, -- stock model supplies its own contact-rail physics
-        "outside", 112, 20
+        true, "outside", 112, 20
     )
-
     self:PhysicsInitMultiConvex(convexes)
     self:EnableCustomCollisions(true)
 
@@ -127,6 +90,9 @@ function TrackEntity:Initialize()
     if IsValid(phys) then
         phys:EnableMotion(false)
         phys:Sleep()
+    else
+        ErrorNoHalt("[MEX Track Builder] Could not initialize static rail collisions.\n")
+        self:Remove()
     end
 end
 
@@ -796,12 +762,26 @@ end
 -- The original dense points are left unchanged for Metrostroi's rail network.
 -- An individual static physics entity per 48 SU was the major cause of frame
 -- spikes and unstable wheel contacts on long manually built routes.
+local function SplitLongChords(points, maxLength)
+    if #points < 2 then return points end
+    local result = {points[1]}
+    for i = 2, #points do
+        local a, b = points[i - 1], points[i]
+        local steps = math.max(1, math.ceil(a:Distance(b) / maxLength))
+        for j = 1, steps do
+            result[#result + 1] = LerpVector(j / steps, a, b)
+        end
+    end
+    return result
+end
+
 function Builder.BuildGeometryPoints(points, settings)
     settings = CopySettings(settings)
     if settings.rigid_section then
-        return #points >= 2 and {points[1], points[#points]} or points
+        local line = #points >= 2 and {points[1], points[#points]} or points
+        return SplitLongChords(line, settings.geometry_max_length)
     end
-    if #points < 3 then return points end
+    if #points < 3 then return SplitLongChords(points, settings.geometry_max_length) end
     local result = {points[1]}
     local i = 1
     local maxLength = settings.geometry_max_length
@@ -831,7 +811,7 @@ function Builder.BuildGeometryPoints(points, settings)
         result[#result + 1] = points[lastGood]
         i = lastGood
     end
-    return result
+    return SplitLongChords(result, maxLength)
 end
 
 -- Keep the existing Metrostroi network at full spline resolution, while
