@@ -40,8 +40,14 @@ local function P(v) return {v.x, v.y, v.z} end
 local function Direction(yaw) return Angle(0, yaw, 0):Forward() end
 local function Right(yaw) local f = Direction(yaw) return Vector(f.y, -f.x, 0) end
 local function ModelAngles(yaw) return Angle(0, yaw - 90, 0) end
+local modelCache = {}
 local function ValidModel(model)
-    return isstring(model) and string.StartWith(model, ROOT) and util.IsValidModel(model)
+    if not isstring(model) or not string.StartWith(model, ROOT) then return false end
+    local cached = modelCache[model]
+    if cached and cached.expiry > CurTime() then return cached.valid end
+    local valid = util.IsValidModel(model)
+    modelCache[model] = {valid = valid, expiry = CurTime() + 30}
+    return valid
 end
 local function Settings(settings)
     local kind = tostring(settings.tunnel or "round")
@@ -176,13 +182,18 @@ end
 
 function N.ModulePaths(part)
     if not part.junction then
-        if not part.turn or part.turn == 0 then
-            return {{V(part.start), V(part.start) + Direction(part.yaw) * part.length}}
-        end
         local nodes = {}
+        if not part.turn or part.turn == 0 then
+            local steps = math.max(1, math.ceil(part.length / 64))
+            for i = 0, steps do
+                nodes[#nodes + 1] = V(part.start) + Direction(part.yaw) * (part.length * i / steps)
+            end
+            return {nodes}
+        end
         local sweep = math.rad(part.sweep)
-        for step = 0, 16 do
-            local q = sweep * step / 16
+        local steps = math.max(2, math.ceil(part.radius * sweep / 64))
+        for step = 0, steps do
+            local q = sweep * step / steps
             nodes[#nodes + 1] = V(part.start)
                 + Direction(part.yaw) * (part.radius * math.sin(q))
                 + Right(part.yaw) * (part.turn * part.radius * (1 - math.cos(q)))
@@ -194,8 +205,13 @@ function N.ModulePaths(part)
     local ports = N.ModulePorts(part)
     local paths = {}
     for _, link in ipairs(spec.paths) do
-        local a, b = ports[link[1]], ports[link[2]]
-        if a and b then paths[#paths + 1] = {a.pos, b.pos} end
+        -- A real switch presents exactly one traversable branch at a time;
+        -- crossing pairs remain independently traversable simultaneously.
+        if spec.kind ~= "switch" or (link[1] == 1 and link[2] == (part.branch or 2))
+            or (link[2] == 1 and link[1] == (part.branch or 2)) then
+            local a, b = ports[link[1]], ports[link[2]]
+            if a and b then paths[#paths + 1] = {a.pos, b.pos} end
+        end
     end
     return paths
 end
@@ -352,7 +368,10 @@ local function SpawnRoute(route, ghost)
             return nil, "Missing original model: " .. tostring(part.model)
         end
         local ent = ents.Create("prop_physics")
-        if not IsValid(ent) then return nil, "Failed to create original model prop." end
+        if not IsValid(ent) then
+            for _, prev in ipairs(new) do if IsValid(prev) then prev:Remove() end end
+            return nil, "Failed to create original model prop."
+        end
         ent:SetModel(part.model)
         ent:SetPos(V(part.pos))
         ent:SetAngles(Angle(part.ang[1], part.ang[2], part.ang[3]))
@@ -369,6 +388,15 @@ local function SpawnRoute(route, ghost)
         ent:SetNW2Bool("MEXNativeModule", true)
         ent:SetNW2Int("MEXNativeRoute", route.id or 0)
         ent:SetNW2Int("MEXNativeIndex", #new + 1)
+    local portCount = #N.ModulePorts(part)
+        for portIndex = 1, math.min(portCount, 4) do
+            ent:SetNW2Vector("MEXNativePort" .. portIndex, N.ModulePorts(part)[portIndex].pos)
+        end
+        ent:SetNW2Int("MEXNativePorts", portCount)
+        if part.junction then
+            ent:SetNW2String("MEXNativeJunctionID", part.junction)
+            ent:SetNW2Int("MEXNativeBranch", part.branch or 2)
+        end
         ent:DrawShadow(false)
         new[#new + 1] = ent
     end
@@ -378,6 +406,31 @@ local function RemoveProps(id)
     local props = N.Props[id] or {}
     for _, ent in ipairs(props) do if IsValid(ent) then ent:Remove() end end
     N.Props[id] = nil
+end
+local function ClearPreview(state)
+    for _, ent in ipairs(state and state.preview or {}) do
+        if IsValid(ent) then ent:Remove() end
+    end
+    if state then state.preview = {} end
+end
+local function RefreshPreview(state)
+    ClearPreview(state)
+    if not state then return end
+    for _, part in ipairs(state.parts or {}) do
+        local ent = ents.Create("prop_dynamic")
+        if IsValid(ent) then
+            ent:SetModel(part.model)
+            ent:SetPos(V(part.pos))
+            ent:SetAngles(Angle(part.ang[1], part.ang[2], part.ang[3]))
+            ent:SetRenderMode(RENDERMODE_TRANSCOLOR)
+            ent:SetColor(Color(145, 145, 145, 130))
+            ent:SetSolid(SOLID_NONE)
+            ent:Spawn()
+            ent:DrawShadow(false)
+            ent:SetNW2Bool("MEXNativePreview", true)
+            state.preview[#state.preview + 1] = ent
+        end
+    end
 end
 local function Notify(ply, message)
     if IsValid(ply) then ply:ChatPrint("[MEX Native Track] " .. message) end
@@ -399,6 +452,7 @@ function N.Add(ply, aim, settings)
     if not candidate then Notify(ply, err); return false end
     for _, part in ipairs(candidate.parts) do state.parts[#state.parts + 1] = part end
     state.pos, state.yaw = candidate.pos, candidate.yaw
+    RefreshPreview(state)
     SyncState(ply)
     return true
 end
@@ -408,10 +462,13 @@ function N.Finish(ply)
         Notify(ply, "Add at least one original model first.")
         return false
     end
-    local id = #N.Routes + 1
+    local id = state.reopenID or (#N.Routes + 1)
     local route = {id = id, parts = table.Copy(state.parts)}
+    -- Build successfully before deleting or replacing any saved route.
     local entities, err = SpawnRoute(route)
     if not entities then Notify(ply, err); return false end
+    ClearPreview(state)
+    RemoveProps(id)
     N.Routes[id] = route
     N.Props[id] = entities
     N.Active[ply] = nil
@@ -424,58 +481,105 @@ function N.Finish(ply)
     return true
 end
 function N.Undo(ply, aimed)
+    if not IsValid(ply) or not ply:IsAdmin() then return false end
     local state = N.Active[ply]
     if not state then
-        local id = IsValid(aimed) and aimed:GetNW2Int("MEXNativeRoute", 0) or #N.Routes
+        local aimedID = IsValid(aimed) and aimed:GetNW2Int("MEXNativeRoute", 0) or 0
+        local id = aimedID > 0 and aimedID or #N.Routes
         local route = N.Routes[id]
         if not route or #route.parts == 0 then return false end
-        RemoveProps(id)
-        N.Routes[id] = nil
-        state = {parts = route.parts}
+        local first = route.parts[1]
+        state = {
+            start = V(first.start), startYaw = first.yaw,
+            parts = table.Copy(route.parts), reopenID = id,
+            preview = {},
+        }
         N.Active[ply] = state
-        -- Reopening a saved route changes nothing until committed again.
-        state.reopenID = id
     end
     if #state.parts > 0 then table.remove(state.parts) end
     local last = state.parts[#state.parts]
     if last then
         local ports = N.ModulePorts(last)
         local endpoint = last.junction and ports[last.branch or 2] or ports[2]
-        state.pos, state.yaw = endpoint.pos, last.junction and endpoint.yaw or
+        state.pos = endpoint and endpoint.pos or state.start
+        state.yaw = last.junction and endpoint and endpoint.yaw or
             (last.yaw - (last.turn or 0) * (last.sweep or 0))
     else
-        state.pos = state.start or (N.Routes[state.reopenID] and V(N.Routes[state.reopenID].parts[1].start))
-            or (last and V(last.start)) or ply:GetPos()
-        state.yaw = state.startYaw or (N.Routes[state.reopenID]
-            and N.Routes[state.reopenID].parts[1].yaw) or ply:EyeAngles().y
+        state.pos, state.yaw = state.start, state.startYaw
     end
+    RefreshPreview(state)
     SyncState(ply)
     return true
 end
 function N.Cancel(ply)
     local state = N.Active[ply]
     if not state then return false end
+    -- A reopened saved route is intentionally left intact on cancel.
+    ClearPreview(state)
     N.Active[ply] = nil
     SyncState(ply)
     Notify(ply, "Construction cancelled.")
     return true
 end
 function N.GetNetworkPaths()
-    local results = {}
+    local edges = {}
     for _, route in ipairs(N.Routes) do
         for _, part in ipairs(route.parts or {}) do
             for _, points in ipairs(N.ModulePaths(part)) do
-                if #points > 1 then
-                    local path = {}
-                    for _, point in ipairs(points) do
-                        path[#path + 1] = point + Vector(0, 0, 10)
-                    end
-                    results[#results + 1] = path
-                end
+                if #points >= 2 then edges[#edges + 1] = points end
             end
         end
     end
-    return results
+    -- Join shared endpoint nodes into continuous paths. The Metrostroi rail
+    -- loader expects a connected list, not one isolated path per prefab.
+    local paths = {}
+    local used = {}
+    local function Attach(path, edge, prepend, reverse)
+        local ordered = {}
+        for i = 1, #edge do
+            ordered[i] = reverse and edge[#edge - i + 1] or edge[i]
+        end
+        if prepend then
+            local combined = {}
+            for i = 1, #ordered - 1 do combined[#combined + 1] = ordered[i] end
+            for _, point in ipairs(path) do combined[#combined + 1] = point end
+            return combined
+        end
+        for i = 2, #ordered do path[#path + 1] = ordered[i] end
+        return path
+    end
+    for i, edge in ipairs(edges) do
+        if not used[i] then
+            used[i] = true
+            local path = table.Copy(edge)
+            local changed = true
+            while changed do
+                changed = false
+                for j, other in ipairs(edges) do
+                    if not used[j] then
+                        local head, tail = path[1], path[#path]
+                        local first, last = other[1], other[#other]
+                        if tail:DistToSqr(first) < 1 then
+                            path = Attach(path, other, false, false)
+                        elseif tail:DistToSqr(last) < 1 then
+                            path = Attach(path, other, false, true)
+                        elseif head:DistToSqr(last) < 1 then
+                            path = Attach(path, other, true, false)
+                        elseif head:DistToSqr(first) < 1 then
+                            path = Attach(path, other, true, true)
+                        else
+                            continue
+                        end
+                        used[j], changed = true, true
+                    end
+                end
+            end
+            local output = {}
+            for _, point in ipairs(path) do output[#output + 1] = point + Vector(0, 0, 10) end
+            paths[#paths + 1] = output
+        end
+    end
+    return paths
 end
 hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
     file.CreateDir("metrostroi_expanded")
@@ -497,6 +601,37 @@ end)
 hook.Add("PlayerInitialSpawn", "MEXNativeTrackSendProfiles", function(ply)
     timer.Simple(2, function() if IsValid(ply) then SendProfiles(ply) end end)
 end)
+hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
+    if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then return end
+    local junctionID = ent:GetNW2String("MEXNativeJunctionID", "")
+    local profile = N.Junctions[junctionID]
+    if not profile or profile.kind ~= "switch" then return false end
+    if not IsValid(ply) or not ply:IsAdmin() then return false end
+    if (ply.MEXNativeSwitchNext or 0) > CurTime() then return false end
+    ply.MEXNativeSwitchNext = CurTime() + 1.0
+    local route = N.Routes[ent:GetNW2Int("MEXNativeRoute", 0)]
+    local part = route and route.parts[ent:GetNW2Int("MEXNativeIndex", 0)]
+    if not part then return false end
+    local choices = {}
+    for _, link in ipairs(profile.paths) do
+        if link[1] == 1 then choices[#choices + 1] = link[2]
+        elseif link[2] == 1 then choices[#choices + 1] = link[1] end
+    end
+    table.sort(choices)
+    if #choices < 2 then return false end
+    local index = table.KeyFromValue(choices, part.branch or choices[1]) or 1
+    part.branch = choices[index % #choices + 1]
+    ent:SetNW2Int("MEXNativeBranch", part.branch)
+    Save()
+    if MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
+        MEXTrackBuilder.RebuildMetrostroiNetwork(ply)
+    end
+    Notify(ply, "Turnout switched to port " .. part.branch .. ".")
+    return false
+end)
+concommand.Add("mex_native_finish", function(ply) if IsValid(ply) then N.Finish(ply) end end)
+concommand.Add("mex_native_undo", function(ply) if IsValid(ply) then N.Undo(ply) end end)
+concommand.Add("mex_native_cancel", function(ply) if IsValid(ply) then N.Cancel(ply) end end)
 concommand.Add("mex_native_register_junction", function(ply, _, args)
     if IsValid(ply) and not ply:IsSuperAdmin() then return end
     local id, kind, model, portString, pathString = unpack(args)
