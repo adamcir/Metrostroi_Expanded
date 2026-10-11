@@ -17,85 +17,6 @@ function G.SafeTunnelType(name)
     return G.TunnelTypes[name] and name or "none"
 end
 
--- Native Source 2007/2013 Metrostroi models verified against the model
--- names and compiled studio headers of PhoenixBlack/Metrostroi. All original
--- straight tunnel modules advance along *local +Y*, from Y=0 to length.
--- The old heuristic used the bounding box's longest axis, which often chose
--- the wrong axis for short prefab pieces and silently fell back to boxes.
-G.NativeTunnelModels = {
-    none = {
-        [1] = {[4096] = "railroad4096.mdl", [1024] = "railroad1024.mdl"},
-    },
-    round = {
-        [1] = {[64] = "tunnel64.mdl", [256] = "tunnel256.mdl", [1024] = "tunnel1024.mdl"},
-        [2] = {[1024] = "tunnel1024_double.mdl"},
-    },
-    rectangular = {
-        [1] = {[64] = "tunnel64_rect.mdl", [256] = "tunnel256_rect.mdl",
-               [1024] = "tunnel1024_rect.mdl"},
-        [2] = {[1024] = "tunnel1024_double.mdl"},
-    },
-}
-G.NativeTunnelModels.wide = {[2] = {[1024] = "tunnel1024_double.mdl"}}
-G.NativeModelRoot = "models/metrostroi/tracks/"
-G.NativeDoubleLateralCenter = -132 -- stock 1024_double MDL: X bounds [-408.3, 144.3]
-
-function G.SelectNativeTunnel(tunnelType, trackCount, length)
-    local byType = G.NativeTunnelModels[tunnelType]
-    local choices = byType and byType[trackCount == 2 and 2 or 1]
-    if not choices then return nil end
-    for _, nominal in ipairs({4096, 1024, 256, 64}) do
-        local fileName = choices[nominal]
-        if fileName and math.abs(length - nominal) <= 1.0 then
-            return G.NativeModelRoot .. fileName, nominal
-        end
-    end
-    return nil
-end
-
--- Original Metrostroi model local +Y is the longitudinal direction,
--- from its model origin to the end attachment. The Z lift is also shared
--- by the visible MDL AND the original compiled .phy collision proxy.
-G.NativeModelLift = 5
-
-function G.NativeStraightPose(center, angles, length, trackCount, extraZ)
-    local modelAngles = Angle(angles.p, angles.y, angles.r)
-    modelAngles:RotateAroundAxis(modelAngles:Up(), -90)
-    local pos = center - angles:Forward() * (length * 0.5)
-    if trackCount == 2 then
-        local shift = modelAngles:Forward() * (-G.NativeDoubleLateralCenter)
-        pos = pos + shift
-    end
-    return pos + angles:Up() * (G.NativeModelLift + (tonumber(extraZ) or 0)), modelAngles
-end
-
-function G.NativeCurvePose(origin, heading, trackCount, extraZ)
-    local angles = Angle(0, heading.y - 90, 0)
-    local pos = origin
-    if trackCount == 2 then
-        pos = pos + angles:Forward() * (-G.NativeDoubleLateralCenter)
-    end
-    return pos + Vector(0, 0, G.NativeModelLift + (tonumber(extraZ) or 0)), angles
-end
-
--- A manually chosen model from the verified stock picker may still use
--- its genuine .phy. Unverified third-party files require their own axis and
--- collision calibration; never silently treat them as stock models.
-function G.IsVerifiedStockSegment(model, trackCount, length)
-    if not isstring(model) then return false end
-    local wanted = string.lower(model)
-    local count = trackCount == 2 and 2 or 1
-    for _, byCount in pairs(G.NativeTunnelModels) do
-        for nominal, filename in pairs(byCount[count] or {}) do
-            if wanted == G.NativeModelRoot .. filename
-                and math.abs((tonumber(length) or 0) - nominal) <= 1 then
-                return true
-            end
-        end
-    end
-    return false
-end
-
 function G.SafeThirdRailSide(side)
     side = tostring(side or "outside")
     return (side == "left" or side == "right" or side == "both")
@@ -121,20 +42,6 @@ function G.EffectiveBore(radius, width, trackCount, spacing, contactEnabled, con
     end
     return radius, width
 end
-
--- Experimental original curved model sections. *turn1* is the first
--- section of a 90-degree Metro curve; authored on +Y from its start. These
--- first parts can be rotated and repeated on exactly matching circular arcs.
--- Other turn2/3/4 pieces have different local origins and MUST NOT be treated
--- as interchangeable with turn1 until their attachment data is calibrated.
-G.NativeCurveProfiles = {
-    {radius = 3072, parts = 3, count = 1, kind = "round", name = "tunnel3072_turn1.mdl"},
-    {radius = 4096, parts = 4, count = 1, kind = "round", name = "tunnel4096_turn1.mdl"},
-    {radius = 8192, parts = 8, count = 1, kind = "round", name = "tunnel8192_turn1.mdl"},
-    {radius = 3072, parts = 3, count = 1, kind = "rectangular", name = "tunnel3072_rect_turn1.mdl"},
-    {radius = 4096, parts = 4, count = 2, kind = "round", name = "tunnel4096_double_turn1.mdl"},
-    {radius = 8192, parts = 8, count = 2, kind = "round", name = "tunnel8192_double_turn1.mdl"},
-}
 
 -- Reject physically impossible new paths before changing the map or saves.
 -- Use the horizontal 3-point circumradius across ~64-SU samples. This
@@ -171,106 +78,6 @@ function G.MinimumHorizontalRadius(points, trackCount, spacing)
     return smallest
 end
 
--- Find the *next* exact native curved module along simplified route points.
--- It is deliberately conservative: wrong geometry must never replace the
--- track. Real rail physics/Metrostroi paths remain independent of the visual
--- turn1 .mdl. Only flat, right-handed arcs compatible with stock are matched.
-function G.MatchNativeCurve(points, i, settings)
-    if not istable(points) or i + 2 >= #points then return nil end
-    if not settings.experimental_native_curves or not settings.auto_native_models
-        or settings.rigid_section or settings.tunnel_style ~= "metrostroi" then
-        return nil
-    end
-
-    local a, p1, p2 = points[i], points[i + 1], points[i + 2]
-    local first = Vector(p1.x - a.x, p1.y - a.y, 0)
-    local second = Vector(p2.x - p1.x, p2.y - p1.y, 0)
-    if first:Length() < 8 or second:Length() < 8 then return nil end
-    first:Normalize()
-    second:Normalize()
-    local cross = first.x * second.y - first.y * second.x
-    -- Stock turn1 models curve to track-right (-X when authored along +Y).
-    if cross >= -0.0005 then return nil end
-
-    local yawChange = math.deg(math.atan2(cross, first:Dot(second)))
-    -- Fast local prefilter: most spline chords are not near any genuine
-    -- Metrostroi prefabricated curve. Skip costly 1600-SU candidate searches
-    -- before iterating through every nearby geometry point.
-    local chord = p1:Distance(a)
-    local smallAngle = math.rad(math.abs(yawChange))
-    if smallAngle < 0.0001 then return nil end
-    local roughRadius = chord / smallAngle
-    if roughRadius < 2450 or roughRadius > 9600 then return nil end
-    local heading = Vector(first.x, first.y, 0)
-    heading:Rotate(Angle(0, -yawChange * 0.5, 0))
-    heading:Normalize()
-    local right = Vector(heading.y, -heading.x, 0)
-
-    local best
-    for _, spec in ipairs(G.NativeCurveProfiles) do
-        if spec.count == settings.track_count
-            and spec.kind == settings.tunnel_type
-            and (spec.radius - (settings.track_count == 2 and settings.track_spacing * 0.5 or 0))
-                >= settings.min_curve_radius
-        then
-            local sweep = math.pi * 0.5 / spec.parts
-            local length = spec.radius * sweep
-            local expected = a + heading * (spec.radius * math.sin(sweep))
-                + right * (spec.radius * (1 - math.cos(sweep)))
-            local arcCenter = a + right * spec.radius
-            local traveled = 0
-            for edge = i, #points - 1 do
-                local from, to = points[edge], points[edge + 1]
-                local distance = from:Distance(to)
-                if distance < 0.01 then break end
-                if traveled + distance >= length - 0.2 then
-                    local ratio = math.Clamp((length - traveled) / distance, 0, 1)
-                    local boundary = LerpVector(ratio, from, to)
-                    local offset = Vector(boundary.x - expected.x, boundary.y - expected.y, 0)
-                    local error = offset:Length()
-                    local maxError = 0
-                    local flat = math.abs(boundary.z - a.z) <= 2
-                    for n = i, edge do
-                        local v = points[n]
-                        local dx, dy = v.x - arcCenter.x, v.y - arcCenter.y
-                        local radialError = math.abs(math.sqrt(dx * dx + dy * dy) - spec.radius)
-                        maxError = math.max(maxError, radialError)
-                        if math.abs(v.z - a.z) > 2 then flat = false end
-                    end
-                    local dx, dy = boundary.x - arcCenter.x, boundary.y - arcCenter.y
-                    maxError = math.max(maxError,
-                        math.abs(math.sqrt(dx * dx + dy * dy) - spec.radius))
-                    local predictedTangent = heading * math.cos(sweep)
-                        + right * math.sin(sweep)
-                    local last = Vector(to.x - from.x, to.y - from.y, 0)
-                    if last:LengthSqr() > 1 then last:Normalize() end
-                    local aligned = last:Dot(predictedTangent)
-                    if flat and error <= 18 and maxError <= 9 and aligned > 0.997 then
-                        local score = error + maxError
-                        if not best or score < best.score then
-                            best = {
-                                score = score,
-                                start_index = i,
-                                end_edge = edge,
-                                boundary = boundary,
-                                model = G.NativeModelRoot .. spec.name,
-                                model_angle = heading:Angle(),
-                                model_origin = a,
-                                radius = spec.radius,
-                                sweep = math.deg(sweep),
-                            }
-                        end
-                    end
-                    break
-                end
-                traveled = traveled + distance
-                if traveled > length + 64 then break end
-            end
-        end
-    end
-    return best
-end
-
 local function BoxConvex(mins, maxs)
     return {
         Vector(mins.x, mins.y, mins.z), Vector(mins.x, mins.y, maxs.z),
@@ -296,6 +103,24 @@ function G.PhysicsConvexes(length, gauge, railWidth, tunnelType, radius, width, 
             convexes[#convexes + 1] = BoxConvex(
                 Vector(-half, railY - halfRail, 0),
                 Vector( half, railY + halfRail, 10)
+            )
+        end
+        -- Solid ties are below rail height, never an invisible track bed.
+        local count = math.max(1, math.ceil(length / 32))
+        for i = 0, count - 1 do
+            local x = -length * 0.5 + (i + 0.5) * length / count
+            convexes[#convexes + 1] = BoxConvex(
+                Vector(x - 5, middle - 64, 0),
+                Vector(x + 5, middle + 64, 5)
+            )
+        end
+        if thirdRail then
+            local side = trackCount == 2 and (lane == 1 and -1 or 1) or 1
+            local y = middle + side * (tonumber(thirdRailOffset) or 112)
+            local top = tonumber(thirdRailHeight) or 20
+            convexes[#convexes + 1] = BoxConvex(
+                Vector(-half, y - 5, math.max(5, top - 8)),
+                Vector(half, y + 5, top)
             )
         end
     end
@@ -607,11 +432,6 @@ local function MakeMesh(vertices)
 end
 
 function G.ClearClientMeshes(ent)
-    if IsValid(ent.MEXNativeCurvePiece) then ent.MEXNativeCurvePiece:Remove() end
-    ent.MEXNativeCurvePiece, ent.MEXNativeCurveModel = nil, nil
-    if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
-    ent.MEXPackPiece = nil
-    ent.MEXPackModel = nil
     if ent.MEXContactMeshes then
         for _, entry in ipairs(ent.MEXContactMeshes) do
             if entry.mesh then entry.mesh:Destroy() end
@@ -626,279 +446,21 @@ function G.ClearClientMeshes(ent)
     ent.MEXFastKey = nil
 end
 
--- Contact rail is always a SEPARATE asset from the running rails/tunnel
--- (including the official Track Pack). It does not add bogey collisions.
--- Third/contact rail is part of the original Metrostroi .mdl and .phy.
--- No separate addon conductor mesh is generated.
-
+-- The only required model is the stock railroad16 tile.
 concommand.Add("mex_track_builder_model_status", function()
-    print("===== Metrostroi Expanded - real .mdl status =====")
-    local ok, absent = 0, 0
-    for kind, byCount in pairs(G.NativeTunnelModels) do
-        for count, byLength in pairs(byCount) do
-            for length, name in pairs(byLength) do
-                local model = G.NativeModelRoot .. name
-                local available = util.IsValidModel(model)
-                print(string.format("  [%s] %s / %d track(s) / %d SU: %s",
-                    available and "OK" or "MISSING", kind, count, length, model))
-                if available then ok = ok + 1 else absent = absent + 1 end
-            end
-        end
-    end
-    print("  --- Experimental real curved tunnel modules ---")
-    for _, spec in ipairs(G.NativeCurveProfiles) do
-        local filename = G.NativeModelRoot .. spec.name
-        local found = util.IsValidModel(filename)
-        print(string.format("  [%s] radius %d SU / %.1f deg / %d track(s): %s",
-            found and "OK" or "MISSING", spec.radius,
-            90 / spec.parts, spec.count, filename))
-        if found then ok = ok + 1 else absent = absent + 1 end
-    end
-
-    local native, curves, fallback = 0, 0, 0
-    for _, ent in ipairs(ents.FindByClass("mex_track_segment")) do
-        if ent:GetNW2Bool("MEXCurveOwner", false) then
-            curves = curves + 1
-        elseif ent:GetNW2Bool("MEXCurveCovered", false) then
-            -- These physical rails share the preceding genuine curve model.
-        else
-            local manual = ent:GetNW2String("MEXPackModel", "")
-            local model = manual ~= "" and manual or
-                G.SelectNativeTunnel(ent:GetNW2String("MEXTunnelType", "none"),
-                                     ent:GetNW2Int("MEXTrackCount", 1),
-                                     ent:GetNW2Float("MEXLength", 0))
-            if model and util.IsValidModel(model) then
-                native = native + 1
-            else
-                fallback = fallback + 1
-            end
-        end
-    end
-    print(string.format(
-        "  Mounted MDLs: %d available / %d missing. Current route visuals: %d genuine straight + %d genuine curved + %d generated sections.",
-        ok, absent, native, curves, fallback))
-    print("  Original turns are experimental: only exact, level, right-handed curves are fitted.")
-    local player = LocalPlayer()
-    if IsValid(player) then
-        player:ChatPrint(string.format("[MEX] Stock tunnel models: %d OK / %d missing. See console for filenames.",ok,absent))
+    local path = "models/metrostroi/tracks/railroad16.mdl"
+    local ok = util.IsValidModel(path)
+    print(string.format("[MEX Track Builder] %s: %s", ok and "OK" or "MISSING", path))
+    local ply = LocalPlayer()
+    if IsValid(ply) then
+        ply:ChatPrint(ok and "[MEX Track Builder] Original railroad16.mdl is installed."
+            or "[MEX Track Builder] Missing original railroad16.mdl.")
     end
 end)
 
--- Native curved components are shown only when their exact .mdl is
--- mounted. The .mdl and original .phy collider share NativeCurvePose.
-function G.IsNativeCurveMounted(model)
-    if not isstring(model) or
-        not string.match(model, "^models/[%w_/%-%.]+%.mdl$") then return false end
-    G.CurveMountCache = G.CurveMountCache or {}
-    if G.CurveMountCache[model] == nil then
-        G.CurveMountCache[model] = util.IsValidModel(model)
-        if not G.CurveMountCache[model] then
-            print("[MEX Track Builder] Missing curved Metrostroi model: " .. model)
-        end
-    end
-    return G.CurveMountCache[model]
-end
-
-function G.DrawNativeCurve(ent)
-    local model = ent:GetNW2String("MEXCurveModel", "")
-    if not G.IsNativeCurveMounted(model) then return false end
-    if ent.MEXNativeCurveModel ~= model or not IsValid(ent.MEXNativeCurvePiece) then
-        if IsValid(ent.MEXNativeCurvePiece) then ent.MEXNativeCurvePiece:Remove() end
-        local part = ClientsideModel(model, RENDERGROUP_OPAQUE)
-        if not IsValid(part) then return false end
-        part:SetNoDraw(true)
-        part:DrawShadow(false)
-        ent.MEXNativeCurvePiece, ent.MEXNativeCurveModel = part, model
-    end
-
-    local origin, angles = G.NativeCurvePose(
-        ent:GetNW2Vector("MEXCurveOrigin", ent:GetPos()),
-        ent:GetNW2Angle("MEXCurveHeading", Angle(0, 0, 0)),
-        ent:GetNW2Int("MEXTrackCount", 1),
-        ent:GetNW2Float("MEXPackZOffset", 0)
-            - (ent:GetNW2Bool("MEXStockModelsOnly", false)
-                and 0 or G.NativeModelLift))
-    local part = ent.MEXNativeCurvePiece
-    part:SetRenderOrigin(origin)
-    part:SetRenderAngles(angles)
-    local illuminate = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
-    if illuminate then
-        render.SuppressEngineLighting(true)
-        render.SetColorModulation(0.67, 0.67, 0.67)
-    end
-    part:DrawModel()
-    if illuminate then
-        render.SetColorModulation(1, 1, 1)
-        render.SuppressEngineLighting(false)
-    end
-    part:SetRenderOrigin(nil)
-    part:SetRenderAngles(nil)
-    return true
-end
-
--- IMPORTANT: Genuine Metrostroi models have a known native orientation.
--- Their track moves from local Y=0 to Y=64/256/1024, NOT centered around
--- the model origin. Draw by placing local Y=0 on the segment's first node.
--- This avoids the OBB-based axis guessing and mysterious missing models.
-function G.DrawPackModel(ent)
-    local length = ent:GetNW2Float("MEXLength", 0)
-    local manual = ent:GetNW2String("MEXPackModel", "")
-    local isRigid = ent:GetNW2Bool("MEXRigidSection", false)
-    local allowAuto = ent:GetNW2Bool("MEXAutoNativeModels", true)
-    local tunnelType = G.SafeTunnelType(ent:GetNW2String("MEXTunnelType", "none"))
-    local trackCount = ent:GetNW2Int("MEXTrackCount", 1)
-    local style = ent:GetNW2String("MEXTunnelStyle", "metrostroi")
-    local modelName, nominalLength
-
-    if manual ~= "" and isRigid then
-        modelName = manual
-    elseif allowAuto and style == "metrostroi" then
-        modelName, nominalLength = G.SelectNativeTunnel(tunnelType, trackCount, length)
-    end
-
-    if not modelName then
-        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
-        ent.MEXPackPiece, ent.MEXPackModel = nil, nil
-        return false
-    end
-
-    local path = string.lower(modelName)
-    -- Explicit selection of a stock prefab uses the same native +Y placement
-    -- rules as the automatic preset. Do not misalign the double when selected
-    -- through the dropdown.
-    if not nominalLength then
-        for _, byCount in pairs(G.NativeTunnelModels) do
-            for _, bySize in pairs(byCount) do
-                for nativeSize, fileName in pairs(bySize) do
-                    if path == G.NativeModelRoot .. fileName then
-                        nominalLength = nativeSize
-                        break
-                    end
-                end
-                if nominalLength then break end
-            end
-            if nominalLength then break end
-        end
-    end
-    if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") then return false end
-    if trackCount == 2 and not (string.find(path, "double", 1, true)
-        or string.find(path, "_ns", 1, true)
-        or string.find(path, "2track", 1, true)) then
-        return false
-    end
-    if not nominalLength and (string.find(path, "turn", 1, true)
-        or string.find(path, "switch", 1, true)
-        or string.find(path, "curve", 1, true)) then
-        -- Curved prefabs require path/topology metadata; a straight physics
-        -- segment must never masquerade as a curved model.
-        return false
-    end
-
-    if ent.MEXPackValidityPath ~= modelName then
-        ent.MEXPackValidityPath = modelName
-        ent.MEXPackValidity = util.IsValidModel(modelName)
-        if not ent.MEXPackValidity then
-            G.MissingClientModels = G.MissingClientModels or {}
-            if not G.MissingClientModels[modelName] then
-                G.MissingClientModels[modelName] = true
-                print("[MEX Track Builder] Missing installed native model: " .. modelName
-                    .. " (using procedural fallback)")
-            end
-        end
-    end
-    if not ent.MEXPackValidity then return false end
-
-    local cacheKey = modelName .. "/" .. math.Round(length, 1)
-    if ent.MEXRejectedPackKey == cacheKey then return false end
-    if ent.MEXPackModel ~= modelName or not IsValid(ent.MEXPackPiece) then
-        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
-        local piece = ClientsideModel(modelName, RENDERGROUP_OPAQUE)
-        if not IsValid(piece) then return false end
-        piece:SetNoDraw(true)
-        piece:DrawShadow(false)
-        ent.MEXPackPiece, ent.MEXPackModel = piece, modelName
-        ent.MEXLastRenderBounds = nil
-    end
-
-    local piece = ent.MEXPackPiece
-    local mins, maxs = piece:OBBMins(), piece:OBBMaxs()
-    local isOriginal = nominalLength ~= nil
-    local nativeLength = maxs.y - mins.y
-    local nativeOnY = isOriginal
-    if not isOriginal then
-        -- User-supplied Track Pack MDLs may use either X or Y. Detect using
-        -- length, but never stretch an arbitrary prefab to make it fit.
-        local xLength = maxs.x - mins.x
-        if math.abs(xLength - length) < math.abs(nativeLength - length) then
-            nativeLength, nativeOnY = xLength, false
-        else
-            nativeOnY = true
-        end
-    end
-    if math.abs(nativeLength - length) > math.max(4, length * 0.03) then
-        ent.MEXRejectedPackKey = cacheKey
-        piece:Remove()
-        ent.MEXPackPiece, ent.MEXPackModel = nil, nil
-        if not ent.MEXPackSizeWarned then
-            ent.MEXPackSizeWarned = true
-            print("[MEX Track Builder] Native model size mismatch: " .. modelName
-                .. " expected " .. math.Round(length, 1) ..
-                " SU; model bounding length " .. math.Round(nativeLength, 1) .. " SU")
-        end
-        return false
-    end
-    ent.MEXRejectedPackKey = nil
-
-    local pos, mdlAngles
-    if isOriginal then
-        pos, mdlAngles = G.NativeStraightPose(
-            ent:GetPos(), ent:GetAngles(), length, trackCount,
-            ent:GetNW2Float("MEXPackZOffset", 0)
-                - (ent:GetNW2Bool("MEXStockModelsOnly", false)
-                    and 0 or G.NativeModelLift))
-    else
-        -- Custom Track Pack models retain their editable manual offsets.
-        local correction = nativeOnY and Angle(0, -90, 0) or Angle(0, 0, 0)
-        mdlAngles = ent:LocalToWorldAngles(correction)
-        local start = ent:GetPos() - ent:GetAngles():Forward() * (length * 0.5)
-        local localOffset
-        if nativeOnY then
-            localOffset = Vector(-((mins.x + maxs.x) * 0.5), -mins.y, 0)
-        else
-            localOffset = Vector(-mins.x, -((mins.y + maxs.y) * 0.5), 0)
-        end
-        localOffset:Rotate(mdlAngles)
-        pos = start + localOffset + ent:GetAngles():Up()
-            * (G.NativeModelLift + ent:GetNW2Float("MEXPackZOffset", 0))
-    end
-
-    piece:SetRenderOrigin(pos)
-    piece:SetRenderAngles(mdlAngles)
-    if ent.SetRenderBounds and ent.MEXLastRenderBounds ~= modelName then
-        local bound = math.max(1500, length + 512, (maxs - mins):Length() + 128)
-        ent:SetRenderBounds(Vector(-bound, -bound, -bound),
-                            Vector(bound, bound, bound))
-        ent.MEXLastRenderBounds = modelName
-    end
-    local illuminate = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
-    if illuminate then
-        render.SuppressEngineLighting(true)
-        render.SetColorModulation(0.67, 0.67, 0.67)
-    end
-    piece:DrawModel()
-    if illuminate then
-        render.SetColorModulation(1, 1, 1)
-        render.SuppressEngineLighting(false)
-    end
-    piece:SetRenderOrigin(nil)
-    piece:SetRenderAngles(nil)
-    return true
-end
-
-
 local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                             sleeperLength, sleeperWidth, sleeperHeight,
-                            tunnelType, radius, width, height, wall, trackCount, trackSpacing)
+                            tunnelType, radius, width, height, wall, trackCount, trackSpacing, tunnelOnly)
     local rails, sleepers, tunnel = {}, {}, {}
     local railClips = {}
     local ballast, rings, walkway = {}, {}, {}
@@ -912,6 +474,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     activeUVStart = ent:GetNW2Float("MEXUVStart", 0) + half
     trackCount = trackCount == 2 and 2 or 1
     trackSpacing = math.Clamp(tonumber(trackSpacing) or 240, 180, 400)
+    if not tunnelOnly then
     for lane = 1, trackCount do
         local middle = trackCount == 2 and (lane == 1 and -trackSpacing * 0.5 or trackSpacing * 0.5) or 0
         for _, y in ipairs({middle - gauge * 0.5, middle + gauge * 0.5}) do
@@ -961,6 +524,8 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
             end
         end
     end
+
+    end -- Do not generate replacement running rails or sleepers over MDLs.
 
     if tunnelType ~= "none" then
         radius, width = G.EffectiveBore(radius, width, trackCount, trackSpacing,
@@ -1074,7 +639,8 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     return meshes
 end
 
-function G.Draw(ent)
+function G.Draw(ent, tunnelOnly)
+    if tunnelOnly and G.SafeTunnelType(ent:GetNW2String("MEXTunnelType", "none")) == "none" then return end
     local length = math.max(ent:GetNW2Float("MEXLength", 1), 1)
     local gauge = math.max(ent:GetNW2Float("MEXPhysicalGauge", 85.8), 8)
     local rw = math.max(ent:GetNW2Float("MEXPhysicalRailWidth", 5.8), 1)
@@ -1102,7 +668,7 @@ function G.Draw(ent)
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
     local uvStart = ent:GetNW2Float("MEXUVStart", 0)
     local key = string.format(
-        "metro-classic-rails-v9/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
+        "metro-railroad16-" .. (tunnelOnly and "shell" or "all") .. "-v1/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
         tunnelType, tunnelStyle, radius, width, height, wall,
         thirdRail and 1 or 0, contactSide, contactOffset, contactHeight,
@@ -1110,7 +676,7 @@ function G.Draw(ent)
     if ent.MEXFastKey ~= key then
         G.ClearClientMeshes(ent)
         ent.MEXFastMeshes = CreateMeshes(ent, length, gauge, rw, spacing, sl, sw, sh,
-                                         tunnelType, radius, width, height, wall, trackCount, trackSpacing)
+                                         tunnelType, radius, width, height, wall, trackCount, trackSpacing, tunnelOnly)
         ent.MEXFastKey = key
         local halfWidth = tunnelType == "round" and radius + wall
             or (tunnelType ~= "none" and math.max(width, tunnelType == "wide" and 460 or 0) * 0.5 + wall)
