@@ -919,6 +919,26 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     ent:SetPos((a + b) * 0.5)
     ent:SetAngles(delta:Angle())
     ent:SetNW2Float("MEXLength", length)
+    -- Resolve and verify mounted native Metrostroi modules on the SERVER,
+    -- rather than silently drawing procedural track without explanation.
+    -- GMod clients may still have different Workshop mounts; they validate
+    -- the same model before drawing, and fall back safely if it is missing.
+    local nativeModel = settings.auto_native_models
+        and settings.tunnel_style == "metrostroi"
+        and Builder.Geometry.SelectNativeTunnel(settings.tunnel_type, settings.track_count, length)
+        or nil
+    local available = nativeModel and util.IsValidModel(nativeModel) or false
+    ent:SetNW2String("MEXNativeModel", available and nativeModel or "")
+    ent:SetNW2Bool("MEXNativeExpected", nativeModel ~= nil)
+    ent:SetNW2Bool("MEXNativeAvailable", available and true or false)
+    if nativeModel and not available then
+        Builder.MissingNativeWarnings = Builder.MissingNativeWarnings or {}
+        if not Builder.MissingNativeWarnings[nativeModel] then
+            Builder.MissingNativeWarnings[nativeModel] = true
+            print("[MEX Track Builder] Model missing on server: " .. nativeModel
+                .. ". Check that the original Metrostroi content pack is installed.")
+        end
+    end
     -- Continuous texture U coordinate along the actual physical route, not
     -- centered/restarted on every 48-192SU segment (previously visible seams).
     ent:SetNW2Float("MEXUVStart", uvStart or 0)
