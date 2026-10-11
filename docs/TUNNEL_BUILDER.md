@@ -48,8 +48,9 @@ tileable Metrostroi concrete from `metro/metroconcrete001`, with stock
 Source tileable concrete as fallback. Railroad/tunnelwall *atlases* from
 compiled Metrostroi prefabs are not UV-compatible with simple Lua meshes
 and must **not** be stretched over rectangular walls or straight rail bars.
-Solid dark cable/conductor covers and metal-running rails complement the
-concrete. The original `models/metrostroi/tracks/tunnel*.mdl` prefabs,
+Solid dark cable/conductor covers, shaped steel running rails with a
+proper head/web/foot cross-section, discreet fastening clips over the
+sleepers, and the yellow covered third rail complement the concrete. The original `models/metrostroi/tracks/tunnel*.mdl` prefabs,
 when mounted and dimensionally compatible, still render with their genuine
 stock model materials and UVs.
 
@@ -66,7 +67,8 @@ not bundled or redistributed by this repository.
 **Classic Metrostroi** appearance now includes surface-tiled
 concrete tunnel walls, six dark cable conduits on **each wall**, individual
 cable mounting brackets, concrete rectangular ceiling ribs at 192-SU
-intervals, panel seams, a concrete rail deck, side service walkways and
+intervals (half-bay offset so adjacent generated sections do not skip a rib),
+panel seams, a concrete rail deck, side service walkways and
 the characteristic tunnel profile. Cable curves, clamps and beam spacing use
 the same global along-route distance as track/sleeper meshes and are batched
 by shared materials. On genuine straight original MDLs, these details come
