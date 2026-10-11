@@ -69,9 +69,10 @@ if SERVER then
             return false
         end
     end)
-    hook.Add("CanTool", "MEX_NativeTrackCollisionProtected", function(_, trace)
+    hook.Add("CanTool", "MEX_NativeTrackCollisionProtected", function(_, trace, tool)
         local ent = istable(trace) and trace.Entity or nil
-        if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
+        if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false)
+            and tool ~= "mex_track_builder" then
             return false
         end
     end)
@@ -104,6 +105,7 @@ function TrackEntity:InstallNativePhysics(model, position, angles)
     proxy:SetColor(Color(255, 255, 255, 0))
     proxy:DrawShadow(false)
     proxy:SetNW2Bool("MEXNativeCollisionProxy", true)
+    proxy:SetNW2Entity("MEXTrackOwner", self)
     phys:EnableMotion(false)
     phys:Sleep()
     self.MEXNativePhysicsProxy = proxy
@@ -3132,6 +3134,9 @@ concommand.Add("mex_track_builder_delete_aimed_route", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     local tr = ply:GetEyeTrace()
     local ent = tr and tr.Entity
+    if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
+        ent = ent:GetNW2Entity("MEXTrackOwner")
+    end
     if not IsValid(ent) or ent:GetClass() ~= TRACK_CLASS then
         ply:ChatPrint("[MEX Track Builder] Aim at a saved MEX rail to delete its entire route.")
         return
@@ -3153,6 +3158,9 @@ concommand.Add("mex_track_builder_undo", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     local tr = ply:GetEyeTrace()
     local ent = tr and tr.Entity
+    if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
+        ent = ent:GetNW2Entity("MEXTrackOwner")
+    end
     local routeID
     if IsValid(ent) and ent:GetClass() == TRACK_CLASS then
         local id = ent:GetNW2Int("MEXRouteID", 0)
