@@ -147,6 +147,14 @@ function N.Candidate(start, yaw, aimed, settings)
         reference:Rotate(ang)
         local origin = start - reference + Vector(0, 0, 5)
         local output = math.Clamp(math.floor(tonumber(settings.branch) or 2), 2, #spec.ports)
+        local linked = false
+        for _, link in ipairs(spec.paths) do
+            if (link[1] == 1 and link[2] == output)
+                or (link[2] == 1 and link[1] == output) then linked = true end
+        end
+        if not linked then
+            return nil, "The chosen exit is not connected to the junction input. Select a physically connected output port."
+        end
         local port = V(spec.ports[output])
         port:Rotate(ang)
         local portPos = origin + port - Vector(0, 0, 5)
@@ -249,7 +257,17 @@ function N.ModulePaths(part)
         if spec.kind ~= "switch" or (link[1] == 1 and link[2] == (part.branch or 2))
             or (link[2] == 1 and link[1] == (part.branch or 2)) then
             local a, b = ports[link[1]], ports[link[2]]
-            if a and b then paths[#paths + 1] = {a.pos, b.pos} end
+            if a and b then
+                local path = {a.pos}
+                local ang = Angle(part.ang[1], part.ang[2], part.ang[3])
+                for _, waypoint in ipairs(link.via or {}) do
+                    local worldOffset = V(waypoint)
+                    worldOffset:Rotate(ang)
+                    path[#path + 1] = V(part.pos) - Vector(0, 0, 5) + worldOffset
+                end
+                path[#path + 1] = b.pos
+                paths[#paths + 1] = path
+            end
         end
     end
     return paths
@@ -410,6 +428,13 @@ local function ValidProfile(profile)
     for _, link in ipairs(profile.paths) do
         if not istable(link) or not profile.ports[tonumber(link[1]) or 0]
             or not profile.ports[tonumber(link[2]) or 0] then return false end
+        if link.via then
+            if not istable(link.via) then return false end
+            for _, waypoint in ipairs(link.via) do
+                if not istable(waypoint) or #waypoint < 3 then return false end
+                for i = 1, 3 do if not tonumber(waypoint[i]) then return false end end
+            end
+        end
     end
     if profile.kind == "switch" then
         local hasMain, hasDiverge = false, false
@@ -858,6 +883,45 @@ concommand.Add("mex_native_register_junction", function(ply, _, args)
     file.Write(JUNCTION_FILE, util.TableToJSON(N.Junctions, true))
     SendProfiles()
     Notify(ply, "Original junction model and connector topology saved.")
+end)
+concommand.Add("mex_native_set_junction_path", function(ply, _, args)
+    if IsValid(ply) and not ply:IsSuperAdmin() then return end
+    local id, a, b, waypointString = unpack(args)
+    local profile = id and N.Junctions[id]
+    local first, last = tonumber(a), tonumber(b)
+    if not profile or not first or not last then
+        Notify(ply, "Usage: mex_native_set_junction_path <registered_id> <port_a> <port_b> <x,y,z;x,y,z;...>")
+        return
+    end
+    for _, link in ipairs(profile.paths) do
+        if (link[1] == first and link[2] == last)
+            or (link[1] == last and link[2] == first) then
+            local via = {}
+            for chunk in string.gmatch(waypointString or "", "[^;]+") do
+                local values = {}
+                for number in string.gmatch(chunk, "[^,]+") do
+                    values[#values + 1] = tonumber(number)
+                end
+                if #values ~= 3 or not values[1] or not values[2] or not values[3] then
+                    Notify(ply, "Each centerline waypoint must be local x,y,z.")
+                    return
+                end
+                via[#via + 1] = values
+            end
+            if first ~= link[1] then
+                local reversed = {}
+                for i = #via, 1, -1 do reversed[#reversed + 1] = via[i] end
+                via = reversed
+            end
+            link.via = via
+            file.CreateDir("metrostroi_expanded")
+            file.Write(JUNCTION_FILE, util.TableToJSON(N.Junctions, true) or "{}")
+            SendProfiles()
+            Notify(ply, "Measured native junction centerline waypoints saved.")
+            return
+        end
+    end
+    Notify(ply, "The selected pair is not a registered physical path.")
 end)
 concommand.Add("mex_native_set_switch_variants", function(ply, _, args)
     if IsValid(ply) and not ply:IsSuperAdmin() then return end
