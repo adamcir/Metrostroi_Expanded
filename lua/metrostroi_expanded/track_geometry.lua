@@ -518,6 +518,46 @@ local function DrawMeshEntries(ent, entries)
     cam.PopModelMatrix()
 end
 
+-- Manual diagnostics: tells the player which real compiled modules are
+-- actually mounted, and why a section may still be procedural. No scanning
+-- all addons or expensive model checks every frame.
+concommand.Add("mex_track_builder_model_status", function()
+    print("===== Metrostroi Expanded - real .mdl status =====")
+    local ok, absent = 0, 0
+    for kind, byCount in pairs(G.NativeTunnelModels) do
+        for count, byLength in pairs(byCount) do
+            for length, name in pairs(byLength) do
+                local model = G.NativeModelRoot .. name
+                local available = util.IsValidModel(model)
+                print(string.format("  [%s] %s / %d track(s) / %d SU: %s",
+                    available and "OK" or "MISSING", kind, count, length, model))
+                if available then ok = ok + 1 else absent = absent + 1 end
+            end
+        end
+    end
+    local native, fallback = 0, 0
+    for _, ent in ipairs(ents.FindByClass("mex_track_segment")) do
+        local manual = ent:GetNW2String("MEXPackModel", "")
+        local model = manual ~= "" and manual or
+            G.SelectNativeTunnel(ent:GetNW2String("MEXTunnelType", "none"),
+                                 ent:GetNW2Int("MEXTrackCount", 1),
+                                 ent:GetNW2Float("MEXLength", 0))
+        if model and util.IsValidModel(model) then
+            native = native + 1
+        else
+            fallback = fallback + 1
+        end
+    end
+    print(string.format("  %d native modules installed, %d missing; current route segments: %d candidate native / %d procedural",
+        ok, absent, native, fallback))
+    print("  Native models are exact-length stock units (64/256/1024 SU).")
+    print("  On curves or nonstandard lengths, switch to model-piece placement or procedural fallback.")
+    local player = LocalPlayer()
+    if IsValid(player) then
+        player:ChatPrint(string.format("[MEX] Stock tunnel models: %d OK / %d missing. See console for filenames.",ok,absent))
+    end
+end)
+
 function G.DrawContactRailOnly(ent)
     local enabled = ent:GetNW2Bool("MEXThirdRail", true)
     if not enabled then return end
@@ -575,6 +615,23 @@ function G.DrawPackModel(ent)
     end
 
     local path = string.lower(modelName)
+    -- Explicit selection of a stock prefab uses the same native +Y placement
+    -- rules as the automatic preset. Do not misalign the double when selected
+    -- through the dropdown.
+    if not nominalLength then
+        for _, byCount in pairs(G.NativeTunnelModels) do
+            for _, bySize in pairs(byCount) do
+                for nativeSize, fileName in pairs(bySize) do
+                    if path == G.NativeModelRoot .. fileName then
+                        nominalLength = nativeSize
+                        break
+                    end
+                end
+                if nominalLength then break end
+            end
+            if nominalLength then break end
+        end
+    end
     if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") then return false end
     if trackCount == 2 and not (string.find(path, "double", 1, true)
         or string.find(path, "_ns", 1, true)
