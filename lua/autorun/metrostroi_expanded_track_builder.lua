@@ -1494,8 +1494,17 @@ local function RebuildActiveRoute(active)
         return
     end
 
+    local nextEntities, previewError = SpawnPolyline(active.render_points, active.settings, 0)
+    if previewError then
+        -- Keep an existing visible preview if the new position does not fit
+        -- any stock model. Return an explicit reason on finish; never make
+        -- the track appear to vanish because a preview silently failed.
+        active.native_model_error = previewError
+        return
+    end
+    active.native_model_error = nil
     RemoveEntities(active.entities)
-    active.entities = SpawnPolyline(active.render_points, active.settings, 0)
+    active.entities = nextEntities
 end
 
 function Builder.SaveLayout()
@@ -2311,15 +2320,19 @@ function Builder.AutoLoopClick(
         kind = "auto_loop",
     }
 
-    Builder.Routes[#Builder.Routes + 1] = route
-    Builder.LastRoute[ply] = route
-    local routeID = #Builder.Routes
-
-    SpawnPolyline(
+    local routeID = #Builder.Routes + 1
+    local built, buildError = SpawnPolyline(
         route.generated_points,
         route.settings,
         routeID
     )
+    if buildError or #built == 0 then
+        ply:ChatPrint("[MEX Track Builder] Loop could not be finished: "
+            .. (buildError or "No valid original Metrostroi model was spawned."))
+        return false
+    end
+    Builder.Routes[routeID] = route
+    Builder.LastRoute[ply] = route
 
     Builder.LoopStart[ply] = nil
     ply:SetNW2Bool("MEXTrackBuilderLoopActive", false)
@@ -2408,8 +2421,6 @@ function Builder.FinishRoute(ply, network)
         return false
     end
 
-    RemoveEntities(active.entities)
-
     local route = {
         points = active.points,
         anchors = active.anchors,
@@ -2417,11 +2428,19 @@ function Builder.FinishRoute(ply, network)
         network = network ~= false,
     }
 
-    Builder.Routes[#Builder.Routes + 1] = route
-    Builder.LastRoute[ply] = route
-    local routeID = #Builder.Routes
+    local routeID = #Builder.Routes + 1
     local smoothPoints = RouteRenderPoints(route)
-    local finishedPieces = SpawnPolyline(smoothPoints, route.settings, routeID)
+    local finishedPieces, spawnError = SpawnPolyline(smoothPoints, route.settings, routeID)
+    if spawnError or #finishedPieces == 0 then
+        ply:ChatPrint("[MEX Track Builder] Cannot finish: "
+            .. (spawnError or "No model could be spawned. Check the installed Metrostroi assets."))
+        return false
+    end
+    -- Commit only after genuine native models and their physics succeeded;
+    -- a failed finish keeps both the route controls and visual preview.
+    RemoveEntities(active.entities)
+    Builder.Routes[routeID] = route
+    Builder.LastRoute[ply] = route
 
     Builder.Active[ply] = nil
     SetActiveStart(ply, nil)
