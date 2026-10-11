@@ -69,8 +69,6 @@ function TOOL:Reload(trace)
         return MEXNativeTrack.Undo(ply)
     end
     return MEXNativeTrack.RemoveAimedModule(ply, trace and trace.Entity)
-    return false
-
 end
 
 function TOOL.BuildCPanel(panel)
