@@ -691,23 +691,39 @@ concommand.Add("mex_track_builder_model_status", function()
             end
         end
     end
-    local native, fallback = 0, 0
+    print("  --- Experimental real curved tunnel modules ---")
+    for _, spec in ipairs(G.NativeCurveProfiles) do
+        local filename = G.NativeModelRoot .. spec.name
+        local found = util.IsValidModel(filename)
+        print(string.format("  [%s] radius %d SU / %.1f deg / %d track(s): %s",
+            found and "OK" or "MISSING", spec.radius,
+            90 / spec.parts, spec.count, filename))
+        if found then ok = ok + 1 else absent = absent + 1 end
+    end
+
+    local native, curves, fallback = 0, 0, 0
     for _, ent in ipairs(ents.FindByClass("mex_track_segment")) do
-        local manual = ent:GetNW2String("MEXPackModel", "")
-        local model = manual ~= "" and manual or
-            G.SelectNativeTunnel(ent:GetNW2String("MEXTunnelType", "none"),
-                                 ent:GetNW2Int("MEXTrackCount", 1),
-                                 ent:GetNW2Float("MEXLength", 0))
-        if model and util.IsValidModel(model) then
-            native = native + 1
+        if ent:GetNW2Bool("MEXCurveOwner", false) then
+            curves = curves + 1
+        elseif ent:GetNW2Bool("MEXCurveCovered", false) then
+            -- These physical rails share the preceding genuine curve model.
         else
-            fallback = fallback + 1
+            local manual = ent:GetNW2String("MEXPackModel", "")
+            local model = manual ~= "" and manual or
+                G.SelectNativeTunnel(ent:GetNW2String("MEXTunnelType", "none"),
+                                     ent:GetNW2Int("MEXTrackCount", 1),
+                                     ent:GetNW2Float("MEXLength", 0))
+            if model and util.IsValidModel(model) then
+                native = native + 1
+            else
+                fallback = fallback + 1
+            end
         end
     end
-    print(string.format("  %d native modules installed, %d missing; current route segments: %d candidate native / %d procedural",
-        ok, absent, native, fallback))
-    print("  Native models are exact-length stock units (64/256/1024 SU).")
-    print("  On curves or nonstandard lengths, switch to model-piece placement or procedural fallback.")
+    print(string.format(
+        "  Mounted MDLs: %d available / %d missing. Current route visuals: %d genuine straight + %d genuine curved + %d generated sections.",
+        ok, absent, native, curves, fallback))
+    print("  Original turns are experimental: only exact, level, right-handed curves are fitted.")
     local player = LocalPlayer()
     if IsValid(player) then
         player:ChatPrint(string.format("[MEX] Stock tunnel models: %d OK / %d missing. See console for filenames.",ok,absent))
