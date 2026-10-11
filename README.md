@@ -4,39 +4,29 @@
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
-## Track & Tunnel Builder (native Metrostroi models)
+## Track & Tunnel Builder (original Metrostroi rails)
 
-**Tools → Metrostroi Expanded → Track Builder** places authentic, installed
-Metrostroi tunnel and railway models. New routes default to **Original models
-ONLY** and will **refuse unsupported angles or segment lengths** instead of
-creating synthetic grey test tunnels.
+Open **Q → Tools → Metrostroi Expanded → Track Builder** to lay persistent
+connected routes with original Metrostroi `railroad16.mdl` tiles. The builder
+supports straight tracks, smooth left/right bends, two-track layouts,
+optional generated tunnel shells, snapping, auto-loops and Metrostroi's
+track network and rerail integration.
 
-- Straight sections: native `tunnel64/256/1024*.mdl` or
-  `railroad1024/4096.mdl`, matched to their authored length.
-- Curved sections (experimental): calibrated stock
-  `tunnel3072/4096/8192_turn1.mdl` where the requested arc, level,
-  direction and endpoint tangents fit the corresponding original prefab.
-  Unsupported curves are rejected in the native-only mode.
-- Single/double track end nodes, route saves, native-track graph and a
-  configurable minimum curve radius remain available.
-- **No duplicate third rail:** the original Metrostroi prefab already has
-  its running rails, sleepers and conductor rail.
-- **Genuine collision:** the original stock `.phy` is spawned as an
-  invisible, frozen collision proxy at the identical pose as its visual
-  `.mdl`. Its native collision shape replaces MEX's rough boxes instead
-  of stacking physics bodies. This also lets contact rails and sleepers
-  participate in collisions, subject to the original model's PHY mesh.
-- New native-only routes lift **both the model and its collider by 5 SU**
-  while maintaining aligned track network/rerail coordinates. Historical
-  saved tracks keep their earlier alignment.
+No Track Pack models, long straight/curve prefabs or duplicate generated
+rail and sleeper meshes are used. The original model is required to be
+mounted on the server and client. Collisions use separate static rail,
+sleeper and outboard contact-rail hulls, without the old invisible
+collision bed. The original model's exact contact-rail placement still
+needs in-game calibration.
 
-Older saved procedural tracks remain loadable, but the new UI is model-first.
-Original curved models and their compiled physics have not yet been validated
-through a live GMod train test. Performance and clearance should be tested
-with Ečs and 81-717 before building a full network.
+**LMB** adds a point, **RMB** completes a route, **R** undoes one step.
+Unreasonably tight bends are refused. Model/collision diagnostic commands
+are available in the tool panel.
 
-See [Tunnel Builder documentation](docs/TUNNEL_BUILDER.md).
+Live Garry's Mod validation is still required, especially train wheel
+height, contact-rail collisions, tile joins and performance.
 
+See [Track Builder documentation](docs/TUNNEL_BUILDER.md).
 
 ## Passenger Seats
 
