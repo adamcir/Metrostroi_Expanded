@@ -17,6 +17,37 @@ function G.SafeTunnelType(name)
     return G.TunnelTypes[name] and name or "none"
 end
 
+-- Native Source 2007/2013 Metrostroi models verified against the model
+-- names and compiled studio headers of PhoenixBlack/Metrostroi. All original
+-- straight tunnel modules advance along *local +Y*, from Y=0 to length.
+-- The old heuristic used the bounding box's longest axis, which often chose
+-- the wrong axis for short prefab pieces and silently fell back to boxes.
+G.NativeTunnelModels = {
+    round = {
+        [1] = {[64] = "tunnel64.mdl", [256] = "tunnel256.mdl", [1024] = "tunnel1024.mdl"},
+        [2] = {[1024] = "tunnel1024_double.mdl"},
+    },
+    rectangular = {
+        [1] = {[64] = "tunnel64_rect.mdl", [256] = "tunnel256_rect.mdl",
+               [1024] = "tunnel1024_rect.mdl"},
+    },
+}
+G.NativeModelRoot = "models/metrostroi/tracks/"
+G.NativeDoubleLateralCenter = -132 -- stock 1024_double MDL: X bounds [-408.3, 144.3]
+
+function G.SelectNativeTunnel(tunnelType, trackCount, length)
+    local byType = G.NativeTunnelModels[tunnelType]
+    local choices = byType and byType[trackCount == 2 and 2 or 1]
+    if not choices then return nil end
+    for _, nominal in ipairs({1024, 256, 64}) do
+        local fileName = choices[nominal]
+        if fileName and math.abs(length - nominal) <= 1.0 then
+            return G.NativeModelRoot .. fileName, nominal
+        end
+    end
+    return nil
+end
+
 function G.SafeThirdRailSide(side)
     side = tostring(side or "outside")
     return (side == "left" or side == "right" or side == "both")
@@ -517,117 +548,132 @@ end
 -- guess file paths. Curves continue to use our dynamic procedural geometry.
 -- The selected MDL is only a visual skin: MEX's separate rail collision and
 -- Metrostroi route graph remain authoritative.
+-- IMPORTANT: Genuine Metrostroi models have a known native orientation.
+-- Their track moves from local Y=0 to Y=64/256/1024, NOT centered around
+-- the model origin. Draw by placing local Y=0 on the segment's first node.
+-- This avoids the OBB-based axis guessing and mysterious missing models.
 function G.DrawPackModel(ent)
-    local requested = ent:GetNW2String("MEXPackModel", "")
-    -- Original Metrostroi has concrete tunnel256/tunnel64/tunnel1024 MDLs.
-    -- Prefer those automatically on straight RIGID sections of matching
-    -- length. User-selected genuine Track Pack MDLs always take precedence.
-    if requested == "" and ent:GetNW2String("MEXTunnelStyle", "metrostroi") == "metrostroi" then
-        local typeName = ent:GetNW2String("MEXTunnelType", "none")
-        local count = ent:GetNW2Int("MEXTrackCount", 1)
-        local len = ent:GetNW2Float("MEXLength", 0)
-        local prefix = "models/metrostroi/tracks/"
-        local suffix = ""
-        if typeName == "rectangular" then suffix = "_rect" end
-        local name
-        if count == 2 then
-            -- Native two-track prefab is a specific profile; do not substitute
-            -- it for rectangular station tunnels with different clearances.
-            if (typeName == "round" or typeName == "wide")
-                and math.abs(len - 1024) < 8 then
-                name = "tunnel1024_double.mdl"
-            end
-        elseif typeName == "round" or typeName == "rectangular" then
-            if math.abs(len - 64) < 8 then name = "tunnel64" .. suffix .. ".mdl" end
-            if math.abs(len - 256) < 8 then name = "tunnel256" .. suffix .. ".mdl" end
-            if math.abs(len - 1024) < 8 then name = "tunnel1024" .. suffix .. ".mdl" end
-        end
-        if name then requested = prefix .. name end
+    local length = ent:GetNW2Float("MEXLength", 0)
+    local manual = ent:GetNW2String("MEXPackModel", "")
+    local isRigid = ent:GetNW2Bool("MEXRigidSection", false)
+    local allowAuto = ent:GetNW2Bool("MEXAutoNativeModels", true)
+    local tunnelType = G.SafeTunnelType(ent:GetNW2String("MEXTunnelType", "none"))
+    local trackCount = ent:GetNW2Int("MEXTrackCount", 1)
+    local style = ent:GetNW2String("MEXTunnelStyle", "metrostroi")
+    local modelName, nominalLength
+
+    if manual ~= "" and isRigid then
+        modelName = manual
+    elseif allowAuto and style == "metrostroi" then
+        modelName, nominalLength = G.SelectNativeTunnel(tunnelType, trackCount, length)
     end
-    if requested == "" or not (ent:GetNW2Bool("MEXRigidSection", false)
-        or ent:GetNW2Bool("MEXAutoNativeModels", true)) then
+
+    if not modelName then
         if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
         ent.MEXPackPiece, ent.MEXPackModel = nil, nil
         return false
     end
-    local path = string.lower(requested)
+
+    local path = string.lower(modelName)
     if not string.match(path, "^models/[%w_/%-%.]+%.mdl$") then return false end
-    local signature = requested .. ":" .. math.Round(ent:GetNW2Float("MEXLength", 1), 1)
-    if ent.MEXRejectedPackKey == signature then return false end
-    -- Loading/validating a compiled model is expensive; do it once per path,
-    -- not once per frame for every fixed station.
-    if ent.MEXPackValidityPath ~= requested then
-        ent.MEXPackValidityPath = requested
-        ent.MEXPackValidity = util.IsValidModel(requested)
-    end
-    if not ent.MEXPackValidity then return false end
-    local count = ent:GetNW2Int("MEXTrackCount", 1)
-    if count == 2 and not (string.find(path, "_ns", 1, true)
-        or string.find(path, "double", 1, true)
-        or string.find(path, "2track", 1, true)
-        or string.find(path, "2_track", 1, true))
-    then
+    if trackCount == 2 and not (string.find(path, "double", 1, true)
+        or string.find(path, "_ns", 1, true)
+        or string.find(path, "2track", 1, true)) then
         return false
     end
-    -- Non-straight pre-bent kit pieces cannot replace a straight physics
-    -- chord; never make those models act like rails they do not represent.
-    if string.find(path, "curve", 1, true) or string.find(path, "turnout", 1, true)
-        or string.find(path, "switch", 1, true) then
+    if not nominalLength and (string.find(path, "turn", 1, true)
+        or string.find(path, "switch", 1, true)
+        or string.find(path, "curve", 1, true)) then
+        -- Curved prefabs require path/topology metadata; a straight physics
+        -- segment must never masquerade as a curved model.
         return false
     end
 
-    if ent.MEXPackModel ~= requested or not IsValid(ent.MEXPackPiece) then
-        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
-        local piece = ClientsideModel(requested, RENDERGROUP_OPAQUE)
-        if not IsValid(piece) then
-            ent.MEXPackModel = nil
-            return false
+    if ent.MEXPackValidityPath ~= modelName then
+        ent.MEXPackValidityPath = modelName
+        ent.MEXPackValidity = util.IsValidModel(modelName)
+        if not ent.MEXPackValidity and not ent.MEXPackWarned then
+            ent.MEXPackWarned = true
+            print("[MEX Track Builder] Missing installed native model: " .. modelName
+                .. " (using procedural fallback)")
         end
+    end
+    if not ent.MEXPackValidity then return false end
+
+    local cacheKey = modelName .. "/" .. math.Round(length, 1)
+    if ent.MEXRejectedPackKey == cacheKey then return false end
+    if ent.MEXPackModel ~= modelName or not IsValid(ent.MEXPackPiece) then
+        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
+        local piece = ClientsideModel(modelName, RENDERGROUP_OPAQUE)
+        if not IsValid(piece) then return false end
         piece:SetNoDraw(true)
         piece:DrawShadow(false)
-        ent.MEXPackPiece, ent.MEXPackModel = piece, requested
+        ent.MEXPackPiece, ent.MEXPackModel = piece, modelName
+        ent.MEXLastRenderBounds = nil
     end
 
     local piece = ent.MEXPackPiece
     local mins, maxs = piece:OBBMins(), piece:OBBMaxs()
-    local size = maxs - mins
-    local length = ent:GetNW2Float("MEXLength", 1)
-    local isX = math.abs(size.x - length) <= math.abs(size.y - length)
-    local nativeLength = isX and size.x or size.y
-    -- A 1024-SU prefab cannot be placed on a 256-SU route. Fallback to MEX
-    -- generated graphics rather than silently stretching/misaligning it.
-    if math.abs(nativeLength - length) > math.max(8, length * 0.06) then
-        ent.MEXRejectedPackKey = signature
-        -- An unsuitable prefab should never leave a spare invisible
-        -- ClientsideModel allocated per track chord.
-        if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
+    local isOriginal = nominalLength ~= nil
+    local nativeLength = maxs.y - mins.y
+    local nativeOnY = isOriginal
+    if not isOriginal then
+        -- User-supplied Track Pack MDLs may use either X or Y. Detect using
+        -- length, but never stretch an arbitrary prefab to make it fit.
+        local xLength = maxs.x - mins.x
+        if math.abs(xLength - length) < math.abs(nativeLength - length) then
+            nativeLength, nativeOnY = xLength, false
+        else
+            nativeOnY = true
+        end
+    end
+    if math.abs(nativeLength - length) > math.max(4, length * 0.03) then
+        ent.MEXRejectedPackKey = cacheKey
+        piece:Remove()
         ent.MEXPackPiece, ent.MEXPackModel = nil, nil
+        if not ent.MEXPackSizeWarned then
+            ent.MEXPackSizeWarned = true
+            print("[MEX Track Builder] Native model size mismatch: " .. modelName
+                .. " expected " .. math.Round(length, 1) ..
+                " SU; model bounding length " .. math.Round(nativeLength, 1) .. " SU")
+        end
         return false
     end
     ent.MEXRejectedPackKey = nil
-    local correction = isX and Angle(0, 0, 0) or Angle(0, -90, 0)
-    local ang = ent:LocalToWorldAngles(correction)
-    local center = (mins + maxs) * 0.5
-    local pivot = Vector(center.x, center.y, 0)
-    pivot:Rotate(ang)
-    local target = ent:GetPos() + ent:GetAngles():Up() * ent:GetNW2Float("MEXPackZOffset", 0)
-    piece:SetRenderOrigin(target - pivot)
-    piece:SetRenderAngles(ang)
-    -- The imported prefab can be wider/taller than the invisible track tile.
-    if ent.SetRenderBounds then
-        local halfSize = math.max(size.x, size.y, size.z, length) + 48
-        ent:SetRenderBounds(Vector(-halfSize, -halfSize, -halfSize),
-                            Vector(halfSize, halfSize, halfSize))
+
+    local angles = ent:GetAngles()
+    local correction = nativeOnY and Angle(0, -90, 0) or Angle(0, 0, 0)
+    local mdlAngles = ent:LocalToWorldAngles(correction)
+    -- Native +Y (or user-supplied +X) starts at first route node. Source's
+    -- model *origin* is at the start, not OBB centre. Native double has X
+    -- bounds [-408,144] => offset its bore by 132 to center both tracks.
+    local start = ent:GetPos() - angles:Forward() * (length * 0.5)
+    local correctionX = isOriginal and trackCount == 2
+        and -G.NativeDoubleLateralCenter or 0
+    local lateral = Vector(correctionX, isOriginal and 0 or -mins.y, 0)
+    lateral:Rotate(mdlAngles)
+    local pos = start + lateral + angles:Up() * ent:GetNW2Float("MEXPackZOffset", 0)
+    if not isOriginal and not nativeOnY then
+        local axisOffset = Vector(-mins.x, -((mins.y + maxs.y) * 0.5), 0)
+        axisOffset:Rotate(mdlAngles)
+        pos = start + axisOffset + angles:Up() * ent:GetNW2Float("MEXPackZOffset", 0)
     end
-    -- Stock VertexLitGeneric tunnels otherwise render black on open,
-    -- dark construction maps with no precomputed light probes for new tunnels.
-    local forceLit = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
-    if forceLit then
+
+    piece:SetRenderOrigin(pos)
+    piece:SetRenderAngles(mdlAngles)
+    if ent.SetRenderBounds and ent.MEXLastRenderBounds ~= modelName then
+        local bound = math.max(1500, length + 512, (maxs - mins):Length() + 128)
+        ent:SetRenderBounds(Vector(-bound, -bound, -bound),
+                            Vector(bound, bound, bound))
+        ent.MEXLastRenderBounds = modelName
+    end
+    local illuminate = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
+    if illuminate then
         render.SuppressEngineLighting(true)
         render.SetColorModulation(0.67, 0.67, 0.67)
     end
     piece:DrawModel()
-    if forceLit then
+    if illuminate then
         render.SetColorModulation(1, 1, 1)
         render.SuppressEngineLighting(false)
     end
@@ -635,6 +681,7 @@ function G.DrawPackModel(ent)
     piece:SetRenderAngles(nil)
     return true
 end
+
 
 local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                             sleeperLength, sleeperWidth, sleeperHeight,
