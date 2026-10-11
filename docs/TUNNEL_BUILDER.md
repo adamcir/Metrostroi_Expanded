@@ -78,7 +78,9 @@ Builder UI creates **native modules only**. No original assets are modified.
 
 A switch or a crossing is **not** made by overlapping two regular track
 models. That would create wrong guard rails, double contacts, and invalid
-bogey collision. It **must be one installed original junction asset** with
+bogey collision. MEX checks new route centerlines against existing MEX-native
+routes and rejects accidental same-level crossings; only properly registered
+original diamond/switch models provide legal junctions. It **must be one installed original junction asset** with
 measured connector locations and real compiled physics.
 
 Since the filenames and attachment pivots of third-party Metrostroi/Track
