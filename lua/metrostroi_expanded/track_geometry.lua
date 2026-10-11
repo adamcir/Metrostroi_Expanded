@@ -666,6 +666,58 @@ concommand.Add("mex_track_builder_model_status", function()
     end
 end)
 
+-- Native curved components are shown only when their exact .mdl is
+-- mounted. The .mdl and original .phy collider share NativeCurvePose.
+function G.IsNativeCurveMounted(model)
+    if not isstring(model) or
+        not string.match(model, "^models/[%w_/%-%.]+%.mdl$") then return false end
+    G.CurveMountCache = G.CurveMountCache or {}
+    if G.CurveMountCache[model] == nil then
+        G.CurveMountCache[model] = util.IsValidModel(model)
+        if not G.CurveMountCache[model] then
+            print("[MEX Track Builder] Missing curved Metrostroi model: " .. model)
+        end
+    end
+    return G.CurveMountCache[model]
+end
+
+function G.DrawNativeCurve(ent)
+    local model = ent:GetNW2String("MEXCurveModel", "")
+    if not G.IsNativeCurveMounted(model) then return false end
+    if ent.MEXNativeCurveModel ~= model or not IsValid(ent.MEXNativeCurvePiece) then
+        if IsValid(ent.MEXNativeCurvePiece) then ent.MEXNativeCurvePiece:Remove() end
+        local part = ClientsideModel(model, RENDERGROUP_OPAQUE)
+        if not IsValid(part) then return false end
+        part:SetNoDraw(true)
+        part:DrawShadow(false)
+        ent.MEXNativeCurvePiece, ent.MEXNativeCurveModel = part, model
+    end
+
+    local origin, angles = G.NativeCurvePose(
+        ent:GetNW2Vector("MEXCurveOrigin", ent:GetPos()),
+        ent:GetNW2Angle("MEXCurveHeading", Angle(0, 0, 0)),
+        ent:GetNW2Int("MEXTrackCount", 1),
+        ent:GetNW2Float("MEXPackZOffset", 0)
+            - (ent:GetNW2Bool("MEXStockModelsOnly", false)
+                and 0 or G.NativeModelLift))
+    local part = ent.MEXNativeCurvePiece
+    part:SetRenderOrigin(origin)
+    part:SetRenderAngles(angles)
+    local illuminate = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
+    if illuminate then
+        render.SuppressEngineLighting(true)
+        render.SetColorModulation(0.67, 0.67, 0.67)
+    end
+    part:DrawModel()
+    if illuminate then
+        render.SetColorModulation(1, 1, 1)
+        render.SuppressEngineLighting(false)
+    end
+    part:SetRenderOrigin(nil)
+    part:SetRenderAngles(nil)
+    return true
+end
+
 -- IMPORTANT: Genuine Metrostroi models have a known native orientation.
 -- Their track moves from local Y=0 to Y=64/256/1024, NOT centered around
 -- the model origin. Draw by placing local Y=0 on the segment's first node.
@@ -783,7 +835,9 @@ function G.DrawPackModel(ent)
     if isOriginal then
         pos, mdlAngles = G.NativeStraightPose(
             ent:GetPos(), ent:GetAngles(), length, trackCount,
-            ent:GetNW2Float("MEXPackZOffset", 0))
+            ent:GetNW2Float("MEXPackZOffset", 0)
+                - (ent:GetNW2Bool("MEXStockModelsOnly", false)
+                    and 0 or G.NativeModelLift))
     else
         -- Custom Track Pack models retain their editable manual offsets.
         local correction = nativeOnY and Angle(0, -90, 0) or Angle(0, 0, 0)
