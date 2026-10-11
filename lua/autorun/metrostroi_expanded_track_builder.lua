@@ -134,6 +134,8 @@ function TrackEntity:Initialize()
     local effectiveGauge = gauge
     local effectiveRailWidth = railWidth
     local railTop = METROSTROI_RAIL_HEIGHT
+        + (self:GetNW2Bool("MEXStockModelsOnly", false)
+            and Builder.Geometry.NativeModelLift or 0)
     local railBottom = 0
     local halfRail = effectiveRailWidth * 0.5
 
@@ -1473,7 +1475,9 @@ local function NetworkPoints(route)
             local right = tangent:Cross(Vector(0, 0, 1))
             if right:LengthSqr() < 0.001 then right = Vector(0, -1, 0) end
             right:Normalize()
-            path[#path + 1] = point + right * sideways + Vector(0, 0, METROSTROI_RAIL_HEIGHT)
+            path[#path + 1] = point + right * sideways + Vector(0, 0,
+                METROSTROI_RAIL_HEIGHT + (settings.stock_models_only
+                    and Builder.Geometry.NativeModelLift or 0))
         end
         result[#result + 1] = path
     end
