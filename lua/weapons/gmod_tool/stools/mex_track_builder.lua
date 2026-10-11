@@ -27,6 +27,17 @@ if CLIENT then
     language.Add("tool.mex_track_builder.desc", "Build smooth persistent Metrostroi-compatible track routes in-game")
     language.Add("tool.mex_track_builder.0", "LMB: add/snap point | RMB: finish | R: undo last step, select endpoint (saved routes supported)")
 
+    -- Older installations kept the former fixed-prefab + rectangular
+    -- tunnel defaults in archived client convars. Migrate just once so
+    -- existing users do not start in an invisible rigid-prefab mode.
+    timer.Simple(0, function()
+        local key = "mex_track_builder_tiled_migrated_v1"
+        if cookie.GetNumber(key, 0) ~= 0 then return end
+        RunConsoleCommand("mex_track_builder_rigid_section", "0")
+        RunConsoleCommand("mex_track_builder_rigid_length", "0")
+        RunConsoleCommand("mex_track_builder_tunnel_type", "none")
+        cookie.Set(key, "1")
+    end)
 end
 
 local function ReadSettings(tool)
