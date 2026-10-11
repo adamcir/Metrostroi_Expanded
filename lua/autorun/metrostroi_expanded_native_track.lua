@@ -518,7 +518,7 @@ local function RefreshPreview(state)
     ClearPreview(state)
     if not state then return end
     for _, part in ipairs(state.parts or {}) do
-        local ent = ents.Create("prop_dynamic")
+        local ent = ents.Create("prop_dynamic_override")
         if IsValid(ent) then
             ent:SetModel(part.model)
             ent:SetPos(V(part.pos))
@@ -534,6 +534,7 @@ local function RefreshPreview(state)
     end
 end
 local function Notify(ply, message)
+    print("[MEX Native Track] " .. message)
     if IsValid(ply) then ply:ChatPrint("[MEX Native Track] " .. message) end
 end
 function N.Add(ply, aim, settings)
@@ -621,6 +622,35 @@ function N.Cancel(ply)
     N.Active[ply] = nil
     SyncState(ply)
     Notify(ply, "Construction cancelled.")
+    return true
+end
+function N.DeleteRoute(ply, ent)
+    if not IsValid(ply) or not ply:IsAdmin() then return false end
+    if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
+        Notify(ply, "Aim at a saved original Metrostroi module.")
+        return false
+    end
+    local id = ent:GetNW2Int("MEXNativeRoute", 0)
+    if not N.Routes[id] then return false end
+    local active = N.Active[ply]
+    if active and active.reopenID == id then N.Cancel(ply) end
+    RemoveProps(id)
+    table.remove(N.Routes, id)
+    local previousProps = N.Props
+    N.Props = {}
+    for routeID, route in ipairs(N.Routes) do
+        route.id = routeID
+        local oldID = routeID >= id and routeID + 1 or routeID
+        N.Props[routeID] = previousProps[oldID] or {}
+        for _, prop in ipairs(N.Props[routeID]) do
+            if IsValid(prop) then prop:SetNW2Int("MEXNativeRoute", routeID) end
+        end
+    end
+    Save()
+    if MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
+        MEXTrackBuilder.RebuildMetrostroiNetwork(ply)
+    end
+    Notify(ply, "Original-model route deleted.")
     return true
 end
 function N.GetNetworkPaths()
@@ -790,6 +820,11 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
     end
     Notify(ply, "Turnout switched to port " .. nextBranch .. ".")
     return false
+end)
+concommand.Add("mex_native_delete_aimed", function(ply)
+    if not IsValid(ply) then return end
+    local tr = ply:GetEyeTrace()
+    N.DeleteRoute(ply, tr and tr.Entity)
 end)
 concommand.Add("mex_native_finish", function(ply) if IsValid(ply) then N.Finish(ply) end end)
 concommand.Add("mex_native_undo", function(ply) if IsValid(ply) then N.Undo(ply) end end)
