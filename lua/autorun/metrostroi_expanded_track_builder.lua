@@ -63,6 +63,20 @@ end
 -- displayed. Unlike rectangular approximation hulls this collides with its
 -- actual sleepers, guarded contact rail, tunnel wall and floor. Never
 -- render the physics proxy: client rendering stays under TrackEntity:Draw.
+if SERVER then
+    hook.Add("PhysgunPickup", "MEX_NativeTrackCollisionFixed", function(_, ent)
+        if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
+            return false
+        end
+    end)
+    hook.Add("CanTool", "MEX_NativeTrackCollisionProtected", function(_, trace)
+        local ent = istable(trace) and trace.Entity or nil
+        if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
+            return false
+        end
+    end)
+end
+
 function TrackEntity:InstallNativePhysics(model, position, angles)
     if not SERVER or not isstring(model) or not util.IsValidModel(model)
         or not isvector(position) or not isangle(angles) then return false end
@@ -84,8 +98,12 @@ function TrackEntity:InstallNativePhysics(model, position, angles)
         print("[MEX Track Builder] No usable native .phy collision: " .. model)
         return false
     end
-    proxy:SetNoDraw(true)
+    -- Keep the collision entity NETWORKED for client-side prediction.
+    -- SetNoDraw(true) on the server would suppress networking entirely.
+    proxy:SetRenderMode(RENDERMODE_TRANSCOLOR)
+    proxy:SetColor(Color(255, 255, 255, 0))
     proxy:DrawShadow(false)
+    proxy:SetNW2Bool("MEXNativeCollisionProxy", true)
     phys:EnableMotion(false)
     phys:Sleep()
     self.MEXNativePhysicsProxy = proxy
