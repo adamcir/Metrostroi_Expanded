@@ -59,6 +59,9 @@ end
 function NativePiece:Draw()
     self:DrawModel()
 end
+function NativePiece:Use(activator)
+    if SERVER and N.ToggleSwitch then N.ToggleSwitch(activator, self) end
+end
 scripted_ents.Register(NativePiece, "mex_native_track_piece")
 local function V(t) return Vector(tonumber(t[1]) or 0, tonumber(t[2]) or 0, tonumber(t[3]) or 0) end
 local function P(v) return {v.x, v.y, v.z} end
@@ -919,7 +922,7 @@ end)
 hook.Add("PlayerInitialSpawn", "MEXNativeTrackSendProfiles", function(ply)
     timer.Simple(2, function() if IsValid(ply) then SendProfiles(ply) end end)
 end)
-hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
+function N.ToggleSwitch(ply, ent)
     if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then return end
     local junctionID = ent:GetNW2String("MEXNativeJunctionID", "")
     local profile = N.Junctions[junctionID]
@@ -975,7 +978,7 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
     end
     Notify(ply, "Turnout switched to port " .. nextBranch .. ".")
     return false
-end)
+end
 concommand.Add("mex_native_delete_aimed", function(ply)
     if not IsValid(ply) then return end
     local tr = ply:GetEyeTrace()
