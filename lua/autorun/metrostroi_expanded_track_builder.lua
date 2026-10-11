@@ -336,7 +336,34 @@ if CLIENT then
         Builder.Geometry.ClearClientMeshes(self)
     end
 
+    function TrackEntity:Think()
+        -- A single native curve MDL is ~1600 SU long, but its owner physics
+        -- segment may be only ~128 SU. Expand render bounds once when client
+        -- netvars arrive, or Source frustum-culls the whole stock model.
+        if self:GetNW2Bool("MEXCurveOwner", false) and not self.MEXCurveBoundsExtended then
+            if self.SetRenderBounds then
+                self:SetRenderBounds(Vector(-2304, -2304, -768),
+                                     Vector(2304, 2304, 768))
+            end
+            self.MEXCurveBoundsExtended = true
+        end
+    end
+
     function TrackEntity:Draw()
+        if self:GetNW2Bool("MEXCurveCovered", false) then
+            local curveModel = self:GetNW2String("MEXCurveModel", "")
+            if Builder.Geometry.IsNativeCurveMounted(curveModel) then
+                -- Only the first piece draws the original turn1 MDL; every
+                -- section retains its actual separate physics rails.
+                if self:GetNW2Bool("MEXCurveOwner", false) then
+                    Builder.Geometry.DrawNativeCurve(self)
+                end
+                Builder.Geometry.DrawContactRailOnly(self)
+                return
+            end
+            -- Not mounted on this client => preserve the generated tunnel
+            -- graphics on all pieces, with no invisible segment gaps.
+        end
         if (self:GetNW2Bool("MEXRigidSection", false)
             or self:GetNW2Bool("MEXAutoNativeModels", true))
             and Builder.Geometry.DrawPackModel(self) then
