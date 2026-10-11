@@ -398,6 +398,20 @@ local function ValidProfile(profile)
         if not istable(link) or not profile.ports[tonumber(link[1]) or 0]
             or not profile.ports[tonumber(link[2]) or 0] then return false end
     end
+    if profile.kind == "switch" then
+        local hasMain, hasDiverge = false, false
+        for _, link in ipairs(profile.paths) do
+            if (link[1] == 1 and link[2] == 2) or (link[1] == 2 and link[2] == 1) then
+                hasMain = true
+            end
+            if (link[1] == 1 and link[2] == 3) or (link[1] == 3 and link[2] == 1) then
+                hasDiverge = true
+            end
+        end
+        if not hasMain or not hasDiverge then return false end
+    elseif profile.kind == "crossing" then
+        if #profile.paths ~= 2 then return false end
+    end
     return true
 end
 
@@ -462,9 +476,10 @@ local function SpawnRoute(route, ghost)
         ent:SetNW2Bool("MEXNativeModule", true)
         ent:SetNW2Int("MEXNativeRoute", route.id or 0)
         ent:SetNW2Int("MEXNativeIndex", #new + 1)
-    local portCount = #N.ModulePorts(part)
+    local ports = N.ModulePorts(part)
+        local portCount = #ports
         for portIndex = 1, math.min(portCount, 4) do
-            ent:SetNW2Vector("MEXNativePort" .. portIndex, N.ModulePorts(part)[portIndex].pos)
+            ent:SetNW2Vector("MEXNativePort" .. portIndex, ports[portIndex].pos)
         end
         ent:SetNW2Int("MEXNativePorts", portCount)
         if part.junction then
@@ -669,9 +684,42 @@ hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
             local id = #N.Routes + 1
             route.id = id
             N.Routes[id] = route
-            N.Props[id] = SpawnRoute(route) or {}
+            local props, err = SpawnRoute(route)
+            N.Props[id] = props or {}
+            if not props then
+                ErrorNoHalt("[MEX Native Track] Route " .. id .. ": " .. tostring(err) .. "\\n")
+            end
         end
     end
+    timer.Simple(2.5, function()
+        if #N.Routes > 0 and MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
+            MEXTrackBuilder.RebuildMetrostroiNetwork()
+        end
+    end)
+end)
+hook.Add("PostCleanupMap", "MEXNativeTrackRespawnAfterCleanup", function()
+    timer.Simple(0.4, function()
+        for id, route in ipairs(N.Routes) do
+            RemoveProps(id)
+            local props, err = SpawnRoute(route)
+            N.Props[id] = props or {}
+            if not props then ErrorNoHalt("[MEX Native Track] Cleanup restore failed: " ..
+                tostring(err) .. "\\n") end
+        end
+    end)
+end)
+hook.Add("PlayerDisconnected", "MEXNativeTrackLeave", function(ply)
+    local state = N.Active[ply]
+    ClearPreview(state)
+    N.Active[ply] = nil
+end)
+hook.Add("PhysgunPickup", "MEXNativeFixedPhysics", function(_, ent)
+    if IsValid(ent) and ent:GetNW2Bool("MEXNativeModule", false) then return false end
+end)
+hook.Add("CanTool", "MEXNativeProtectModules", function(_, trace, mode)
+    local ent = trace and trace.Entity
+    if IsValid(ent) and ent:GetNW2Bool("MEXNativeModule", false)
+        and mode ~= "mex_track_builder" then return false end
 end)
 hook.Add("PlayerInitialSpawn", "MEXNativeTrackSendProfiles", function(ply)
     timer.Simple(2, function() if IsValid(ply) then SendProfiles(ply) end end)
@@ -687,6 +735,15 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
     local route = N.Routes[ent:GetNW2Int("MEXNativeRoute", 0)]
     local part = route and route.parts[ent:GetNW2Int("MEXNativeIndex", 0)]
     if not part then return false end
+    -- Never throw a switch while a train or bogey occupies the section.
+    for _, nearby in ipairs(ents.FindInSphere(ent:GetPos(), 512)) do
+        if IsValid(nearby) and nearby ~= ent
+            and (string.StartWith(nearby:GetClass(), "gmod_subway_")
+                or nearby:GetClass() == "gmod_train_bogey") then
+            Notify(ply, "Turnout is occupied by a train; switching blocked.")
+            return false
+        end
+    end
     local choices = {}
     for _, link in ipairs(profile.paths) do
         if link[1] == 1 then choices[#choices + 1] = link[2]
@@ -733,6 +790,24 @@ concommand.Add("mex_native_register_junction", function(ply, _, args)
     file.Write(JUNCTION_FILE, util.TableToJSON(N.Junctions, true))
     SendProfiles()
     Notify(ply, "Original junction model and connector topology saved.")
+end)
+concommand.Add("mex_native_list_junction_models", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local roots = {"models/metrostroi/tracks", "models/metrostroi_tunnels"}
+    local found = 0
+    for _, dir in ipairs(roots) do
+        local models = file.Find(dir .. "/*.mdl", "GAME") or {}
+        for _, model in ipairs(models) do
+            if string.find(model, "cross", 1, true)
+                or string.find(model, "switch", 1, true)
+                or string.find(model, "point", 1, true)
+                or string.find(model, "junction", 1, true) then
+                print("[MEX Native Track] Potential original junction: " .. dir .. "/" .. model)
+                found = found + 1
+            end
+        end
+    end
+    Notify(ply, "Found " .. found .. " possible installed original junction models; see server console.")
 end)
 concommand.Add("mex_native_status", function(ply)
     local routes = #N.Routes
