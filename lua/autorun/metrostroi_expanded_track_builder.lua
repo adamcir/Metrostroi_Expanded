@@ -975,6 +975,13 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
         packModel = ""
     end
     ent:SetNW2String("MEXPackModel", packModel)
+    if packModel ~= "" then
+        -- Count valid manually picked Track Pack modules as genuine model
+        -- pieces too; do not incorrectly report them as procedural fallbacks.
+        ent:SetNW2String("MEXNativeModel", packModel)
+        ent:SetNW2Bool("MEXNativeExpected", true)
+        ent:SetNW2Bool("MEXNativeAvailable", true)
+    end
     ent:SetNW2Float("MEXPackZOffset", settings.pack_z_offset)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
