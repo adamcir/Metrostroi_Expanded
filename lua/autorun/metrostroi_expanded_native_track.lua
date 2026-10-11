@@ -787,36 +787,36 @@ function N.Finish(ply)
     Notify(ply, string.format("Route #%d saved (%d original model modules).", id, #entities))
     return true
 end
-function N.Undo(ply, aimed)
-    if not IsValid(ply) or not ply:IsAdmin() then return false end
-    local state = N.Active[ply]
-    if not state then
-        local aimedID = IsValid(aimed) and aimed:GetNW2Int("MEXNativeRoute", 0) or 0
-        local id = aimedID > 0 and aimedID or #N.Routes
-        local route = N.Routes[id]
-        if not route or #route.parts == 0 then return false end
-        local first = route.parts[1]
-        state = {
-            start = V(first.start), startYaw = first.yaw,
-            parts = table.Copy(route.parts), reopenID = id,
-            preview = {},
-        }
-        N.Active[ply] = state
-    end
-    if #state.parts > 0 then table.remove(state.parts) end
+-- Recompute only the construction cursor. Removing a middle module must not
+-- remove the modules after it, so a temporary route may contain a gap.
+local function UpdateConstructionEndpoint(state)
     local last = state.parts[#state.parts]
     if last then
         local ports = N.ModulePorts(last)
         local endpoint = last.junction and ports[last.branch or 2]
             or ports[last.lane == "double" and 3 or 2]
         state.pos = endpoint and (endpoint.center or endpoint.pos) or state.start
-        state.yaw = last.junction and endpoint and endpoint.yaw or
-            (last.yaw - (last.turn or 0) * (last.sweep or 0))
+        state.yaw = last.junction and endpoint and endpoint.yaw
+            or (last.yaw - (last.turn or 0) * (last.sweep or 0))
     else
         state.pos, state.yaw = state.start, state.startYaw
     end
+end
+
+-- Explicit Shift+R / panel Undo: only the last pending construction step.
+-- An idle reload must NEVER quietly start editing or delete a saved route.
+function N.Undo(ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return false end
+    local state = N.Active[ply]
+    if not state or #state.parts == 0 then
+        Notify(ply, "Nothing to undo. LMB starts construction; R deletes the aimed saved module.")
+        return false
+    end
+    table.remove(state.parts)
+    UpdateConstructionEndpoint(state)
     RefreshPreview(state)
     SyncState(ply)
+    Notify(ply, "Undid the last pending module. All earlier modules are preserved.")
     return true
 end
 function N.Cancel(ply)
@@ -858,6 +858,68 @@ function N.DeleteRoute(ply, ent)
     Notify(ply, "Original-model route deleted.")
     return true
 end
+-- R always removes EXACTLY ONE module, independently of its route position.
+-- The remaining route is retained even if removal creates two disconnected
+-- stretches. Free endpoints are automatically recomputed from their geometry.
+function N.RemoveAimedModule(ply, traced)
+    if not IsValid(ply) or not ply:IsAdmin() then return false end
+    local target = N.GetAimedModule(ply, traced)
+    if not IsValid(target) then
+        Notify(ply, "Point at an original track module and press R. Shift+R undoes the last pending module.")
+        return false
+    end
+
+    if target:GetNW2Bool("MEXNativePreview", false) then
+        local state = N.Active[ply]
+        if not state then return false end
+        local index = target:GetNW2Int("MEXNativePreviewIndex", 0)
+        if state.preview[index] ~= target or not state.parts[index] then
+            Notify(ply, "Selected construction module has changed. Aim again.")
+            return false
+        end
+        table.remove(state.parts, index)
+        UpdateConstructionEndpoint(state)
+        RefreshPreview(state)
+        SyncState(ply)
+        Notify(ply, string.format("Removed pending module #%d. %d pending modules remain.",
+            index, #state.parts))
+        return true
+    end
+
+    if not target:GetNW2Bool("MEXNativeModule", false) then return false end
+    local routeID = target:GetNW2Int("MEXNativeRoute", 0)
+    local moduleIndex = target:GetNW2Int("MEXNativeIndex", 0)
+    local route, props = N.Routes[routeID], N.Props[routeID]
+    if not route or not props or props[moduleIndex] ~= target
+        or not route.parts[moduleIndex] then
+        Notify(ply, "Selected module is no longer part of a saved route.")
+        return false
+    end
+    -- Do not silently overwrite deletion with a subsequently finished edit.
+    local pending = N.Active[ply]
+    if pending and pending.reopenID == routeID then N.Cancel(ply) end
+
+    if #route.parts == 1 then
+        return N.DeleteRoute(ply, target)
+    end
+    table.remove(route.parts, moduleIndex)
+    table.remove(props, moduleIndex)
+    target:Remove()
+    for index = moduleIndex, #props do
+        local ent = props[index]
+        if IsValid(ent) then ent:SetNW2Int("MEXNativeIndex", index) end
+    end
+
+    Save()
+    if MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
+        MEXTrackBuilder.RebuildMetrostroiNetwork(ply)
+    end
+    Notify(ply, string.format(
+        "Removed only module #%d from route #%d. Remaining %d modules were kept.",
+        moduleIndex, routeID, #route.parts))
+    return true
+end
+
 function N.GetNetworkPaths()
     local edges = {}
     for _, route in ipairs(N.Routes) do
@@ -1028,6 +1090,11 @@ function N.ToggleSwitch(ply, ent)
     Notify(ply, "Turnout switched to port " .. nextBranch .. ".")
     return false
 end
+concommand.Add("mex_native_remove_aimed", function(ply)
+    if not IsValid(ply) then return end
+    local tr = ply:GetEyeTrace()
+    N.RemoveAimedModule(ply, tr and tr.Entity)
+end)
 concommand.Add("mex_native_delete_aimed", function(ply)
     if not IsValid(ply) then return end
     local tr = ply:GetEyeTrace()
