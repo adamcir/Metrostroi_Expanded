@@ -523,10 +523,13 @@ function G.DrawPackModel(ent)
         if typeName == "rectangular" then suffix = "_rect" end
         local name
         if count == 2 then
-            if math.abs(len - 1024) < 8 and typeName ~= "none" then
+            -- Native two-track prefab is a specific profile; do not substitute
+            -- it for rectangular station tunnels with different clearances.
+            if (typeName == "round" or typeName == "wide")
+                and math.abs(len - 1024) < 8 then
                 name = "tunnel1024_double.mdl"
             end
-        elseif typeName ~= "none" then
+        elseif typeName == "round" or typeName == "rectangular" then
             if math.abs(len - 64) < 8 then name = "tunnel64" .. suffix .. ".mdl" end
             if math.abs(len - 256) < 8 then name = "tunnel256" .. suffix .. ".mdl" end
             if math.abs(len - 1024) < 8 then name = "tunnel1024" .. suffix .. ".mdl" end
