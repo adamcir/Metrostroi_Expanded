@@ -988,8 +988,11 @@ function Builder.BuildGeometryPoints(points, settings)
         local first, last = points[1], points[#points]
         local chord = last - first
         local length = chord:Length()
-        local nativeSize = settings.track_count == 2 and 1024 or 256
-        if length >= nativeSize and length > 0 then
+        -- Prefer the longest genuine Metrostroi MDL to avoid spawning many
+        -- tiny tunnel models. The 256/64 pieces finish short single-track
+        -- runs; a 2-track original is available only as tunnel1024_double.
+        local sizes = settings.track_count == 2 and {1024} or {1024, 256, 64}
+        if length >= sizes[#sizes] and length > 0 then
             local direction = chord / length
             local straight = true
             local previousAlong = -1
@@ -1006,12 +1009,22 @@ function Builder.BuildGeometryPoints(points, settings)
             end
             if straight then
                 local nativePoints = {first}
-                local d = nativeSize
-                while d < length - 0.5 do
-                    nativePoints[#nativePoints + 1] = first + direction * d
-                    d = d + nativeSize
+                local at = 0
+                while length - at >= sizes[#sizes] - 0.25 do
+                    local chosen
+                    for _, candidate in ipairs(sizes) do
+                        if length - at >= candidate - 0.25 then
+                            chosen = candidate
+                            break
+                        end
+                    end
+                    if not chosen then break end
+                    at = at + chosen
+                    nativePoints[#nativePoints + 1] = first + direction * math.min(at, length)
                 end
-                nativePoints[#nativePoints + 1] = last
+                if at < length - 0.25 then
+                    nativePoints[#nativePoints + 1] = last
+                end
                 return nativePoints
             end
         end
