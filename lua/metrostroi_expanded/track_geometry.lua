@@ -566,6 +566,8 @@ local function MakeMesh(vertices)
 end
 
 function G.ClearClientMeshes(ent)
+    if IsValid(ent.MEXNativeCurvePiece) then ent.MEXNativeCurvePiece:Remove() end
+    ent.MEXNativeCurvePiece, ent.MEXNativeCurveModel = nil, nil
     if IsValid(ent.MEXPackPiece) then ent.MEXPackPiece:Remove() end
     ent.MEXPackPiece = nil
     ent.MEXPackModel = nil
@@ -734,6 +736,66 @@ end
 -- guess file paths. Curves continue to use our dynamic procedural geometry.
 -- The selected MDL is only a visual skin: MEX's separate rail collision and
 -- Metrostroi route graph remain authoritative.
+-- Pure client check for group-wide fallback. All covered segments either
+-- render their original shell (when this MDL is mounted) or ALL fall back
+-- to their procedural geometry; partial mixed tunnels cannot occur.
+function G.IsNativeCurveMounted(model)
+    if not isstring(model) or not string.match(model, "^models/[%w_/%-%.]+%.mdl$") then
+        return false
+    end
+    G.CurveMountCache = G.CurveMountCache or {}
+    if G.CurveMountCache[model] == nil then
+        G.CurveMountCache[model] = util.IsValidModel(model)
+        if not G.CurveMountCache[model] then
+            print("[MEX Track Builder] Original curve model missing: " .. model
+                .. " - drawing safe generated tunnel instead.")
+        end
+    end
+    return G.CurveMountCache[model] == true
+end
+
+function G.DrawNativeCurve(ent)
+    local model = ent:GetNW2String("MEXCurveModel", "")
+    if not G.IsNativeCurveMounted(model) then return false end
+    if ent.MEXNativeCurveModel ~= model or not IsValid(ent.MEXNativeCurvePiece) then
+        if IsValid(ent.MEXNativeCurvePiece) then ent.MEXNativeCurvePiece:Remove() end
+        local created = ClientsideModel(model, RENDERGROUP_OPAQUE)
+        if not IsValid(created) then return false end
+        created:SetNoDraw(true)
+        created:DrawShadow(false)
+        ent.MEXNativeCurvePiece = created
+        ent.MEXNativeCurveModel = model
+    end
+    -- Original turn1 MDLs begin at local (0,0,0), pointing along +Y.
+    -- They are NEVER scaled or bent. The model is used only if the spline
+    -- follows the radius/angle of this exact prefabricated component.
+    local heading = ent:GetNW2Angle("MEXCurveHeading", Angle(0,0,0))
+    local mdlAngles = Angle(0, heading.y - 90, 0)
+    local position = ent:GetNW2Vector("MEXCurveOrigin", ent:GetPos())
+    if ent:GetNW2Int("MEXTrackCount", 1) == 2 then
+        local lateral = Vector(-G.NativeDoubleLateralCenter, 0, 0)
+        lateral:Rotate(mdlAngles)
+        position = position + lateral
+    end
+    position = position + Vector(0,0,ent:GetNW2Float("MEXPackZOffset", 0))
+    local piece = ent.MEXNativeCurvePiece
+    piece:SetRenderOrigin(position)
+    piece:SetRenderAngles(mdlAngles)
+    local forceLit = cvBrightNativeTunnels and cvBrightNativeTunnels:GetBool()
+    if forceLit then
+        render.SuppressEngineLighting(true)
+        render.SetColorModulation(0.67, 0.67, 0.67)
+    end
+    piece:DrawModel()
+    if forceLit then
+        render.SetColorModulation(1, 1, 1)
+        render.SuppressEngineLighting(false)
+    end
+    piece:SetRenderOrigin(nil)
+    piece:SetRenderAngles(nil)
+    return true
+end
+
 -- IMPORTANT: Genuine Metrostroi models have a known native orientation.
 -- Their track moves from local Y=0 to Y=64/256/1024, NOT centered around
 -- the model origin. Draw by placing local Y=0 on the segment's first node.
