@@ -131,6 +131,13 @@ function TrackEntity:Initialize()
 end
 
 if CLIENT then
+    local function RemoveModelPieces(ent)
+        for _, piece in ipairs(ent.MEXModelPieces or {}) do
+            if IsValid(piece) then piece:Remove() end
+        end
+        ent.MEXModelPieces = {}
+    end
+
     local function NewTrackPiece(model)
         local piece = ClientsideModel(model, RENDERGROUP_OPAQUE)
         if IsValid(piece) then
