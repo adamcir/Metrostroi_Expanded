@@ -693,7 +693,7 @@ function G.Draw(ent)
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
     local uvStart = ent:GetNW2Float("MEXUVStart", 0)
     local key = string.format(
-        "metro-lining-uv-v6/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
+        "metro-lining-uv-v7/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
         tunnelType, tunnelStyle, radius, width, height, wall,
         thirdRail and 1 or 0, contactSide, contactOffset, contactHeight,
