@@ -35,6 +35,27 @@ local TURNS = {
     },
 }
 N.Junctions = N.Junctions or {}
+
+-- A native scripted static prop uses the original MDL for BOTH rendering
+-- and its compiled .phy. PhysicsInitStatic supports static-prop models that
+-- prop_physics may reject; no custom convex hulls are synthesized.
+local NativePiece = {
+    Type = "anim", Base = "base_anim",
+    PrintName = "MEX Original Metrostroi Module",
+    Spawnable = false, AdminOnly = true, RenderGroup = RENDERGROUP_OPAQUE,
+}
+function NativePiece:Initialize()
+    if CLIENT then return end
+    self:SetMoveType(MOVETYPE_NONE)
+    self:SetSolid(SOLID_VPHYSICS)
+    self:PhysicsInitStatic(SOLID_VPHYSICS)
+    self:SetUseType(SIMPLE_USE)
+    self:DrawShadow(false)
+end
+function NativePiece:Draw()
+    self:DrawModel()
+end
+scripted_ents.Register(NativePiece, "mex_native_track_piece")
 local function V(t) return Vector(tonumber(t[1]) or 0, tonumber(t[2]) or 0, tonumber(t[3]) or 0) end
 local function P(v) return {v.x, v.y, v.z} end
 local function Direction(yaw) return Angle(0, yaw, 0):Forward() end
@@ -301,7 +322,7 @@ if CLIENT then
         if CurTime() < nextNodesRefresh then return nodes end
         nextNodesRefresh = CurTime() + 0.3
         local all, counts = {}, {}
-        for _, ent in ipairs(ents.FindByClass("prop_physics")) do
+        for _, ent in ipairs(ents.FindByClass("mex_native_track_piece")) do
             if IsValid(ent) and ent:GetNW2Bool("MEXNativeModule", false) then
                 for j = 1, ent:GetNW2Int("MEXNativePorts", 0) do
                     local pos = ent:GetNW2Vector("MEXNativePort" .. j, vector_origin)
@@ -493,7 +514,7 @@ local function SpawnRoute(route, ghost)
             for _, ent in ipairs(new) do if IsValid(ent) then ent:Remove() end end
             return nil, "Missing original model: " .. tostring(part.model)
         end
-        local ent = ents.Create("prop_physics")
+        local ent = ents.Create("mex_native_track_piece")
         if not IsValid(ent) then
             for _, prev in ipairs(new) do if IsValid(prev) then prev:Remove() end end
             return nil, "Failed to create original model prop."
@@ -828,11 +849,11 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
     -- switching models makes rails and collision select the same variant.
     local prior = part.model
     ent:SetModel(model)
-    ent:PhysicsInit(SOLID_VPHYSICS)
+    ent:PhysicsInitStatic(SOLID_VPHYSICS)
     local phys = ent:GetPhysicsObject()
     if not IsValid(phys) then
         ent:SetModel(prior)
-        ent:PhysicsInit(SOLID_VPHYSICS)
+        ent:PhysicsInitStatic(SOLID_VPHYSICS)
         local oldPhys = ent:GetPhysicsObject()
         if IsValid(oldPhys) then oldPhys:EnableMotion(false) end
         Notify(ply, "Alternative original switch .phy is missing. State unchanged.")
