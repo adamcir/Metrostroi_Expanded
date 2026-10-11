@@ -164,8 +164,28 @@ function N.ModulePorts(part)
     if not part.junction then
         local a, b = V(part.start), part.finish and V(part.finish)
             or (V(part.start) + Direction(part.yaw) * part.length)
-        return {{pos = a, yaw = part.yaw + 180}, {pos = b,
-            yaw = part.yaw - (part.turn or 0) * (part.sweep or 0)}}
+        local endYaw = part.yaw - (part.turn or 0) * (part.sweep or 0)
+        local lanes = part.lane == "double" and 2 or 1
+        if lanes == 1 then
+            return {{pos = a, center = a, yaw = part.yaw + 180, lanes = 1},
+                {pos = b, center = b, yaw = endYaw, lanes = 1}}
+        end
+        local ports = {}
+        for lane = 1, 2 do
+            local offset = lane == 1 and -132 or 132
+            ports[#ports + 1] = {
+                pos = a + Right(part.yaw) * offset,
+                center = a, yaw = part.yaw + 180, lanes = 2, start = true,
+            }
+        end
+        for lane = 1, 2 do
+            local offset = lane == 1 and -132 or 132
+            ports[#ports + 1] = {
+                pos = b + Right(endYaw) * offset,
+                center = b, yaw = endYaw, lanes = 2, start = false,
+            }
+        end
+        return ports
     end
     local spec = N.Junctions[part.junction]
     if not spec then return {} end
@@ -175,7 +195,8 @@ function N.ModulePorts(part)
         local pos = V(data)
         pos:Rotate(ang)
         local yaw = (part.yaw + (tonumber(data[4]) or 0))
-        ports[i] = {pos = V(part.pos) - Vector(0, 0, 5) + pos, yaw = yaw}
+        ports[i] = {pos = V(part.pos) - Vector(0, 0, 5) + pos, yaw = yaw,
+            lanes = part.lane == "double" and 2 or 1, start = i == 1}
     end
     return ports
 end
@@ -188,17 +209,30 @@ function N.ModulePaths(part)
             for i = 0, steps do
                 nodes[#nodes + 1] = V(part.start) + Direction(part.yaw) * (part.length * i / steps)
             end
-            return {nodes}
+        else
+            local sweep = math.rad(part.sweep)
+            local steps = math.max(2, math.ceil(part.radius * sweep / 64))
+            for step = 0, steps do
+                local q = sweep * step / steps
+                nodes[#nodes + 1] = V(part.start)
+                    + Direction(part.yaw) * (part.radius * math.sin(q))
+                    + Right(part.yaw) * (part.turn * part.radius * (1 - math.cos(q)))
+            end
         end
-        local sweep = math.rad(part.sweep)
-        local steps = math.max(2, math.ceil(part.radius * sweep / 64))
-        for step = 0, steps do
-            local q = sweep * step / steps
-            nodes[#nodes + 1] = V(part.start)
-                + Direction(part.yaw) * (part.radius * math.sin(q))
-                + Right(part.yaw) * (part.turn * part.radius * (1 - math.cos(q)))
+        if part.lane ~= "double" then return {nodes} end
+        -- Original double-tunnel track centers are 264 SU apart, not one
+        -- imaginary rail line along the structural center of the tunnel.
+        local paths = {{}, {}}
+        for i, pos in ipairs(nodes) do
+            local prev = nodes[math.max(1, i-1)]
+            local nextPos = nodes[math.min(#nodes, i+1)]
+            local tangent = (nextPos - prev):GetNormalized()
+            local right = Vector(tangent.y, -tangent.x, 0)
+            for lane = 1, 2 do
+                paths[lane][i] = pos + right * (lane == 1 and -132 or 132)
+            end
         end
-        return {nodes}
+        return paths
     end
     local spec = N.Junctions[part.junction]
     if not spec then return {} end
@@ -251,7 +285,10 @@ if CLIENT then
                     if pos ~= vector_origin then
                         local key = PortKey(pos)
                         counts[key] = (counts[key] or 0) + 1
-                        all[#all + 1] = {pos = pos, key = key, index = j}
+                        local double = ent:GetNW2Int("MEXNativePorts", 0) == 4
+                            and ent:GetNW2String("MEXNativeJunctionID", "") == ""
+                        all[#all + 1] = {pos = pos, key = key,
+                            start = double and j <= 2 or (not double and j == 1)}
                     end
                 end
             end
@@ -313,7 +350,7 @@ if CLIENT then
         render.SetColorMaterial()
         for _, node in ipairs(CollectVisibleEndpoints()) do
             if ply:GetPos():DistToSqr(node.pos) < 5000 * 5000 then
-                local c = node.index == 1 and Color(60, 245, 110) or Color(255, 175, 65)
+                local c = node.start and Color(60, 245, 110) or Color(255, 175, 65)
                 render.DrawWireframeSphere(node.pos, 8, 9, 9, c, true)
             end
         end
@@ -377,18 +414,20 @@ local function CollectPorts()
             for _, port in ipairs(N.ModulePorts(part)) do
                 local key = PortKey(port.pos)
                 count[key] = (count[key] or 0) + 1
-                nodes[#nodes + 1] = {pos = port.pos, yaw = port.yaw, key = key}
+                nodes[#nodes + 1] = {pos = port.pos, center = port.center,
+                    yaw = port.yaw, lanes = port.lanes, key = key}
             end
         end
     end
     return nodes, count
 end
-function N.FindPort(pos, distance)
+function N.FindPort(pos, distance, tracks)
     local best, bestDist = nil, (distance or 64)^2
     local nodes, count = CollectPorts()
     for _, node in ipairs(nodes) do
         local d = pos:DistToSqr(node.pos)
-        if d <= bestDist and (count[node.key] or 0) < 2 then
+        if d <= bestDist and (count[node.key] or 0) < 2
+            and (not tracks or node.lanes == (tonumber(tracks) == 2 and 2 or 1)) then
             best, bestDist = node, d
         end
     end
@@ -475,9 +514,9 @@ function N.Add(ply, aim, settings)
     settings = settings or {}
     local state = N.Active[ply]
     if not state then
-        local connector = N.FindPort(aim, 72)
+        local connector = N.FindPort(aim, 72, settings.tracks)
         local yaw = connector and connector.yaw or ply:EyeAngles().y
-        local pos = connector and connector.pos or aim
+        local pos = connector and (connector.center or connector.pos) or aim
         N.Active[ply] = {start = pos, startYaw = yaw, pos = pos, yaw = yaw, parts = {}}
         SyncState(ply)
         Notify(ply, connector and "Connected to an original model endpoint." or "Start node set. Aim ahead to preview an original model.")
@@ -535,8 +574,9 @@ function N.Undo(ply, aimed)
     local last = state.parts[#state.parts]
     if last then
         local ports = N.ModulePorts(last)
-        local endpoint = last.junction and ports[last.branch or 2] or ports[2]
-        state.pos = endpoint and endpoint.pos or state.start
+        local endpoint = last.junction and ports[last.branch or 2]
+            or ports[last.lane == "double" and 3 or 2]
+        state.pos = endpoint and (endpoint.center or endpoint.pos) or state.start
         state.yaw = last.junction and endpoint and endpoint.yaw or
             (last.yaw - (last.turn or 0) * (last.sweep or 0))
     else
