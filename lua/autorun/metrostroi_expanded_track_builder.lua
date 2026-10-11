@@ -1162,8 +1162,10 @@ function Builder.BuildGeometryPoints(points, settings)
     return result
 end
 
-local function SpawnPolyline(points, settings, routeID)
-    local entities = {}
+-- Native model layout is planned BEFORE committing the route. Unsupported
+-- pieces are rejected for newly created model-only routes, rather than
+-- secretly inventing cuboid tunnels or leaving invisible collision walls.
+local function PlanPolyline(points, settings)
     settings = CopySettings(settings)
     -- Keep physics/Metrostroi network on accurately sampled chords. Replace
     -- only the VISUAL shell with stock curved turn1 MDLs when the route is
@@ -1202,6 +1204,39 @@ local function SpawnPolyline(points, settings, routeID)
             end
         end
     end
+
+    return geometryPoints, modelCurves
+end
+
+local function CheckNativeCoverage(points, settings)
+    settings = CopySettings(settings)
+    if not settings.stock_models_only then return true end
+    local geometryPoints, modelCurves = PlanPolyline(points, settings)
+    local curved = {}
+    for _, model in ipairs(modelCurves) do
+        for i = model.start_index, model.finish do curved[i] = true end
+    end
+    for i = 1, #geometryPoints - 1 do
+        if not curved[i] then
+            local length = geometryPoints[i]:Distance(geometryPoints[i + 1])
+            local mdl = Builder.Geometry.SelectNativeTunnel(
+                settings.tunnel_type, settings.track_count, length)
+            if not mdl or not util.IsValidModel(mdl) then
+                return false, string.format(
+                    "No matching original Metrostroi model for segment %d (%.1f SU). Use exact 64/256/1024 SU modules or a supported 3072/4096/8192 SU turn radius.",
+                    i, length)
+            end
+        end
+    end
+    return true
+end
+
+local function SpawnPolyline(points, settings, routeID)
+    local entities = {}
+    settings = CopySettings(settings)
+    local geometryPoints, modelCurves = PlanPolyline(points, settings)
+    local valid, reason = CheckNativeCoverage(points, settings)
+    if not valid then return {}, reason end
 
     local alongRoute = 0
     for i = 1, #geometryPoints - 1 do
@@ -2089,6 +2124,11 @@ function Builder.AutoLoopClick(
     -- collapses the whole loop to one giant straight rigid chord.
     local loopSettings = CopySettings(start.settings)
     loopSettings.rigid_section = false
+    local originalOK, modelReason = CheckNativeCoverage(result.points, loopSettings)
+    if not originalOK then
+        ply:ChatPrint("[MEX Track Builder] Loop rejected: " .. modelReason)
+        return false
+    end
     local route = {
         points = {
             start.pos,
@@ -2194,6 +2234,12 @@ function Builder.FinishRoute(ply, network)
         ply:ChatPrint(string.format(
             "[MEX Track Builder] Route not saved: radius %.0f SU is below safety minimum %.0f SU.",
             math.max(0, radius), active.settings.min_curve_radius))
+        return false
+    end
+
+    local originalOK, modelReason = CheckNativeCoverage(checkedPoints, active.settings)
+    if not originalOK then
+        ply:ChatPrint("[MEX Track Builder] Construction rejected: " .. modelReason)
         return false
     end
 
