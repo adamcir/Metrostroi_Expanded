@@ -383,9 +383,12 @@ if CLIENT then
             render.SetColorMaterial()
             render.DrawWireframeSphere(origin, 9, 9, 9, Color(55, 245, 120), true)
             render.DrawWireframeSphere(candidate.pos, 9, 9, 9, Color(255, 185, 70), true)
-        elseif not active then
-            -- Even before the first click, show a stock-size grey placement
-            -- ghost at the mouse cursor, never an invisible preview.
+        else
+            -- Always show a real grey stock model even when the aimed route
+            -- cannot yet be assembled. The HUD explains the rejected route;
+            -- no fabricated replacement section is drawn.
+            -- In idle mode preview begins at the cursor, with an active route
+            -- the original model starts exactly at the current free endpoint.
             local tunnel, lane = Settings(settings)
             local kit = KIT[tunnel] and KIT[tunnel][lane]
             local name
