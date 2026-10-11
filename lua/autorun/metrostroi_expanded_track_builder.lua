@@ -729,6 +729,10 @@ local function CopySettings(settings)
         -- physical entities on long straight and gently curved sections.
         geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
         geometry_max_length = math.Clamp(tonumber(settings.geometry_max_length) or 192, 64, 256),
+        -- Requested minimum radius is measured at the INNER track when double.
+        min_curve_radius = math.Clamp(tonumber(settings.min_curve_radius) or 3072, 1024, 8192),
+        experimental_native_curves = settings.experimental_native_curves ~= false
+            and tonumber(settings.experimental_native_curves or 1) ~= 0,
         track_count = tonumber(settings.track_count) == 2 and 2 or 1,
         track_spacing = math.Clamp(tonumber(settings.track_spacing) or 240, 180, 400),
         rigid_section = settings.rigid_section == true or tonumber(settings.rigid_section or 0) == 1,
@@ -1462,6 +1466,26 @@ function Builder.AddPoint(ply, pos, settings, anchor)
         return false
     end
 
+    -- Validate the ENTIRE proposed spline *before* mutating active/saved
+    -- geometry. A too-tight turn must not create props or write unsafe paths.
+    if not active.settings.rigid_section and #active.points >= 2 then
+        local trial = table.Copy(active.points)
+        trial[#trial + 1] = pos
+        local trialAnchors = table.Copy(active.anchors)
+        if istable(anchor) and isvector(anchor.dir) then
+            trialAnchors[#trial] = {dir = anchor.dir:GetNormalized()}
+        end
+        local candidate = Builder.BuildSmoothPoints(trial, active.settings, trialAnchors)
+        local radius = Builder.Geometry.MinimumHorizontalRadius(candidate,
+            active.settings.track_count, active.settings.track_spacing)
+        if radius + 0.1 < active.settings.min_curve_radius then
+            ply:ChatPrint(string.format(
+                "[MEX Track Builder] Cannot build: curve radius %.0f SU is below minimum %.0f SU. Place control points farther apart or choose a wider bend.",
+                math.max(0, radius), active.settings.min_curve_radius))
+            return false
+        end
+    end
+
     active.points[#active.points + 1] = pos
 
     if istable(anchor) and isvector(anchor.dir) then
@@ -1914,6 +1938,15 @@ function Builder.AutoLoopClick(
         return false
     end
 
+    local measuredRadius = Builder.Geometry.MinimumHorizontalRadius(result.points,
+        start.settings.track_count, start.settings.track_spacing)
+    if measuredRadius + 0.1 < start.settings.min_curve_radius then
+        ply:ChatPrint(string.format(
+            "[MEX Track Builder] Cannot build loop: minimum radius %.0f SU is below required %.0f SU.",
+            math.max(0, measuredRadius), start.settings.min_curve_radius))
+        return false
+    end
+
     local route = {
         points = {
             start.pos,
@@ -2008,6 +2041,17 @@ function Builder.FinishRoute(ply, network)
         if IsValid(ply) then
             ply:ChatPrint("[MEX Track Builder] Route needs at least one segment.")
         end
+        return false
+    end
+
+    local checkedPoints = active.render_points or Builder.BuildSmoothPoints(
+        active.points, active.settings, active.anchors)
+    local radius = Builder.Geometry.MinimumHorizontalRadius(checkedPoints,
+        active.settings.track_count, active.settings.track_spacing)
+    if radius + 0.1 < active.settings.min_curve_radius then
+        ply:ChatPrint(string.format(
+            "[MEX Track Builder] Route not saved: radius %.0f SU is below safety minimum %.0f SU.",
+            math.max(0, radius), active.settings.min_curve_radius))
         return false
     end
 
