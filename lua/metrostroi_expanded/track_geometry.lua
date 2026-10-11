@@ -143,27 +143,32 @@ end
 -- Metrostroi models. Mapping the full atlas onto each primitive rail/tie was
 -- responsible for bizarre bronze/striped segments in the screenshot. Keep
 -- procedural parts consistently shaded; native MDLs retain their own atlases.
-local railMaterial = SolidMaterial("mex_track_rail_clean_v5", {
+local railMaterial = SolidMaterial("mex_track_rail_steel_v8", {
+    "models/props_c17/metalladder003",
+    "models/props_wasteland/metal_tram001a",
     "vgui/white",
-}, "[0.46 0.49 0.53]")
-local sleeperMaterial = SolidMaterial("mex_track_tie_clean_v5", {
+}, "[0.68 0.71 0.74]")
+local sleeperMaterial = SolidMaterial("mex_track_tie_grease_v8", {
+    "models/props_wasteland/wood_fence01a",
+    "models/props_c17/furniturewood001a",
     "vgui/white",
-}, "[0.22 0.22 0.23]")
+}, "[0.39 0.38 0.37]")
 -- tunnelwall_002 is a specialized model UV atlas (wood/plank-like patterns
 -- when applied to a plain box). Use a proper tileable concrete surface instead.
-local tunnelMaterial = SolidMaterial("mex_track_tunnel_concrete_v5", {
-    "metro/metroconcrete001",
+local tunnelMaterial = SolidMaterial("mex_track_tunnel_wall_v8", {
+    "metro/metroconcrete001",        -- original Metrostroi, repeatable concrete
+    "metro/metroconcrete003",
     "models/props_c17/concretewall001a",
-    "models/metrostroi_tunnels/tunnelwall_001",
-}, "[0.83 0.83 0.84]")
-local tunnelSeamMaterial = SolidMaterial("mex_track_tunnel_ring_v5", {
+}, "[0.74 0.74 0.74]")
+local tunnelSeamMaterial = SolidMaterial("mex_track_tunnel_seam_v8", {
     "metro/metroconcrete002",
     "models/props_c17/concretewall001a",
-}, "[0.57 0.57 0.57]")
-local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v5", {
-    "models/metrostroi_tunnels/tunnelfloor_001",
+}, "[0.43 0.43 0.43]")
+local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v8", {
     "models/props_wasteland/concretefloor010a",
-}, "[0.62 0.62 0.62]")
+    "metro/metroconcrete004",
+    "metro/metroconcrete001",
+}, "[0.48 0.46 0.43]")
 local contactMaterial = SolidMaterial("mex_track_contact_metro_v5", {
     "vgui/white",
 }, "[0.55 0.52 0.43]")
@@ -173,6 +178,16 @@ local contactCoverMaterial = SolidMaterial("mex_track_contact_cover_v5", {
 local insulatorMaterial = SolidMaterial("mex_track_contact_insulator_v5", {
     "vgui/white",
 }, "[0.46 0.35 0.23]")
+local cableMaterial = SolidMaterial("mex_track_cable_matte_v8", {
+    "vgui/white",
+}, "[0.10 0.105 0.11]")
+local cableBracketMaterial = SolidMaterial("mex_track_cable_bracket_v8", {
+    "vgui/white",
+}, "[0.25 0.25 0.26]")
+local ceilingBeamMaterial = SolidMaterial("mex_track_ceiling_beam_v8", {
+    "metro/metroconcrete001",
+    "models/props_c17/concretewall001a",
+}, "[0.57 0.56 0.55]")
 
 -- Global visual toggle.  It never changes the saved route or collisions.
 local cvDrawSleepers = CreateClientConVar(
@@ -256,6 +271,106 @@ local function AddBox(vertices, min, max)
     AddQuad(vertices, d, h, g, c) -- far
     AddQuad(vertices, a, e, h, d) -- left cap
     AddQuad(vertices, b, c, g, f) -- right cap
+end
+
+-- Five-sided dark rubber power/signal cable. It is true geometry, not
+-- a stretched UV decal; its gentle sag follows global route distance so
+-- neighboring independent track entities do not make the cable jump.
+local function AddCable(vertices, xStart, xEnd, y, z, thickness, routePhase, phase)
+    local count = math.max(1, math.ceil((xEnd - xStart) / 48))
+    for j = 0, count - 1 do
+        local a = xStart + (xEnd - xStart) * j / count
+        local b = xStart + (xEnd - xStart) * (j + 1) / count
+        local za = z + 2.2 * math.sin((a + routePhase) / 98 + phase)
+        local zb = z + 2.2 * math.sin((b + routePhase) / 98 + phase)
+        -- Low sidedness avoids expensive cylinder meshes.
+        for side = 0, 4 do
+            local phi0 = side * math.pi * 2 / 5
+            local phi1 = (side + 1) * math.pi * 2 / 5
+            local cy0, cz0 = math.cos(phi0) * thickness, math.sin(phi0) * thickness
+            local cy1, cz1 = math.cos(phi1) * thickness, math.sin(phi1) * thickness
+            AddQuad(vertices,
+                Vector(a, y + cy0, za + cz0), Vector(b, y + cy0, zb + cz0),
+                Vector(b, y + cy1, zb + cz1), Vector(a, y + cy1, za + cz1), true)
+        end
+    end
+end
+
+local function AddClassicTunnelDetails(ent, length, tunnelType, radius, width, height,
+                                        cables, clamps, beams, wallSeams)
+    if tunnelType == "none" then return end
+    local half = length * 0.5
+    local offset = ent:GetNW2Float("MEXUVStart", 0)
+    local round = tunnelType == "round"
+    local yc = width * 0.5
+    local zCenter = radius - 55
+
+    local function InnerSide(z)
+        if not round then return yc - 4 end
+        return math.sqrt(math.max(0, radius * radius - (z - zCenter) ^ 2)) - 5
+    end
+
+    -- Six cables at each side as seen in classic Metrostroi and Track Pack.
+    -- Cable height stays above contact-rail cover and below roof.
+    local highestCable = math.min(height - 55, 160)
+    local lowestCable = 68
+    if round then
+        highestCable = math.min(zCenter + radius - 70, 156)
+    end
+    highestCable = math.max(highestCable, lowestCable + 35)
+    for _, direction in ipairs({-1, 1}) do
+        for strand = 0, 5 do
+            local z = lowestCable + strand * (highestCable - lowestCable) / 5
+            local y = direction * InnerSide(z)
+            AddCable(cables, -half, half, y, z, 2.1, offset + half,
+                     strand * 0.62 + (direction == 1 and 0.5 or 0))
+        end
+    end
+
+    -- Brackets every 128SU, on an absolute route grid: no duplicated brackets
+    -- at the beginning/end of adjacent mesh entities.
+    local firstBracket = math.ceil((offset + 4) / 128)
+    local lastBracket = math.floor((offset + length - 4) / 128)
+    for idx = firstBracket, lastBracket do
+        local x = idx * 128 - offset - half
+        for _, direction in ipairs({-1, 1}) do
+            local bottomZ, topZ = lowestCable - 9, highestCable + 8
+            local y1 = direction * (InnerSide(highestCable) - 5)
+            local y2 = direction * (InnerSide(lowestCable) + 7)
+            AddBox(clamps, Vector(x - 2.5, math.min(y1, y2), bottomZ),
+                           Vector(x + 2.5, math.max(y1, y2), topZ))
+            for j = 0, 2 do
+                local z = lowestCable + (j * 2 + 0.5) * (highestCable - lowestCable) / 5
+                local y = direction * InnerSide(z)
+                AddBox(clamps, Vector(x - 6, y - 5, z - 1.5),
+                               Vector(x + 6, y + 5, z + 1.5))
+            end
+        end
+    end
+
+    -- Periodic concrete ceiling ribs in rectangular tunnels, as in the
+    -- reference screenshot. No roof obstacles are added to train physics.
+    if not round then
+        local top = height - 12
+        for idx = math.ceil((offset + 8) / 192), math.floor((offset + length - 8) / 192) do
+            local x = idx * 192 - offset - half
+            AddBox(beams,
+                Vector(x - 6, -yc + 5, top - 15),
+                Vector(x + 6, yc - 5, top))
+        end
+        -- Long, thin precast-wall panel joints. Kept shallow so the cables
+        -- remain in front of the wall and no z-fighting occurs.
+        for _, z in ipairs({56, 192}) do
+            if z < height - 32 then
+                AddBox(wallSeams,
+                    Vector(-half, -yc + 1.5, z - 0.7),
+                    Vector(half, -yc + 2.5, z + 0.7))
+                AddBox(wallSeams,
+                    Vector(-half, yc - 2.5, z - 0.7),
+                    Vector(half, yc - 1.5, z + 0.7))
+            end
+        end
+    end
 end
 
 local function MakeMesh(vertices)
@@ -515,6 +630,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                             tunnelType, radius, width, height, wall, trackCount, trackSpacing)
     local rails, sleepers, tunnel = {}, {}, {}
     local ballast, rings, walkway = {}, {}, {}
+    local cables, clamps, beams, wallSeams = {}, {}, {}, {}
     local thirdRail = ent:GetNW2Bool("MEXThirdRail", true)
     local contactSide = G.SafeThirdRailSide(ent:GetNW2String("MEXThirdRailSide", "outside"))
     local contactOffset = ent:GetNW2Float("MEXThirdRailOffset", 112)
@@ -639,6 +755,11 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
         end
     end
 
+    if tunnelStyle == "metrostroi" and tunnelType ~= "none" then
+        AddClassicTunnelDetails(ent, length, tunnelType, radius, width, height,
+                                cables, clamps, beams, wallSeams)
+    end
+
     local contact, cover, insulators = ContactRailVertices(
         length, gauge, trackCount, trackSpacing, thirdRail,
         contactSide, contactOffset, contactHeight)
@@ -658,6 +779,10 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     Keep(ballast, tunnelFloorMaterial)
     Keep(walkway, tunnelFloorMaterial)
     Keep(rings, tunnelSeamMaterial)
+    Keep(cables, cableMaterial)
+    Keep(clamps, cableBracketMaterial)
+    Keep(beams, ceilingBeamMaterial)
+    Keep(wallSeams, tunnelSeamMaterial)
     Keep(contact, contactMaterial)
     Keep(cover, contactCoverMaterial)
     Keep(insulators, insulatorMaterial)
@@ -693,7 +818,7 @@ function G.Draw(ent)
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
     local uvStart = ent:GetNW2Float("MEXUVStart", 0)
     local key = string.format(
-        "metro-lining-uv-v7/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
+        "metro-classic-v8/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
         tunnelType, tunnelStyle, radius, width, height, wall,
         thirdRail and 1 or 0, contactSide, contactOffset, contactHeight,
