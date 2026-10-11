@@ -7,62 +7,21 @@ TOOL.Name = "#tool.mex_track_builder.name"
 TOOL.Command = nil
 TOOL.ConfigName = ""
 
+-- Only options actually used by the native original-model editor.
 TOOL.ClientConVar = {
-    snap = "1", snap_distance = "48", snap_node_spacing = "192",
-    show_snap_nodes = "1", auto_loop = "0",
-    loop_min_radius = "3072", loop_max_grade = "4",
-    network = "1", smooth = "1", curve_tension = "0.45",
-    segment_length = "48", geometry_tolerance = "0.5",
-    geometry_max_length = "192", min_curve_radius = "3072",
-    tunnel_type = "none", tunnel_radius = "170",
-    tunnel_width = "360", tunnel_height = "280",
-    tunnel_wall = "12", tunnel_style = "metrostroi",
-    track_count = "1", track_spacing = "240",
-    inherit_double_profile = "1",
-    rigid_section = "0", rigid_length = "0",
-    native = "1", native_mode = "straight", native_tunnel = "round",
-    native_tracks = "1", native_radius = "4096",
-    native_junction = "", native_branch = "2",
+    native_mode = "straight",
+    native_tunnel = "round",
+    native_tracks = "1",
+    native_radius = "4096",
+    native_junction = "",
+    native_branch = "2",
 }
 
 if CLIENT then
     language.Add("tool.mex_track_builder.name", "Track Builder")
     language.Add("tool.mex_track_builder.desc", "Build using only original Metrostroi MDL modules")
-    language.Add("tool.mex_track_builder.0", "LMB: start/place | RMB: finish | R: remove aimed module | Shift+R: undo last placement")
-
-    -- Older installations kept the former fixed-prefab + rectangular
-    -- tunnel defaults in archived client convars. Migrate just once so
-    -- existing users do not start in an invisible rigid-prefab mode.
-    timer.Simple(0, function()
-        local key = "mex_track_builder_tiled_migrated_v1"
-        if cookie.GetNumber(key, 0) ~= 0 then return end
-        RunConsoleCommand("mex_track_builder_rigid_section", "0")
-        RunConsoleCommand("mex_track_builder_rigid_length", "0")
-        RunConsoleCommand("mex_track_builder_tunnel_type", "none")
-        cookie.Set(key, "1")
-    end)
-end
-
-local function ReadSettings(tool)
-    return {
-        smooth = tool:GetClientNumber("smooth", 1),
-        curve_tension = tool:GetClientNumber("curve_tension", 0.45),
-        segment_length = tool:GetClientNumber("segment_length", 48),
-        geometry_tolerance = tool:GetClientNumber("geometry_tolerance", 0.5),
-        geometry_max_length = tool:GetClientNumber("geometry_max_length", 192),
-        min_curve_radius = tool:GetClientNumber("min_curve_radius", 3072),
-        tunnel_type = tool:GetClientInfo("tunnel_type"),
-        tunnel_radius = tool:GetClientNumber("tunnel_radius", 170),
-        tunnel_width = tool:GetClientNumber("tunnel_width", 360),
-        tunnel_height = tool:GetClientNumber("tunnel_height", 280),
-        tunnel_wall = tool:GetClientNumber("tunnel_wall", 12),
-        tunnel_style = tool:GetClientInfo("tunnel_style"),
-        track_count = tool:GetClientNumber("track_count", 1),
-        track_spacing = tool:GetClientNumber("track_spacing", 240),
-        inherit_double_profile = tool:GetClientNumber("inherit_double_profile", 1),
-        rigid_section = tool:GetClientNumber("rigid_section", 0),
-        rigid_length = tool:GetClientNumber("rigid_length", 0),
-    }
+    language.Add("tool.mex_track_builder.0",
+        "LMB: start/place | RMB: finish | R: remove aimed module | Shift+R: undo last placement")
 end
 
 function TOOL:LeftClick(trace)
@@ -70,7 +29,7 @@ function TOOL:LeftClick(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if not MEXTrackBuilder then return false end
+    if not MEXNativeTrack then return false end
 
     local aim = trace.Hit and not trace.HitSky and trace.HitPos
         or (ply:GetShootPos() + ply:GetAimVector() * 800)
@@ -91,7 +50,7 @@ function TOOL:RightClick(trace)
 
     local ply = self:GetOwner()
     if not IsValid(ply) or not ply:IsAdmin() then return false end
-    if not MEXTrackBuilder then return false end
+    if not MEXNativeTrack then return false end
 
     if MEXNativeTrack then return MEXNativeTrack.Finish(ply) end
     return false
