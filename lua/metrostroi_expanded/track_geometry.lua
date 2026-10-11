@@ -63,7 +63,7 @@ function G.NativeStraightPose(center, angles, length, trackCount, extraZ)
     modelAngles:RotateAroundAxis(modelAngles:Up(), -90)
     local pos = center - angles:Forward() * (length * 0.5)
     if trackCount == 2 then
-        local shift = modelAngles:Right() * (-G.NativeDoubleLateralCenter)
+        local shift = modelAngles:Forward() * (-G.NativeDoubleLateralCenter)
         pos = pos + shift
     end
     return pos + angles:Up() * (G.NativeModelLift + (tonumber(extraZ) or 0)), modelAngles
@@ -73,7 +73,7 @@ function G.NativeCurvePose(origin, heading, trackCount, extraZ)
     local angles = Angle(0, heading.y - 90, 0)
     local pos = origin
     if trackCount == 2 then
-        pos = pos + angles:Right() * (-G.NativeDoubleLateralCenter)
+        pos = pos + angles:Forward() * (-G.NativeDoubleLateralCenter)
     end
     return pos + Vector(0, 0, G.NativeModelLift + (tonumber(extraZ) or 0)), angles
 end
@@ -818,15 +818,11 @@ function G.DrawNativeCurve(ent)
     -- Original turn1 MDLs begin at local (0,0,0), pointing along +Y.
     -- They are NEVER scaled or bent. The model is used only if the spline
     -- follows the radius/angle of this exact prefabricated component.
-    local heading = ent:GetNW2Angle("MEXCurveHeading", Angle(0,0,0))
-    local mdlAngles = Angle(0, heading.y - 90, 0)
-    local position = ent:GetNW2Vector("MEXCurveOrigin", ent:GetPos())
-    if ent:GetNW2Int("MEXTrackCount", 1) == 2 then
-        local lateral = Vector(-G.NativeDoubleLateralCenter, 0, 0)
-        lateral:Rotate(mdlAngles)
-        position = position + lateral
-    end
-    position = position + Vector(0,0,ent:GetNW2Float("MEXPackZOffset", 0))
+    local position, mdlAngles = G.NativeCurvePose(
+        ent:GetNW2Vector("MEXCurveOrigin", ent:GetPos()),
+        ent:GetNW2Angle("MEXCurveHeading", Angle(0,0,0)),
+        ent:GetNW2Int("MEXTrackCount", 1),
+        ent:GetNW2Float("MEXPackZOffset", 0))
     local piece = ent.MEXNativeCurvePiece
     piece:SetRenderOrigin(position)
     piece:SetRenderAngles(mdlAngles)
@@ -958,22 +954,25 @@ function G.DrawPackModel(ent)
     end
     ent.MEXRejectedPackKey = nil
 
-    local angles = ent:GetAngles()
-    local correction = nativeOnY and Angle(0, -90, 0) or Angle(0, 0, 0)
-    local mdlAngles = ent:LocalToWorldAngles(correction)
-    -- Native +Y (or user-supplied +X) starts at first route node. Source's
-    -- model *origin* is at the start, not OBB centre. Native double has X
-    -- bounds [-408,144] => offset its bore by 132 to center both tracks.
-    local start = ent:GetPos() - angles:Forward() * (length * 0.5)
-    local correctionX = isOriginal and trackCount == 2
-        and -G.NativeDoubleLateralCenter or 0
-    local lateral = Vector(correctionX, isOriginal and 0 or -mins.y, 0)
-    lateral:Rotate(mdlAngles)
-    local pos = start + lateral + angles:Up() * ent:GetNW2Float("MEXPackZOffset", 0)
-    if not isOriginal and not nativeOnY then
-        local axisOffset = Vector(-mins.x, -((mins.y + maxs.y) * 0.5), 0)
-        axisOffset:Rotate(mdlAngles)
-        pos = start + axisOffset + angles:Up() * ent:GetNW2Float("MEXPackZOffset", 0)
+    local pos, mdlAngles
+    if isOriginal then
+        pos, mdlAngles = G.NativeStraightPose(
+            ent:GetPos(), ent:GetAngles(), length, trackCount,
+            ent:GetNW2Float("MEXPackZOffset", 0))
+    else
+        -- Custom Track Pack models retain their editable manual offsets.
+        local correction = nativeOnY and Angle(0, -90, 0) or Angle(0, 0, 0)
+        mdlAngles = ent:LocalToWorldAngles(correction)
+        local start = ent:GetPos() - ent:GetAngles():Forward() * (length * 0.5)
+        local localOffset
+        if nativeOnY then
+            localOffset = Vector(-((mins.x + maxs.x) * 0.5), -mins.y, 0)
+        else
+            localOffset = Vector(-mins.x, -((mins.y + maxs.y) * 0.5), 0)
+        end
+        localOffset:Rotate(mdlAngles)
+        pos = start + localOffset + ent:GetAngles():Up()
+            * (G.NativeModelLift + ent:GetNW2Float("MEXPackZOffset", 0))
     end
 
     piece:SetRenderOrigin(pos)
