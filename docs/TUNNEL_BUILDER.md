@@ -1,5 +1,30 @@
 # Metrostroi Expanded — Track & Tunnel Builder
 
+## Rendering and finish fix (October 2026)
+
+Original `.mdl` pieces are now displayed through **networked
+`prop_dynamic_override` visual entities**, not clientside geometry drawn
+from the tiny backing `railroad16.mdl` segment. Source's culling bounds
+for that 16-SU model could prevent the entire 256/1024-SU model from ever
+being drawn. The real original model is visible during construction and
+after saving, while a separate invisible collision entity uses its
+original `.phy`.
+
+The old native-only preflight rejected models when
+`file.Exists("models/... .phy", "GAME")` returned false, even where
+the compiled model's physics were actually mounted and could be loaded
+by Source. The tool now checks the `.mdl` for planning, then checks
+whether the **actual physics object initializes successfully** during
+placement. This avoids incorrect refusals without compromising the native
+collision requirement.
+
+Fixed native modules show unsupported-model reasons immediately at the
+second click. RMB now commits the saved route only **after** the required
+real model and collision proxies spawn successfully. On failure it preserves
+the unsaved controls/preview, with a detailed English error in chat.
+Curved native modules share one original visible `.mdl` and `.phy`
+across multiple lightweight logical track segments.
+
 ## Current construction mode
 
 The English-language Track Builder prioritizes **original Metrostroi** models.
