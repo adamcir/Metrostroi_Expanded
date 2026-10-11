@@ -2017,7 +2017,7 @@ function Builder.FinishRoute(ply, network)
     Builder.LastRoute[ply] = route
     local routeID = #Builder.Routes
     local smoothPoints = RouteRenderPoints(route)
-    SpawnPolyline(smoothPoints, route.settings, routeID)
+    local finishedPieces = SpawnPolyline(smoothPoints, route.settings, routeID)
 
     Builder.Active[ply] = nil
     SetActiveStart(ply, nil)
@@ -2028,12 +2028,29 @@ function Builder.FinishRoute(ply, network)
     end
 
     if IsValid(ply) then
+        local realModels, generated, missingModels = 0, 0, 0
+        for _, piece in ipairs(finishedPieces) do
+            if IsValid(piece) then
+                if piece:GetNW2Bool("MEXNativeAvailable", false) then
+                    realModels = realModels + 1
+                else
+                    generated = generated + 1
+                    if piece:GetNW2Bool("MEXNativeExpected", false) then
+                        missingModels = missingModels + 1
+                    end
+                end
+            end
+        end
         ply:ChatPrint(string.format(
-            "[MEX Track Builder] Route #%d saved (%d control points, %d smooth pieces).",
-            routeID,
-            #route.points,
-            math.max(#smoothPoints - 1, 0)
+            "[MEX Track Builder] Route #%d: %d original Metrostroi .mdl / %d generated section(s).",
+            routeID, realModels, generated
         ))
+        if missingModels > 0 then
+            ply:ChatPrint("[MEX Track Builder] Missing original models! Open Q > Track Builder > Check installed models.")
+        elseif generated > 0 and route.settings.auto_native_models
+            and route.settings.tunnel_type ~= "none" then
+            ply:ChatPrint("[MEX Track Builder] Curves or nonstandard lengths use generated segments. Fixed 64/256/1024 SU sections use genuine Metrostroi models.")
+        end
     end
 
     return true
