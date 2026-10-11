@@ -3157,6 +3157,33 @@ hook.Add("InitPostEntity", "MEXTrackBuilderLoad", function()
 end)
 
 -- Removing a whole saved route is deliberately separate from Undo (R).
+-- Verify that both the visible stock model and its original model PHY
+-- are actually installed after a map reload (not just valid names).
+concommand.Add("mex_track_builder_collision_status", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local installed, missing = 0, 0
+    for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
+        if IsValid(ent) and ent:GetNW2Bool("MEXStockModelsOnly", false) then
+            local proxy = ent.MEXNativePhysicsProxy
+            if IsValid(proxy) and IsValid(proxy:GetPhysicsObject()) then
+                installed = installed + 1
+            elseif ent:GetNW2Bool("MEXCurveCovered", false)
+                and not ent:GetNW2Bool("MEXCurveOwner", false) then
+                -- These pieces intentionally share the preceding native
+                -- curved prefab's collision hull, rather than duplicating it.
+            else
+                missing = missing + 1
+            end
+        end
+    end
+    local proxyCount = #ents.FindByClass("mex_track_native_collision")
+    local summary = string.format(
+        "[MEX Track Builder] Native stock physics: %d valid PHY parts, %d missing, %d shared collision proxies.",
+        installed, missing, proxyCount)
+    print(summary)
+    if IsValid(ply) then ply:ChatPrint(summary) end
+end)
+
 concommand.Add("mex_track_builder_delete_aimed_route", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     local tr = ply:GetEyeTrace()
