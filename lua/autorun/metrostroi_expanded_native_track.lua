@@ -460,6 +460,38 @@ if CLIENT then
             render.DrawWireframeSphere(origin, 9, 9, 9, Color(60, 245, 110), true)
         end
     end)
+    -- The tool shows exactly what R will delete before the key is pressed.
+    -- Keep the target marked even when preview modules have no collisions.
+    hook.Add("PreDrawHalos", "MEXNativeTrackAimedModuleHalo", function()
+        if not Tool() then return end
+        local ply = LocalPlayer()
+        local tr = ply:GetEyeTrace()
+        local selected = N.GetAimedModule(ply, tr and tr.Entity)
+        if IsValid(selected) then
+            halo.Add({selected}, Color(255, 95, 65), 2, 2, 1, true, true)
+        end
+    end)
+    hook.Add("HUDPaint", "MEXNativeTrackHelp", function()
+        if not Tool() then return end
+        local ply = LocalPlayer()
+        local tr = ply:GetEyeTrace()
+        local selected = N.GetAimedModule(ply, tr and tr.Entity)
+        local y = ScrH() * 0.78
+        local help = "LMB  Start / Place   |   RMB  Save   |   R  Remove aimed   |   Shift+R  Undo last"
+        draw.SimpleTextOutlined(help, "DermaDefaultBold", ScrW() * 0.5, y,
+            Color(235, 235, 235), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
+            1, Color(0, 0, 0, 220))
+        if IsValid(selected) then
+            local ghost = selected:GetNW2Bool("MEXNativePreview", false)
+            local index = ghost and selected:GetNW2Int("MEXNativePreviewIndex", 0)
+                or selected:GetNW2Int("MEXNativeIndex", 0)
+            local kind = ghost and "UNSAVED" or "SAVED"
+            local caption = string.format("R  REMOVE THIS %s MODULE #%d ONLY", kind, index)
+            draw.SimpleTextOutlined(caption, "DermaDefaultBold", ScrW() * 0.5, y + 20,
+                Color(255, 140, 95), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
+                1, Color(0, 0, 0, 220))
+        end
+    end)
     hook.Add("HUDPaint", "MEXNativeTrackPreviewWarning", function()
         if not Tool() or not N.PreviewError then return end
         draw.SimpleTextOutlined(
