@@ -1,75 +1,157 @@
-# Metrostroi Expanded — Track & Tunnel Builder
+# Metrostroi Expanded — Original Track & Tunnel Builder
 
-## Refactored system (October 2026)
+The **Track Builder** now uses **real Metrostroi model assets**, not generated
+track/tunnel meshes or interpolated decorative substitutes. All Lua code, UI
+labels and console messages are English.
 
-The Track Builder **no longer assembles prefabricated straight/turn tunnel
-models**, no longer scans Track Pack directories, and no longer creates
-additional networked visual props or invisible original-physics proxies.
+## Construction
 
-The running track uses only the original Metrostroi
-`models/metrostroi/tracks/railroad16.mdl`. This model must be installed
-through the base Metrostroi content (it is not redistributed by MEX).
+Open **Q → Tools → Metrostroi Expanded → Track Builder**.
 
-### Visual rendering
+1. Choose an original model family (round, rectangular, double/wide tunnel,
+   or surface track) and Single/Double.
+2. Choose a module: **Straight**, **Curve left**, **Curve right**,
+   **Turnout** or **Rail crossing**.
+3. **LMB** selects the first start point; aiming at a free orange/green connector
+   snaps exactly to the existing native track end. The selected end determines
+   the heading, not an arbitrary guessed spline.
+4. Move the cursor: a **grey semi-transparent original model** appears before
+   placement. For straight routes the builder greedily combines real nominal
+   lengths; it does not rescale stock models to fill an arbitrary gap.
+5. **LMB** adds the displayed piece(s). Previously selected unfinished pieces
+   remain ghosted, with collision disabled, until the route is finished.
+6. **RMB** commits the route. MEX creates networked original-model static
+   entities with the matching original **compiled .phy collision**.
+7. **R** undoes one native construction step; aiming at a saved MEX native
+   piece can reopen that route for editing. Cancel retains the previous saved
+   version. Finish saves the replacement only if all its modules have physics.
 
-- Route control points are interpolated to create a smooth path.
-- The path is subdivided into bounded static chords, including long straight
-  segments; the Metrostroi network keeps its independently sampled points.
-- A single cached `ClientsideModel` per chord draws copies of the original
-  16-SU tile with the orientation of that chord.
-- The client sets large render bounds **during entity initialization**,
-  avoiding Source culling long paths using the tiny backing model's OBB.
-- Each tile is positioned with `SetPos` / `SetAngles` and updates its bones
-  before drawing. Reusing `SetRenderOrigin` for the same model in successive
-  draw calls can produce identical / stale positions in Source.
-- The asymmetric third/contact rail affects the model's OBB. The renderer
-  does not align the track from the horizontal OBB center or anchor the rail
-  base from the maximum vertical bound.
-- Double-track routes draw the same original tile on both lane centerlines.
-- Tunnels are optional, generated as a **shell only**. They do not draw
-  duplicate running rails, sleepers, clips or contact-rail meshes.
+Green markers indicate available starts, orange markers indicate free ends.
+Internal joined module ports are hidden. A double-track model exposes its
+four rail-end ports, two per end, but snaps the tunnel centerline for continued
+double-track construction. Unconnected endpoints stay visible while the tool
+is selected.
 
-### Physics and train placement
+### Original stock model catalog
 
-Each bounded chord has **one frozen multi-convex physics body**. It includes
-separate running rails at the standard 85.8-SU center-to-center separation,
-low sleeper hulls and a separate outboard contact-rail hull. The hulls do
-not create an invisible solid bed that would hold a bogey above the rail.
+Models are referenced by path under `models/metrostroi/tracks/`.
+They are **not copied or redistributed by MEX**.
 
-Contact-rail hull offsets are approximate and must be calibrated to the
-specific installed railroad16 model in live GMod. Drawing a power rail does
-not automatically integrate it with the Metrostroi 750-V electrical system.
+| Type | Original nominal module models |
+|---|---|
+| Surface | `railroad1024.mdl`, `railroad4096.mdl` |
+| Round single | `tunnel64.mdl`, `tunnel256.mdl`, `tunnel1024.mdl` |
+| Rectangular single | `tunnel64_rect.mdl`, `tunnel256_rect.mdl`, `tunnel1024_rect.mdl` |
+| Round/wide double | `tunnel1024_double.mdl` |
+| Round curves | `tunnel3072_turn1.mdl`, `tunnel4096_turn1.mdl`, `tunnel8192_turn1.mdl` |
+| Double round curves | `tunnel4096_double_turn1.mdl`, `tunnel8192_double_turn1.mdl` |
+| Rectangular curve | `tunnel3072_rect_turn1.mdl` |
 
-The existing route graph and MEX rerail compatibility are preserved.
-Minimum turn-radius checks continue to reject unsafe bends; this applies to
-left- and right-hand curves without requiring a matching prefabricated turn.
+The available catalog depends on installed Metrostroi content. Missing
+original files cause an explicit construction error, **not** a fallback
+generated model. Curves use the original turn1 prefab's nominal sweep
+(30°, 22.5° or 11.25°, depending on radius). To turn left the same
+prefab is reversed in direction, not stretched or mirrored.
 
-### How to use
+**Important:** The exact model pivot, turn1 geometry, wheel contact and
+double-track centers must be validated against the mounted model version
+*inside Garry's Mod*. This implementation has not been playtested here.
+The source code uses historic Metrostroi model calibration, including
++5 SU model lift and 264 SU double-track separation.
 
-Open **Q → Tools → Metrostroi Expanded → Track Builder**. All tool labels
-and error messages are in English.
+### Save, restore and Metrostroi network
 
-- **LMB:** place or snap a route point.
-- **RMB:** finish a route.
-- **R / Reload:** undo one point, or reopen an aimed saved route and undo.
-- **Advanced:** choose an optional tunnel shell, fixed-length straight
-  construction, snapping density or the automatic loop builder.
-- **`mex_track_builder_model_status` (client):** verify that the original
-  railroad16.mdl is mounted.
-- **`mex_track_builder_collision_status` (server):** count live static
-  rail physics bodies.
+Committed native modules are stored by map in
+`data/metrostroi_expanded/native_tracks_<map>.json`. Module records
+include model, position, angle, route, turn and port geometry.
 
-Old saved route points and tunnel types can be loaded again. Settings for
-removed long prefabs, stock-only matching and the Track Pack selector are
-ignored; the route is built using the unified tiled renderer.
+The builder builds network paths from the exact module centerlines,
+including two independent lanes for double-track pieces, and merges
+contiguous native end nodes. It also writes these paths to the existing
+Metrostroi data workflow and requests a network rebuild on finish.
+Map cleanup and map restart restore committed original modules.
 
-### Testing and known limitations
+The older MEX route file is preserved for compatibility but the Track
+Builder UI creates **native modules only**. No original assets are modified.
 
-**Not tested inside a running Garry's Mod instance in this environment.**
-Before publishing, build a 256-SU straight, a slow left/right curve and a
-double track. Verify railroad16 alignment, the actual contact-rail location,
-wheel height and rerail behaviour with Ečs and 81-717. Confirm that physics
-can be hit by traces, that R removes only one control point, that routes
-reappear after map reload, and that FPS is acceptable on long networks.
+## Switches and diamond crossings
 
-A GMod TOOL cannot cut openings through compiled BSP walls/terrain.
+A switch or a crossing is **not** made by overlapping two regular track
+models. That would create wrong guard rails, double contacts, and invalid
+bogey collision. It **must be one installed original junction asset** with
+measured connector locations and real compiled physics.
+
+Since the filenames and attachment pivots of third-party Metrostroi/Track
+Pack junctions are not reliably standardized, MEX does **not invent**
+a filename or connector geometry. Junction placement rejects missing or
+uncalibrated profiles instead of creating an unsafe fake turnout.
+
+### Registering an original junction
+
+Server superadmins can register a model against measured local attachment
+coordinates:
+
+```text
+mex_native_register_junction <id> <switch|crossing> <original_model.mdl> "<x,y,z,yaw;x,y,z,yaw;...>" "<1-2;1-3;...>"
+```
+
+Port coordinates are **model-local**. Yaw is the direction **out of** the
+port, relative to the construction heading. The input is **port 1**.
+
+- A **switch** requires exactly three ports and paths **1–2** (main) and
+  **1–3** (diverging).
+- A **crossing** requires exactly four ports and two independent rail
+  paths, usually **1–2** and **3–4**.
+- To follow a real curving branch instead of a straight connector chord,
+  register measured intermediate local centerline waypoints:
+
+```text
+mex_native_set_junction_path <id> <port_a> <port_b> "<x,y,z;x,y,z;...>"
+```
+
+Original switch assets with fixed, non-moving geometry are locked to the
+main route. If the workshop kit provides **two compatible original models**
+with separately authored true .phy meshes for the main and diverging
+positions, register them:
+
+```text
+mex_native_set_switch_variants <id> <original_main_model.mdl> <original_diverging_model.mdl>
+```
+
+They must share the same calibrated local origin and three attachment ports.
+Press **E** on a committed switch to select its next original visual and
+physics state; switching is blocked while a train/bogey is nearby. On each
+state change MEX requests a rail-network update. This is **not yet a
+replacement for Metrostroi's complete dispatch, point-locking and signalling
+system**: special Metrostroi switch entities/control integration still
+requires in-game testing.
+
+Junction registry persists at
+`data/metrostroi_expanded/native_junctions.json`, shared to joining clients.
+The tool's **Registered junction profile ID** field uses that registry.
+
+### Diagnostics
+
+```text
+mex_native_status
+mex_native_list_junction_models
+```
+
+The second command looks for likely original crossing/switch model names in
+installed stock/Track Pack folders; it only reports candidates, never assumes
+their local pivots or path shapes. Missing `.phy` models are rejected on
+finish. Check the GMod server console for full errors.
+
+## Limitations / verification
+
+- Only exact original pieces are used; unsupported arbitrary-radius bends,
+  grades and lengths are not made to fit with fake geometry.
+- An actual diamond crossing or moving turnout is only constructible after
+  the relevant real model and **measured** ports are registered. There is no
+  bundled, invented generic junction asset.
+- Current stock centerline assumptions and turn1 pivots are not verified live.
+  First test a 64/256 SU single straight, a curve in each direction, a
+  double-track module, then a registered crossing/switch on a test map.
+- Train rerailing and ALS/ARS switch dispatch on new real-model junctions
+  need validation against your specific Metrostroi build.
+- A GMod TOOL cannot cut holes in compiled BSP terrain or walls.
