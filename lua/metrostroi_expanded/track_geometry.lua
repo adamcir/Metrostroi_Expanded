@@ -150,6 +150,14 @@ function G.MatchNativeCurve(points, i, settings)
     if cross >= -0.0005 then return nil end
 
     local yawChange = math.deg(math.atan2(cross, first:Dot(second)))
+    -- Fast local prefilter: most spline chords are not near any genuine
+    -- Metrostroi prefabricated curve. Skip costly 1600-SU candidate searches
+    -- before iterating through every nearby geometry point.
+    local chord = p1:Distance(a)
+    local smallAngle = math.rad(math.abs(yawChange))
+    if smallAngle < 0.0001 then return nil end
+    local roughRadius = chord / smallAngle
+    if roughRadius < 2450 or roughRadius > 9600 then return nil end
     local heading = Vector(first.x, first.y, 0)
     heading:Rotate(Angle(0, -yawChange * 0.5, 0))
     heading:Normalize()
