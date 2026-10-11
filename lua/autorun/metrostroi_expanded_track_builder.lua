@@ -125,8 +125,7 @@ function TrackEntity:InstallNativePhysics(model, position, angles)
     local phys = proxy:GetPhysicsObject()
     if not IsValid(phys) then
         proxy:Remove()
-        print("[MEX Track Builder] No usable native .phy collision: " .. model)
-        return false
+        return false, "The model has no usable original .phy collision: " .. model
     end
     -- The custom entity has an empty Draw hook; unlike SetNoDraw it stays
     -- networked and retains client/server VPhysics collision prediction.
@@ -142,6 +141,43 @@ function TrackEntity:InstallNativePhysics(model, position, angles)
     self:SetMoveType(MOVETYPE_NONE)
     self:SetSolid(SOLID_NONE)
     self:SetNW2Bool("MEXNativePhysics", true)
+    return true
+end
+
+-- Use a networked, REAL Source model renderer. Drawing 1024-SU
+-- prefab geometry manually in the Draw hook of an invisible railroad16.mdl
+-- fails when Source frustum-culls the tiny 16-SU backing entity. A native
+-- prop_dynamic_override uses the original .mdl's OWN bounds and UVs, so
+-- players can see the complete track immediately, including during preview.
+function TrackEntity:InstallNativeVisual(model, position, angles)
+    if not SERVER or not util.IsValidModel(model) then
+        return false, "The original Metrostroi .mdl is not mounted: " .. tostring(model)
+    end
+    if IsValid(self.MEXNativeVisual) then
+        self.MEXNativeVisual:Remove()
+        self.MEXNativeVisual = nil
+    end
+    local visual = ents.Create("prop_dynamic_override")
+    if not IsValid(visual) then
+        return false, "Could not create a native model renderer"
+    end
+    visual:SetModel(model)
+    visual:SetPos(position)
+    visual:SetAngles(angles)
+    visual:Spawn()
+    if not IsValid(visual) or visual:GetModel() ~= model then
+        if IsValid(visual) then visual:Remove() end
+        return false, "GMod could not spawn the original model: " .. model
+    end
+    visual:SetMoveType(MOVETYPE_NONE)
+    visual:SetSolid(SOLID_NONE)
+    visual:SetNotSolid(true)
+    visual:DrawShadow(false)
+    visual:SetNW2Bool("MEXNativeVisualPart", true)
+    visual:SetNW2Entity("MEXTrackOwner", self)
+    self.MEXNativeVisual = visual
+    self:DeleteOnRemove(visual)
+    self:SetNW2Bool("MEXHasNativeVisual", true)
     return true
 end
 
@@ -442,12 +478,14 @@ if CLIENT then
         if self:GetNW2Bool("MEXCurveCovered", false) then
             local model = self:GetNW2String("MEXCurveModel", "")
             if Builder.Geometry.IsNativeCurveMounted(model) then
-                if self:GetNW2Bool("MEXCurveOwner", false) then
+                if self:GetNW2Bool("MEXCurveOwner", false)
+                    and not self:GetNW2Bool("MEXHasNativeVisual", false) then
                     Builder.Geometry.DrawNativeCurve(self)
                 end
                 return
             end
         end
+        if self:GetNW2Bool("MEXHasNativeVisual", false) then return end
         if Builder.Geometry.DrawPackModel(self) then return end
         -- Legacy saved routes may still use the procedural renderer.
         -- New routes in stock-model-only mode are rejected if unmatched.
