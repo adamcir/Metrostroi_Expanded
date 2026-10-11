@@ -450,10 +450,28 @@ if CLIENT then
             if name then DrawGhost(Placement(origin, yaw, name, 64, lane), 1, false) end
         end
         render.SetColorMaterial()
-        for _, node in ipairs(CollectVisibleEndpoints()) do
+        local eye, aimDir = ply:GetShootPos(), ply:GetAimVector()
+        local trDistance = tr.Hit and not tr.HitSky
+            and eye:Distance(tr.HitPos) or 8192
+        local highlighted, nearestRayMiss = nil, 28 * 28
+        local endpoints = CollectVisibleEndpoints()
+        for _, node in ipairs(endpoints) do
+            local distanceAlong = (node.pos - eye):Dot(aimDir)
+            if distanceAlong > 0 and distanceAlong < trDistance + 32 then
+                local miss = node.pos:DistToSqr(eye + aimDir * distanceAlong)
+                if miss < nearestRayMiss then
+                    highlighted, nearestRayMiss = node, miss
+                end
+            end
+        end
+        for _, node in ipairs(endpoints) do
             if ply:GetPos():DistToSqr(node.pos) < 5000 * 5000 then
-                local c = node.start and Color(60, 245, 110) or Color(255, 175, 65)
-                render.DrawWireframeSphere(node.pos, 8, 9, 9, c, true)
+                local selected = node == highlighted
+                local c = selected and Color(255, 225, 55)
+                    or (node.start and Color(60, 245, 110)
+                        or Color(255, 175, 65))
+                render.DrawWireframeSphere(node.pos, selected and 12 or 8,
+                    9, 9, c, true)
             end
         end
         if active then
