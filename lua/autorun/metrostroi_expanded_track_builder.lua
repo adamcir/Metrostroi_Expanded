@@ -1545,9 +1545,23 @@ function Builder.AddPoint(ply, pos, settings, anchor)
         return false
     end
 
+    -- A fixed station/rigid prefab has ZERO ability to bend at its snapped
+    -- connector. Never permit an abrupt, effectively zero-radius corner at
+    -- the boundary to an existing tunnel.
+    if active.settings.rigid_section and #active.points == 1 then
+        local connector = AnchorDirection(active.anchors[1])
+        if connector then
+            local direction = (pos - previous):GetNormalized()
+            if math.abs(connector:Dot(direction)) < 0.995 then
+                ply:ChatPrint("[MEX Track Builder] Cannot build: fixed module would form a sharp corner at the attachment node. Align with the connected rail or switch to Flexible route.")
+                return false
+            end
+        end
+    end
+
     -- Validate the ENTIRE proposed spline *before* mutating active/saved
-    -- geometry. A too-tight turn must not create props or write unsafe paths.
-    if not active.settings.rigid_section and #active.points >= 2 then
+    -- geometry. Two-point routes with a snapped tangent also CAN bend.
+    if not active.settings.rigid_section and #active.points >= 1 then
         local trial = table.Copy(active.points)
         trial[#trial + 1] = pos
         local trialAnchors = table.Copy(active.anchors)
