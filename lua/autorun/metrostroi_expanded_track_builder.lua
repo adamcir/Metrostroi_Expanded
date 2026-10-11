@@ -194,6 +194,19 @@ end
 
 scripted_ents.Register(TrackEntity, TRACK_CLASS)
 
+if SERVER then
+    -- The track graph, collider and visible tiles must remain in one place.
+    -- Editing or deleting routes is handled by the Track Builder itself.
+    hook.Add("PhysgunPickup", "MEXTrackBuilderImmutableRails", function(_, ent)
+        if IsValid(ent) and ent:GetClass() == TRACK_CLASS then return false end
+    end)
+    hook.Add("CanTool", "MEXTrackBuilderProtectedRails", function(_, trace, mode)
+        local ent = trace and trace.Entity
+        if IsValid(ent) and ent:GetClass() == TRACK_CLASS
+            and mode ~= "mex_track_builder" then return false end
+    end)
+end
+
 -- Build reusable attachment nodes from the actually spawned smooth track.
 -- Both server-side snapping and the client visualization use this exact
 -- geometry, so the point the player sees is the point the new track uses.
