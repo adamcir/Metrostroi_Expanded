@@ -1141,7 +1141,22 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
             ent:GetPos(), ent:GetAngles(), length, settings.track_count,
             settings.pack_z_offset - (settings.stock_models_only
                 and 0 or Builder.Geometry.NativeModelLift))
-        ent:InstallNativePhysics(physicModel, modelPos, modelAng)
+        local physicsOK, physicsError = ent:InstallNativePhysics(
+            physicModel, modelPos, modelAng)
+        if not physicsOK and settings.stock_models_only then
+            ent:Remove()
+            return nil, physicsError or ("Missing original PHY: " .. physicModel)
+        end
+        local visualOK, visualError = ent:InstallNativeVisual(
+            physicModel, modelPos, modelAng)
+        if not visualOK and settings.stock_models_only then
+            ent:Remove()
+            return nil, visualError or ("Failed to show model: " .. physicModel)
+        end
+    elseif settings.stock_models_only then
+        ent:Remove()
+        return nil, "No installed original Metrostroi model for "
+            .. string.format("%.1f", length) .. " SU"
     end
     return ent
 end
@@ -1272,8 +1287,7 @@ local function PlanPolyline(points, settings)
         local index = 1
         while index < #geometryPoints - 2 and #modelCurves < 256 do
             local match = Builder.Geometry.MatchNativeCurve(geometryPoints, index, settings)
-            if match and util.IsValidModel(match.model)
-                and file.Exists(string.gsub(match.model, "%.mdl$", ".phy"), "GAME") then
+            if match and util.IsValidModel(match.model) then
                 -- Insert the precise arc-length boundary within an existing
                 -- physical chord. Endpoints remain on the spline, and
                 -- adjoining modules cannot drift across segment seams.
@@ -1321,11 +1335,14 @@ local function CheckNativeCoverage(points, settings)
                     settings.pack_model, settings.track_count, length) then
                 mdl = settings.pack_model
             end
-            if not mdl or not util.IsValidModel(mdl)
-                or not file.Exists(string.gsub(mdl or "", "%.mdl$", ".phy"), "GAME") then
+            -- .phy files may be mounted in an engine search path invisible to
+            -- Lua file.Exists("GAME"). Never reject a valid installed .mdl
+            -- based on that unreliable probe: SpawnSegment attempts the REAL
+            -- physics initialization and only fails if it actually fails.
+            if not mdl or not util.IsValidModel(mdl) then
                 return false, string.format(
-                    "No matching original Metrostroi model for segment %d (%.1f SU). Use exact 64/256/1024 SU modules or a supported 3072/4096/8192 SU turn radius.",
-                    i, length)
+                    "No matching installed original Metrostroi model for section %d (%.1f SU, %s, %d track(s)). Select a native-length fixed module or supported native curve.",
+                    i, length, settings.tunnel_type, settings.track_count)
             end
         end
     end
