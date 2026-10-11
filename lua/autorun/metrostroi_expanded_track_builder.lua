@@ -858,20 +858,30 @@ local function RebuildActiveRoute(active)
             active.native_model_error = why
             return
         end
+        -- Build first, then swap. A collision failure must NOT erase the
+        -- previously saved route or leave the saved graph without physics.
+        local newSettings = CopySettings(active.settings)
+        local replacement, buildError = SpawnPolyline(
+            active.render_points, newSettings, routeID)
+        if buildError or #replacement == 0 then
+            active.native_model_error = buildError or "Unable to rebuild track."
+            return
+        end
+
+        for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
+            if IsValid(ent) and ent:GetNW2Int("MEXRouteID", 0) == routeID
+                and not table.HasValue(replacement, ent) then
+                ent:Remove()
+            end
+        end
+
         active.native_model_error = nil
         local route = active.edit_route
         route.points = active.points
         route.anchors = active.anchors
-        route.settings = CopySettings(active.settings)
+        route.settings = newSettings
         route.generated_points = nil
         route.kind = nil
-
-        for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
-            if IsValid(ent) and ent:GetNW2Int("MEXRouteID", 0) == routeID then
-                ent:Remove()
-            end
-        end
-        SpawnPolyline(active.render_points, route.settings, routeID)
         Builder.SaveLayout()
         if route.network then
             Builder.RebuildMetrostroiNetwork()
