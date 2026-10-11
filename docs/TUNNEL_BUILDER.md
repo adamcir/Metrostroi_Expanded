@@ -1,5 +1,48 @@
 # In-game Tunnel Builder (first implementation)
 
+## Experimental curved Metrostroi prefabs and radius safety
+
+**New: Enable EXPERIMENTAL: original Metrostroi curve models** in the
+**English** Track Builder panel and change **Build mode** from *Fixed module*
+to *Flexible route*. The builder keeps its accurate spline for physics and
+Metrostroi routing while attempting to fit compiled `turn1.mdl` modules
+visually to the matching circular sections.
+
+Supported first-component experiments (depending on installed content):
+- `tunnel3072_turn1.mdl` (single round, radius 3072 SU, 30°)
+- `tunnel4096_turn1.mdl` (single round, radius 4096 SU, 22.5°)
+- `tunnel8192_turn1.mdl` (single round, radius 8192 SU, 11.25°)
+- `tunnel3072_rect_turn1.mdl` (single rectangular)
+- `tunnel4096_double_turn1.mdl` and `tunnel8192_double_turn1.mdl`
+  (double round).
+
+Experimental matching is **conservative**: the engine checks approximate
+native radius, sweep angle, measured spline shape, endpoint accuracy (18 SU),
+radial error (9 SU), tangent alignment, grade and the model's presence. It
+uses exact inserted boundary points without changing the more accurate
+underlying fine spline or wheel collisions. If no exact matching prefab can
+be placed, it uses the procedural geometry. Genuine prefabs are never
+randomly stretched to fit a curve. Only the original `turn1` components
+are currently calibrated; other pre-bent turn variants require individual
+origin/connector calibration. In the experimental first version, native
+prefabs are fitted to **right-hand, nearly level** curves only. Left-hand
+curves and arbitrary radii still use the safe fallback.
+
+**A new minimum safe curve radius control defaults to 3072 SU.**
+New control points, completed routes and automatic loops are checked
+before they can modify the saved layout. Turns sharper than this are
+**rejected** with an English message showing the measured radius. For
+double tracks, the constraint applies to the INNER rail centerline,
+subtracting half the track-center spacing. Decrease the limit only for
+suitable custom rolling stock; standard Metro trains may derail on
+smaller radii.
+
+Useful checks: `mex_track_builder_model_status` lists straight prefab
+availability; the route completion message counts original straight,
+original curved, and generated modules. The first version was committed
+without an in-game run, so verify the visual alignment in Garry's Mod
+on a test route before publishing production maps.
+
 ## Model-first controls (October 2026)
 
 Open **Q → Tools → Metrostroi Expanded → Track Builder**. The NEW short
