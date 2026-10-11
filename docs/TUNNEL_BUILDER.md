@@ -29,9 +29,12 @@ prefabs are fitted to **right-hand, nearly level** curves only. Left-hand
 curves and arbitrary radii still use the safe fallback.
 
 **A new minimum safe curve radius control defaults to 3072 SU.**
-New control points, completed routes and automatic loops are checked
-before they can modify the saved layout. Turns sharper than this are
-**rejected** with an English message showing the measured radius. For
+New control points (including two-point routes starting at a snapped
+tangent), completed routes and automatic loops are checked before they
+can modify the saved layout. Turns sharper than this are **rejected**
+with an English message showing the measured radius. Fixed modules also
+reject sharp corners at snapped attachment nodes rather than pretending
+two straight pieces form a safe continuous curve. For
 double tracks, the constraint applies to the INNER rail centerline,
 subtracting half the track-center spacing. Decrease the limit only for
 suitable custom rolling stock; standard Metro trains may derail on
