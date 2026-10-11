@@ -375,6 +375,7 @@ if CLIENT then
             branch = tool:GetClientNumber("native_branch", 2),
         }
         local candidate, errorText = N.Candidate(origin, yaw, aim, settings)
+        N.PreviewError = candidate and nil or errorText
         if candidate and #candidate.parts > 0 then
             for i, part in ipairs(candidate.parts) do
                 if i <= 64 then DrawGhost(part, i, false) end
@@ -406,6 +407,15 @@ if CLIENT then
         if active then
             render.DrawWireframeSphere(origin, 9, 9, 9, Color(60, 245, 110), true)
         end
+    end)
+    hook.Add("HUDPaint", "MEXNativeTrackPreviewWarning", function()
+        if not Tool() or not N.PreviewError then return end
+        draw.SimpleTextOutlined(
+            "Original model unavailable: " .. N.PreviewError,
+            "DermaDefaultBold", ScrW() * 0.5, ScrH() * 0.72,
+            Color(255, 160, 100), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
+            1, Color(0, 0, 0, 220)
+        )
     end)
     hook.Add("ShutDown", "MEXNativeGhostCleanup", function()
         for _, ghost in pairs(ghosts) do if IsValid(ghost) then ghost:Remove() end end
@@ -473,7 +483,19 @@ local function ValidProfile(profile)
         end
         if not hasMain or not hasDiverge then return false end
     elseif profile.kind == "crossing" then
+        -- Genuine diamond crossings must consist of exactly two independent
+        -- rails: four unique outer ports, used once each, no fake junction.
         if #profile.paths ~= 2 then return false end
+        local seenPorts = {}
+        for _, link in ipairs(profile.paths) do
+            for _, portIndex in ipairs(link) do
+                if seenPorts[portIndex] or portIndex < 1 or portIndex > 4 then
+                    return false
+                end
+                seenPorts[portIndex] = true
+            end
+        end
+        for i = 1, 4 do if not seenPorts[i] then return false end end
     end
     return true
 end
@@ -835,7 +857,9 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
         return false
     end
     -- Never move physical switch rails under any train or bogey.
-    for _, nearby in ipairs(ents.FindInSphere(ent:GetPos(), 512)) do
+    local boundsMin, boundsMax = ent:WorldSpaceAABB()
+    local clearance = Vector(180, 180, 180)
+    for _, nearby in ipairs(ents.FindInBox(boundsMin - clearance, boundsMax + clearance)) do
         if IsValid(nearby) and nearby ~= ent
             and (string.StartWith(nearby:GetClass(), "gmod_subway_")
                 or nearby:GetClass() == "gmod_train_bogey") then
