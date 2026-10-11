@@ -1090,17 +1090,20 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     ent:SetNW2Int("MEXRouteID", routeID or 0)
     ent:SetNW2Int("MEXSegmentIndex", segmentIndex or 0)
     ent:Spawn()
-    if nativeModel and available and packModel == "" then
+    local physicModel
+    if packModel ~= "" and Builder.Geometry.IsVerifiedStockSegment(
+        packModel, settings.track_count, length) then
+        physicModel = packModel
+    elseif packModel == "" and nativeModel and available then
+        physicModel = nativeModel
+    end
+    if physicModel then
         local modelPos, modelAng = Builder.Geometry.NativeStraightPose(
             ent:GetPos(), ent:GetAngles(), length, settings.track_count,
             settings.pack_z_offset - (settings.stock_models_only
                 and 0 or Builder.Geometry.NativeModelLift))
-        ent:InstallNativePhysics(nativeModel, modelPos, modelAng)
-    elseif packModel ~= "" then
-        -- Track Pack custom pieces can be physics-backed by their native .phy
-        -- only after shape/axis fitting is calibrated; no blind physics.
+        ent:InstallNativePhysics(physicModel, modelPos, modelAng)
     end
-
     return ent
 end
 
@@ -1272,6 +1275,13 @@ local function CheckNativeCoverage(points, settings)
             local length = geometryPoints[i]:Distance(geometryPoints[i + 1])
             local mdl = Builder.Geometry.SelectNativeTunnel(
                 settings.tunnel_type, settings.track_count, length)
+            -- Explicitly selected, dimensionally verified STOCK models are
+            -- also valid model-only segments and use the matching native PHY.
+            if settings.rigid_section
+                and Builder.Geometry.IsVerifiedStockSegment(
+                    settings.pack_model, settings.track_count, length) then
+                mdl = settings.pack_model
+            end
             if not mdl or not util.IsValidModel(mdl)
                 or not file.Exists(string.gsub(mdl or "", "%.mdl$", ".phy"), "GAME") then
                 return false, string.format(
