@@ -352,8 +352,12 @@ local function AddClassicTunnelDetails(ent, length, tunnelType, radius, width, h
     -- reference screenshot. No roof obstacles are added to train physics.
     if not round then
         local top = height - 12
-        for idx = math.ceil((offset + 8) / 192), math.floor((offset + length - 8) / 192) do
-            local x = idx * 192 - offset - half
+        -- Shift by half a bay: otherwise beams fall exactly on 192-SU
+        -- entity boundaries and BOTH neighboring chunks skip them.
+        local beamPhase = 96
+        for idx = math.ceil((offset + 8 - beamPhase) / 192),
+                   math.floor((offset + length - 8 - beamPhase) / 192) do
+            local x = idx * 192 + beamPhase - offset - half
             AddBox(beams,
                 Vector(x - 6, -yc + 5, top - 15),
                 Vector(x + 6, yc - 5, top))
