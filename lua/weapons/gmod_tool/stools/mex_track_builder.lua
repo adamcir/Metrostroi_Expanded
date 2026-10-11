@@ -428,6 +428,21 @@ function TOOL.BuildCPanel(panel)
     local layout = panel:ComboBox("Track layout", "mex_track_builder_track_count")
     layout:AddChoice("Single track", "1")
     layout:AddChoice("Double track", "2")
+    -- Surface (railroad*) and double tunnel original prefabs start at
+    -- 1024 SU. Changing to these profiles automatically selects their
+    -- smallest normal native piece instead of leaving the old 256-SU
+    -- setting that made RMB refuse even a perfectly straight route.
+    local function RecommendNativeLength()
+        local tunnel = GetConVar("mex_track_builder_tunnel_type")
+        local tracks = GetConVar("mex_track_builder_track_count")
+        local kind = tunnel and tunnel:GetString() or "rectangular"
+        local count = tracks and tracks:GetInt() or 1
+        if kind == "none" or count == 2 then
+            RunConsoleCommand("mex_track_builder_rigid_length", "1024")
+        end
+    end
+    profile.OnSelect = function() timer.Simple(0, RecommendNativeLength) end
+    layout.OnSelect = function() timer.Simple(0, RecommendNativeLength) end
     panel:CheckBox("Use original Metrostroi models", "mex_track_builder_auto_native_models")
 
     panel:Help("2. CONSTRUCTION METHOD")
@@ -439,6 +454,7 @@ function TOOL.BuildCPanel(panel)
     pieceLen:AddChoice("256 Source units", "256")
     pieceLen:AddChoice("1024 Source units", "1024")
     pieceLen:AddChoice("Custom click distance", "0")
+    panel:Help("Surface and double-track original prefabs require at least 1024 SU. Classic single-track tunnel modules also support 64 and 256 SU.")
 
     panel:CheckBox("EXPERIMENTAL: original Metrostroi curve models", "mex_track_builder_experimental_native_curves")
     panel:NumSlider("Minimum safe curve radius (SU)", "mex_track_builder_min_curve_radius", 1024, 8192, 0)
