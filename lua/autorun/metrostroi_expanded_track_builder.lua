@@ -46,148 +46,17 @@ TrackEntity.Spawnable = false
 TrackEntity.AdminOnly = true
 TrackEntity.RenderGroup = RENDERGROUP_OPAQUE
 
--- Networked, truly invisible native collision proxy. The original MDL's
--- compiled VPhysics .phy is loaded by the engine; no custom approximation
--- and no alpha-zero prop rendering are required. Its Draw hook is empty.
-local NativeCollisionEntity = {}
-NativeCollisionEntity.Type = "anim"
-NativeCollisionEntity.Base = "base_anim"
-NativeCollisionEntity.PrintName = "MEX Native Track Collision"
-NativeCollisionEntity.Spawnable = false
-NativeCollisionEntity.RenderGroup = RENDERGROUP_OPAQUE
-
-function NativeCollisionEntity:Initialize()
-    if not SERVER then return end
-    self:PhysicsInit(SOLID_VPHYSICS)
-    self:SetMoveType(MOVETYPE_VPHYSICS)
-    self:SetCollisionGroup(COLLISION_GROUP_NONE)
-    self:DrawShadow(false)
-    local phys = self:GetPhysicsObject()
-    if IsValid(phys) then
-        phys:EnableMotion(false)
-        phys:Sleep()
-    end
-end
-
-if CLIENT then
-    function NativeCollisionEntity:Draw()
-        -- Geometry is drawn once by the stock MDL in the owning MEX segment.
-    end
-end
-
-local function BoxConvex(mins, maxs)
-    return {
-        Vector(mins.x, mins.y, mins.z),
-        Vector(mins.x, mins.y, maxs.z),
-        Vector(mins.x, maxs.y, mins.z),
-        Vector(mins.x, maxs.y, maxs.z),
-        Vector(maxs.x, mins.y, mins.z),
-        Vector(maxs.x, mins.y, maxs.z),
-        Vector(maxs.x, maxs.y, mins.z),
-        Vector(maxs.x, maxs.y, maxs.z),
-    }
-end
-
--- Install the ORIGINAL Metrostroi .phy from the exact same .mdl that is
--- displayed. Unlike rectangular approximation hulls this collides with its
--- actual sleepers, guarded contact rail, tunnel wall and floor. Never
--- render the physics proxy: client rendering stays under TrackEntity:Draw.
-if SERVER then
-    hook.Add("PhysgunPickup", "MEX_NativeTrackCollisionFixed", function(_, ent)
-        if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
-            return false
-        end
-    end)
-    hook.Add("CanTool", "MEX_NativeTrackCollisionProtected", function(_, trace, tool)
-        local ent = istable(trace) and trace.Entity or nil
-        if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false)
-            and tool ~= "mex_track_builder" then
-            return false
-        end
-    end)
-end
-
-function TrackEntity:InstallNativePhysics(model, position, angles)
-    if not SERVER or not isstring(model) or not util.IsValidModel(model)
-        or not isvector(position) or not isangle(angles) then return false end
-
-    if IsValid(self.MEXNativePhysicsProxy) then
-        self.MEXNativePhysicsProxy:Remove()
-        self.MEXNativePhysicsProxy = nil
-    end
-    local proxy = ents.Create("mex_track_native_collision")
-    if not IsValid(proxy) then return false end
-    proxy:SetModel(model)
-    proxy:SetPos(position)
-    proxy:SetAngles(angles)
-    proxy:SetCollisionGroup(COLLISION_GROUP_NONE)
-    proxy:Spawn()
-    local phys = proxy:GetPhysicsObject()
-    if not IsValid(phys) then
-        proxy:Remove()
-        return false, "The model has no usable original .phy collision: " .. model
-    end
-    -- The custom entity has an empty Draw hook; unlike SetNoDraw it stays
-    -- networked and retains client/server VPhysics collision prediction.
-    proxy:SetNW2Bool("MEXNativeCollisionProxy", true)
-    proxy:SetNW2Entity("MEXTrackOwner", self)
-    phys:EnableMotion(false)
-    phys:Sleep()
-    self.MEXNativePhysicsProxy = proxy
-    self:DeleteOnRemove(proxy)
-    -- The source MDL has its real collider; DO NOT stack an inaccurate second
-    -- physics shape on the sleepers/wheels (train jitter and floating).
-    self:PhysicsDestroy()
-    self:SetMoveType(MOVETYPE_NONE)
-    self:SetSolid(SOLID_NONE)
-    self:SetNW2Bool("MEXNativePhysics", true)
-    return true
-end
-
--- Use a networked, REAL Source model renderer. Drawing 1024-SU
--- prefab geometry manually in the Draw hook of an invisible railroad16.mdl
--- fails when Source frustum-culls the tiny 16-SU backing entity. A native
--- prop_dynamic_override uses the original .mdl's OWN bounds and UVs, so
--- players can see the complete track immediately, including during preview.
-function TrackEntity:InstallNativeVisual(model, position, angles)
-    if not SERVER or not util.IsValidModel(model) then
-        return false, "The original Metrostroi .mdl is not mounted: " .. tostring(model)
-    end
-    if IsValid(self.MEXNativeVisual) then
-        self.MEXNativeVisual:Remove()
-        self.MEXNativeVisual = nil
-    end
-    local visual = ents.Create("prop_dynamic_override")
-    if not IsValid(visual) then
-        return false, "Could not create a native model renderer"
-    end
-    visual:SetModel(model)
-    visual:SetPos(position)
-    visual:SetAngles(angles)
-    visual:Spawn()
-    if not IsValid(visual)
-        or string.lower(visual:GetModel() or "") ~= string.lower(model) then
-        if IsValid(visual) then visual:Remove() end
-        return false, "GMod could not spawn the original model: " .. model
-    end
-    visual:SetMoveType(MOVETYPE_NONE)
-    visual:SetSolid(SOLID_NONE)
-    visual:SetNotSolid(true)
-    visual:DrawShadow(false)
-    visual:SetNW2Bool("MEXNativeVisualPart", true)
-    visual:SetNW2Entity("MEXTrackOwner", self)
-    self.MEXNativeVisual = visual
-    self:DeleteOnRemove(visual)
-    self:SetNW2Bool("MEXHasNativeVisual", true)
-    return true
-end
-
 function TrackEntity:Initialize()
     -- Our procedural Draw() does not draw the backing 16-SU model. Source
     -- may still project a shadow from that hidden model for each rail entity.
     -- Explicitly disable it on both realms to prevent phantom shadow strips.
     if CLIENT then
         self:DrawShadow(false)
+        -- Correct rendering bounds must be installed BEFORE the first Draw.
+        if self.SetRenderBounds then
+            self:SetRenderBounds(Vector(-1024, -1024, -256),
+                                 Vector(1024, 1024, 1024))
+        end
         return
     end
     self:DrawShadow(false)
@@ -262,80 +131,6 @@ function TrackEntity:Initialize()
 end
 
 if CLIENT then
-    local fallbackRailMaterial = Material("metrostroi/metro_railroad_001")
-    local fallbackSleeperMaterial = Material("models/props_c17/furniturefabric003a")
-
-    local function RemoveModelPieces(self)
-        if not istable(self.MEXModelPieces) then
-            self.MEXModelPieces = {}
-            return
-        end
-
-        for _, piece in ipairs(self.MEXModelPieces) do
-            if IsValid(piece) then
-                piece:Remove()
-            end
-        end
-
-        self.MEXModelPieces = {}
-    end
-
-    local function DrawFallbackTrack(self, length, gauge, railWidth, railHeight, sleeperSpacing, sleeperLength, sleeperWidth, sleeperHeight)
-        local halfLength = length * 0.5
-        local ang = self:GetAngles()
-
-        if not fallbackSleeperMaterial:IsError() then
-            render.SetMaterial(fallbackSleeperMaterial)
-        else
-            render.SetColorMaterial()
-        end
-
-        local sleeperCount = math.Clamp(math.floor(length / sleeperSpacing) + 1, 2, 96)
-        local step = sleeperCount > 1 and length / (sleeperCount - 1) or length
-
-        for i = 0, sleeperCount - 1 do
-            local x = -halfLength + step * i
-            render.DrawBox(
-                self:LocalToWorld(Vector(x, 0, sleeperHeight * 0.5)),
-                ang,
-                Vector(-sleeperWidth * 0.5, -sleeperLength * 0.5, -sleeperHeight * 0.5),
-                Vector(sleeperWidth * 0.5, sleeperLength * 0.5, sleeperHeight * 0.5),
-                color_white,
-                true
-            )
-        end
-
-        if not fallbackRailMaterial:IsError() then
-            render.SetMaterial(fallbackRailMaterial)
-        else
-            render.SetColorMaterial()
-        end
-
-        local railTop = self:GetNW2Float(
-            "MEXRailSurfaceOffset",
-            METROSTROI_RAIL_HEIGHT
-        )
-        local railBottom = 0
-        local halfRail = railWidth * 0.5
-
-        render.DrawBox(
-            self:GetPos(),
-            ang,
-            Vector(-halfLength, gauge * 0.5 - halfRail, railBottom),
-            Vector(halfLength, gauge * 0.5 + halfRail, railTop),
-            color_white,
-            true
-        )
-        render.DrawBox(
-            self:GetPos(),
-            ang,
-            Vector(-halfLength, -gauge * 0.5 - halfRail, railBottom),
-            Vector(halfLength, -gauge * 0.5 + halfRail, railTop),
-            color_white,
-            true
-        )
-    end
-
     local function NewTrackPiece(model)
         local piece = ClientsideModel(model, RENDERGROUP_OPAQUE)
         if IsValid(piece) then
@@ -367,91 +162,51 @@ if CLIENT then
         end
     end
 
-    local function DrawMetrostroiTiles(self, length, model)
-        if not util.IsValidModel(model) then
+
+    -- Render actual Metrostroi railroad16.mdl without prefabricated straight
+    -- or curved sections. Reuse one client model per server physics chord.
+    local function DrawMetrostroiTiles(self, length)
+        if not util.IsValidModel(DEFAULT_TRACK_MODEL) then
             RemoveModelPieces(self)
             return false
         end
-
-        EnsureModelPieces(self, model, 1)
-        local probe = self.MEXModelPieces and self.MEXModelPieces[1]
-        if not IsValid(probe) then return false end
-
-        local mins = probe:OBBMins()
-        local maxs = probe:OBBMaxs()
-        local size = maxs - mins
-
-        -- railroad16 may be authored along local X or local Y. Pick the
-        -- horizontal axis whose model extent is closest to the known 16-SU
-        -- tile length instead of assuming the largest OBB axis is forward.
-        local axisIsX = math.abs(size.x - 16) <= math.abs(size.y - 16)
-        local tileLength = math.max(axisIsX and size.x or size.y, 4)
-
-        -- The native model has an 80-SU inner gap, i.e. 85.8 SU between rail
-        -- centres (sh_rerail.lua). Keep its native dimensions at the default.
-        -- Scale only if a player deliberately selects a custom gauge; the
-        -- model OBB also contains sleepers, so it cannot measure the gauge.
-        local gauge = self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE)
-        local lateralScale = gauge / METROSTROI_MODEL_GAUGE
-
-        -- Full-size Metrostroi tiles are repeated. Their spacing is at most
-        -- their real length, so adjacent pieces may overlap slightly but can
-        -- never leave a visible gap.
-        local count = math.Clamp(math.ceil(length / tileLength), 1, 96)
-        EnsureModelPieces(self, model, count)
-
+        EnsureModelPieces(self, DEFAULT_TRACK_MODEL, 1)
+        local piece = self.MEXModelPieces[1]
+        if not IsValid(piece) then return false end
+        local mins, maxs = piece:OBBMins(), piece:OBBMaxs()
+        local extent = maxs - mins
+        local alongX = math.abs(extent.x - 16) < math.abs(extent.y - 16)
+        local tileLength = alongX and extent.x or extent.y
+        if tileLength < 8 or tileLength > 32 then tileLength = 16 end
+        local count = math.Clamp(math.ceil(length / tileLength), 1, 64)
         local step = length / count
-        local firstX = -length * 0.5 + step * 0.5
-        local localCorrection = axisIsX and Angle(0, 0, 0) or Angle(0, -90, 0)
-        local pieceAng = self:LocalToWorldAngles(localCorrection)
-        local railSurface = self:GetNW2Float(
-            "MEXRailSurfaceOffset",
-            METROSTROI_RAIL_HEIGHT
+        local correction = alongX and Angle(0, 0, 0) or Angle(0, -90, 0)
+        local rotation = self:LocalToWorldAngles(correction)
+
+        -- The asymmetric third-rail OBB must not move the running rails
+        -- sideways. The tile's lower extent is the track base, NOT the
+        -- raised third-rail cover at OBBMaxs().z.
+        local localAnchor = Vector(
+            alongX and (mins.x + maxs.x) * 0.5 or 0,
+            alongX and 0 or (mins.y + maxs.y) * 0.5,
+            mins.z
         )
-
-        for i = 1, count do
-            local piece = self.MEXModelPieces[i]
-            if IsValid(piece) then
-                local pmins = piece:OBBMins()
-                local pmaxs = piece:OBBMaxs()
-                local center = (pmins + pmaxs) * 0.5
-
-                -- Client-only scaling: the server's twin-rail convexes use
-                -- the selected gauge and width, matching these visible rails.
-                local matrix = Matrix()
-                if axisIsX then
-                    matrix:Scale(Vector(1, lateralScale, 1))
-                else
-                    matrix:Scale(Vector(lateralScale, 1, 1))
-                end
-                piece:EnableMatrix("RenderMultiply", matrix)
-
-                -- The previous renderer placed MODEL BOTTOM at the spline
-                -- plane. That assumes the model's height equals Metrostroi's
-                -- 10-SU running surface, which is not guaranteed. Anchor the
-                -- MODEL TOP to the exact physical/rerail rail surface instead.
-                -- Thus what the wheel visually touches is the same Z used by
-                -- collision and RerailGetTrackData.
-                local anchor = Vector(
-                    axisIsX and center.x or center.x * lateralScale,
-                    axisIsX and center.y * lateralScale or center.y,
-                    pmaxs.z
-                )
-                anchor:Rotate(pieceAng)
-
-                local x = firstX + (i - 1) * step
-                local target = self:LocalToWorld(
-                    Vector(x, 0, railSurface)
-                )
-
-                piece:SetRenderOrigin(target - anchor)
-                piece:SetRenderAngles(pieceAng)
+        localAnchor:Rotate(rotation)
+        local lanes = self:GetNW2Int("MEXTrackCount", 1) == 2 and 2 or 1
+        local spacing = self:GetNW2Float("MEXTrackSpacing", 240)
+        for lane = 1, lanes do
+            local lateral = lanes == 2 and (lane == 1 and -spacing * 0.5
+                or spacing * 0.5) or 0
+            for i = 1, count do
+                local x = -length * 0.5 + (i - 0.5) * step
+                local target = self:LocalToWorld(Vector(x, lateral, 0))
+                piece:SetRenderOrigin(target - localAnchor)
+                piece:SetRenderAngles(rotation)
                 piece:DrawModel()
-                piece:SetRenderOrigin(nil)
-                piece:SetRenderAngles(nil)
             end
         end
-
+        piece:SetRenderOrigin(nil)
+        piece:SetRenderAngles(nil)
         return true
     end
 
@@ -460,84 +215,22 @@ if CLIENT then
         Builder.Geometry.ClearClientMeshes(self)
     end
 
-    function TrackEntity:Think()
-        -- A single native curve MDL is ~1600 SU long, but its owner physics
-        -- segment may be only ~128 SU. Expand render bounds once when client
-        -- netvars arrive, or Source frustum-culls the whole stock model.
-        if self:GetNW2Bool("MEXCurveOwner", false) and not self.MEXCurveBoundsExtended then
-            if self.SetRenderBounds then
-                self:SetRenderBounds(Vector(-2304, -2304, -768),
-                                     Vector(2304, 2304, 768))
-            end
-            self.MEXCurveBoundsExtended = true
-        end
-    end
 
     function TrackEntity:Draw()
-        -- The original .mdl already contains its own contact rail and ties.
-        -- No duplicated yellow addon-made rail, mesh sleepers, or tunnel.
-        if self:GetNW2Bool("MEXCurveCovered", false) then
-            local model = self:GetNW2String("MEXCurveModel", "")
-            if Builder.Geometry.IsNativeCurveMounted(model) then
-                if self:GetNW2Bool("MEXCurveOwner", false)
-                    and not self:GetNW2Bool("MEXHasNativeVisual", false) then
-                    Builder.Geometry.DrawNativeCurve(self)
-                end
-                return
-            end
+        local length = self:GetNW2Float("MEXLength", 0)
+        if length < 2 then return end
+        -- Optional procedural tunnel shell only. No duplicate mesh rails.
+        if self:GetNW2String("MEXTunnelType", "none") ~= "none" then
+            Builder.Geometry.Draw(self, true)
         end
-        if self:GetNW2Bool("MEXHasNativeVisual", false) then return end
-        if Builder.Geometry.DrawPackModel(self) then return end
-        -- Legacy saved routes may still use the procedural renderer.
-        -- New routes in stock-model-only mode are rejected if unmatched.
-        if self:GetNW2Bool("MEXStockModelsOnly", false) then return end
-        if self:GetNW2Bool("MEXFastGeometry", true)
-            or self:GetNW2Int("MEXTrackCount", 1) == 2 then
-            Builder.Geometry.Draw(self)
-            return
+        if not DrawMetrostroiTiles(self, length)
+            and not self.MEXMissingModelWarned then
+            self.MEXMissingModelWarned = true
+            ErrorNoHalt("[MEX Track Builder] Missing original railroad16.mdl on this client.\n")
         end
-        local length = math.max(self:GetNW2Float("MEXLength", 1), 1)
-        local gauge = math.max(self:GetNW2Float("MEXPhysicalGauge", DEFAULT_TRACK_GAUGE), 8)
-        local railWidth = math.max(self:GetNW2Float("MEXPhysicalRailWidth", METROSTROI_RAIL_WIDTH), 1)
-        local railHeight = math.max(self:GetNW2Float("MEXRailHeight", METROSTROI_RAIL_HEIGHT), 1)
-        local sleeperSpacing = math.max(self:GetNW2Float("MEXSleeperSpacing", 32), 8)
-        local sleeperLength = math.max(self:GetNW2Float("MEXSleeperLength", 128), gauge + 16)
-        local sleeperWidth = math.max(self:GetNW2Float("MEXSleeperWidth", 10), 2)
-        local sleeperHeight = math.max(self:GetNW2Float("MEXSleeperHeight", 5), 1)
-        local model = SafeTrackModel(self:GetNW2String("MEXTrackModel", DEFAULT_TRACK_MODEL))
-
-        if self.SetRenderBounds then
-            local scaledHalfWidth = sleeperLength * 0.5
-                * math.max(1, gauge / METROSTROI_MODEL_GAUGE)
-            local halfWidth = math.max(sleeperLength * 0.5, scaledHalfWidth, gauge * 0.5 + railWidth) + 32
-            self:SetRenderBounds(
-                Vector(-length * 0.5 - 32, -halfWidth, -16),
-                Vector(length * 0.5 + 32, halfWidth, sleeperHeight + railHeight + 32)
-            )
-        end
-
-        if self:GetNW2Bool("MEXUseTrackModel", true)
-            and DrawMetrostroiTiles(self, length, model)
-        then
-            return
-        end
-
-        RemoveModelPieces(self)
-        DrawFallbackTrack(
-            self,
-            length,
-            gauge,
-            railWidth,
-            railHeight,
-            sleeperSpacing,
-            sleeperLength,
-            sleeperWidth,
-            sleeperHeight
-        )
     end
 end
 
-scripted_ents.Register(NativeCollisionEntity, "mex_track_native_collision")
 scripted_ents.Register(TrackEntity, TRACK_CLASS)
 
 -- Build reusable attachment nodes from the actually spawned smooth track.
@@ -840,7 +533,7 @@ end
 local function CopySettings(settings)
     settings = settings or {}
     return {
-        gauge = math.Clamp(tonumber(settings.gauge) or DEFAULT_TRACK_GAUGE, 8, 200),
+        gauge = DEFAULT_TRACK_GAUGE,
         rail_width = math.Clamp(tonumber(settings.rail_width) or METROSTROI_RAIL_WIDTH, 1, 24),
         rail_height = math.Clamp(tonumber(settings.rail_height) or METROSTROI_RAIL_HEIGHT, 1, 32),
         sleeper_spacing = math.Clamp(tonumber(settings.sleeper_spacing) or 32, 8, 256),
@@ -860,30 +553,27 @@ local function CopySettings(settings)
         tunnel_height = math.Clamp(tonumber(settings.tunnel_height) or 280, 230, 480),
         tunnel_wall = math.Clamp(tonumber(settings.tunnel_wall) or 12, 6, 32),
         tunnel_style = tostring(settings.tunnel_style) == "plain" and "plain" or "metrostroi",
-        auto_native_models = settings.auto_native_models ~= false
-            and tonumber(settings.auto_native_models or 1) ~= 0,
+        auto_native_models = false,
         -- Side conductor rail is separate from the two running rails; rendering
         -- it does not create a conflicting wheel/bogey collision surface.
         -- Stock models include the conductor rail already. The historical
         -- addon-side third-rail controls are intentionally ignored.
-        stock_models_only = settings.stock_models_only == true
-            or tonumber(settings.stock_models_only or 0) == 1,
+        stock_models_only = false,
         -- Keep a high-resolution Metrostroi rail graph, but use fewer
         -- physical entities on long straight and gently curved sections.
         geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
         geometry_max_length = math.Clamp(tonumber(settings.geometry_max_length) or 192, 64, 256),
         -- Requested minimum radius is measured at the INNER track when double.
         min_curve_radius = math.Clamp(tonumber(settings.min_curve_radius) or 3072, 1024, 8192),
-        experimental_native_curves = settings.experimental_native_curves ~= false
-            and tonumber(settings.experimental_native_curves or 1) ~= 0,
+        experimental_native_curves = false,
         track_count = tonumber(settings.track_count) == 2 and 2 or 1,
         track_spacing = math.Clamp(tonumber(settings.track_spacing) or 240, 180, 400),
         rigid_section = settings.rigid_section == true or tonumber(settings.rigid_section or 0) == 1,
         rigid_length = math.Clamp(tonumber(settings.rigid_length) or 0, 0, 1024),
         inherit_double_profile = settings.inherit_double_profile ~= false
             and tonumber(settings.inherit_double_profile or 1) ~= 0,
-        pack_model = string.sub(tostring(settings.pack_model or ""), 1, 240),
-        pack_z_offset = math.Clamp(tonumber(settings.pack_z_offset) or 0, -128, 128),
+        pack_model = "",
+        pack_z_offset = 0,
     }
 end
 
@@ -1185,66 +875,8 @@ end
 -- spikes and unstable wheel contacts on long manually built routes.
 function Builder.BuildGeometryPoints(points, settings)
     settings = CopySettings(settings)
-    if settings.rigid_section and not settings.auto_native_models then
+    if settings.rigid_section then
         return #points >= 2 and {points[1], points[#points]} or points
-    end
-    -- Place AUTHENTIC native-length tunnel MDLs on actually straight routes.
-    -- We only resample the physical geometry; Metrostroi's network remains
-    -- the original fine spline. Never snap a curved spline to a prefab.
-    if settings.auto_native_models and #points >= 2 then
-        local first, last = points[1], points[#points]
-        local chord = last - first
-        local length = chord:Length()
-        -- Prefer the longest genuine Metrostroi MDL to avoid spawning many
-        -- tiny tunnel models. The 256/64 pieces finish short single-track
-        -- runs; a 2-track original is available only as tunnel1024_double.
-        -- Surface rail uses the real 4096/1024 Metrostroi assets; tunnel
-        -- types reuse original 1024/256/64 modules. Double has a native
-        -- 1024 module. Do NOT cut near-empty pieces into 16SU models.
-        local sizes
-        if settings.tunnel_type == "none" then
-            sizes = settings.track_count == 1 and {4096, 1024} or {}
-        elseif settings.track_count == 2 then
-            sizes = {1024}
-        else
-            sizes = {1024, 256, 64}
-        end
-        if #sizes > 0 and length >= sizes[#sizes] and length > 0 then
-            local direction = chord / length
-            local straight = true
-            local previousAlong = -1
-            for _, point in ipairs(points) do
-                local along = (point - first):Dot(direction)
-                local nearest = first + direction * along
-                if point:DistToSqr(nearest) > settings.geometry_tolerance ^ 2
-                    or along < previousAlong - 0.25
-                then
-                    straight = false
-                    break
-                end
-                previousAlong = along
-            end
-            if straight then
-                local nativePoints = {first}
-                local at = 0
-                while length - at >= sizes[#sizes] - 0.25 do
-                    local chosen
-                    for _, candidate in ipairs(sizes) do
-                        if length - at >= candidate - 0.25 then
-                            chosen = candidate
-                            break
-                        end
-                    end
-                    if not chosen then break end
-                    at = at + chosen
-                    nativePoints[#nativePoints + 1] = first + direction * math.min(at, length)
-                end
-                if at < length - 0.25 then
-                    nativePoints[#nativePoints + 1] = last
-                end
-                return nativePoints
-            end
-        end
     end
     if #points < 3 then return points end
     local result = {points[1]}
@@ -3338,9 +2970,6 @@ concommand.Add("mex_track_builder_delete_aimed_route", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     local tr = ply:GetEyeTrace()
     local ent = tr and tr.Entity
-    if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
-        ent = ent:GetNW2Entity("MEXTrackOwner")
-    end
     if not IsValid(ent) or ent:GetClass() ~= TRACK_CLASS then
         ply:ChatPrint("[MEX Track Builder] Aim at a saved MEX rail to delete its entire route.")
         return
@@ -3362,9 +2991,6 @@ concommand.Add("mex_track_builder_undo", function(ply)
     if not IsValid(ply) or not ply:IsAdmin() then return end
     local tr = ply:GetEyeTrace()
     local ent = tr and tr.Entity
-    if IsValid(ent) and ent:GetNW2Bool("MEXNativeCollisionProxy", false) then
-        ent = ent:GetNW2Entity("MEXTrackOwner")
-    end
     local routeID
     if IsValid(ent) and ent:GetClass() == TRACK_CLASS then
         local id = ent:GetNW2Int("MEXRouteID", 0)
