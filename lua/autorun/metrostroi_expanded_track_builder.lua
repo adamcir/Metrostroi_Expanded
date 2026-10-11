@@ -2158,10 +2158,15 @@ function Builder.FinishRoute(ply, network)
     end
 
     if IsValid(ply) then
-        local realModels, generated, missingModels = 0, 0, 0
+        local realModels, nativeCurves, generated, missingModels = 0, 0, 0, 0
         for _, piece in ipairs(finishedPieces) do
             if IsValid(piece) then
-                if piece:GetNW2Bool("MEXNativeAvailable", false) then
+                if piece:GetNW2Bool("MEXCurveOwner", false) then
+                    nativeCurves = nativeCurves + 1
+                elseif piece:GetNW2Bool("MEXCurveCovered", false) then
+                    -- Additional physical segments underneath one authentic
+                    -- curved prefab are not separate procedural tunnel shells.
+                elseif piece:GetNW2Bool("MEXNativeAvailable", false) then
                     realModels = realModels + 1
                 else
                     generated = generated + 1
@@ -2172,8 +2177,8 @@ function Builder.FinishRoute(ply, network)
             end
         end
         ply:ChatPrint(string.format(
-            "[MEX Track Builder] Route #%d: %d original Metrostroi .mdl / %d generated section(s).",
-            routeID, realModels, generated
+            "[MEX Track Builder] Route #%d: %d original straight models, %d original curved models, %d generated sections.",
+            routeID, realModels, nativeCurves, generated
         ))
         if missingModels > 0 then
             ply:ChatPrint("[MEX Track Builder] Missing original models! Open Q > Track Builder > Check installed models.")
