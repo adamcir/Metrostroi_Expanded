@@ -46,6 +46,35 @@ TrackEntity.Spawnable = false
 TrackEntity.AdminOnly = true
 TrackEntity.RenderGroup = RENDERGROUP_OPAQUE
 
+-- Networked, truly invisible native collision proxy. The original MDL's
+-- compiled VPhysics .phy is loaded by the engine; no custom approximation
+-- and no alpha-zero prop rendering are required. Its Draw hook is empty.
+local NativeCollisionEntity = {}
+NativeCollisionEntity.Type = "anim"
+NativeCollisionEntity.Base = "base_anim"
+NativeCollisionEntity.PrintName = "MEX Native Track Collision"
+NativeCollisionEntity.Spawnable = false
+NativeCollisionEntity.RenderGroup = RENDERGROUP_OPAQUE
+
+function NativeCollisionEntity:Initialize()
+    if not SERVER then return end
+    self:PhysicsInit(SOLID_VPHYSICS)
+    self:SetMoveType(MOVETYPE_VPHYSICS)
+    self:SetCollisionGroup(COLLISION_GROUP_NONE)
+    self:DrawShadow(false)
+    local phys = self:GetPhysicsObject()
+    if IsValid(phys) then
+        phys:EnableMotion(false)
+        phys:Sleep()
+    end
+end
+
+if CLIENT then
+    function NativeCollisionEntity:Draw()
+        -- Geometry is drawn once by the stock MDL in the owning MEX segment.
+    end
+end
+
 local function BoxConvex(mins, maxs)
     return {
         Vector(mins.x, mins.y, mins.z),
@@ -86,7 +115,7 @@ function TrackEntity:InstallNativePhysics(model, position, angles)
         self.MEXNativePhysicsProxy:Remove()
         self.MEXNativePhysicsProxy = nil
     end
-    local proxy = ents.Create("prop_physics")
+    local proxy = ents.Create("mex_track_native_collision")
     if not IsValid(proxy) then return false end
     proxy:SetModel(model)
     proxy:SetPos(position)
@@ -99,11 +128,8 @@ function TrackEntity:InstallNativePhysics(model, position, angles)
         print("[MEX Track Builder] No usable native .phy collision: " .. model)
         return false
     end
-    -- Keep the collision entity NETWORKED for client-side prediction.
-    -- SetNoDraw(true) on the server would suppress networking entirely.
-    proxy:SetRenderMode(RENDERMODE_TRANSCOLOR)
-    proxy:SetColor(Color(255, 255, 255, 0))
-    proxy:DrawShadow(false)
+    -- The custom entity has an empty Draw hook; unlike SetNoDraw it stays
+    -- networked and retains client/server VPhysics collision prediction.
     proxy:SetNW2Bool("MEXNativeCollisionProxy", true)
     proxy:SetNW2Entity("MEXTrackOwner", self)
     phys:EnableMotion(false)
@@ -471,6 +497,7 @@ if CLIENT then
     end
 end
 
+scripted_ents.Register(NativeCollisionEntity, "mex_track_native_collision")
 scripted_ents.Register(TrackEntity, TRACK_CLASS)
 
 -- Build reusable attachment nodes from the actually spawned smooth track.
