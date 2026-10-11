@@ -604,17 +604,28 @@ local function CollectPorts()
     end
     return nodes, count
 end
-function N.FindPort(pos, distance, tracks)
-    local best, bestDist = nil, (distance or 64)^2
+function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
+    local best, bestDist = nil, (distance or 72)^2
     local nodes, count = CollectPorts()
+    -- Screen-center targeting is much more intuitive than asking players
+    -- to shoot the map surface exactly behind a floating connector marker.
+    local rayBest, rayDist = nil, 28 * 28
     for _, node in ipairs(nodes) do
-        local d = pos:DistToSqr(node.pos)
-        if d <= bestDist and (count[node.key] or 0) < 2
+        if (count[node.key] or 0) < 2
             and (not tracks or node.lanes == (tonumber(tracks) == 2 and 2 or 1)) then
-            best, bestDist = node, d
+            local d = pos:DistToSqr(node.pos)
+            if d < bestDist then best, bestDist = node, d end
+            if isvector(eye) and isvector(aimDir) then
+                local along = (node.pos - eye):Dot(aimDir)
+                if along >= 0 and along <= 8192
+                    and (not traceDistance or along <= traceDistance + 32) then
+                    local miss = node.pos:DistToSqr(eye + aimDir * along)
+                    if miss < rayDist then rayBest, rayDist = node, miss end
+                end
+            end
         end
     end
-    return best
+    return rayBest or best
 end
 
 local function SpawnRoute(route, ghost)
@@ -773,7 +784,11 @@ function N.Add(ply, aim, settings)
     settings = settings or {}
     local state = N.Active[ply]
     if not state then
-        local connector = N.FindPort(aim, 72, settings.tracks)
+        local tr = ply:GetEyeTrace()
+        local rayLength = tr and tr.Hit and not tr.HitSky
+            and ply:GetShootPos():Distance(tr.HitPos) or nil
+        local connector = N.FindPort(aim, 72, settings.tracks,
+            ply:GetShootPos(), ply:GetAimVector(), rayLength)
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
