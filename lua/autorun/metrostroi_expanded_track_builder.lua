@@ -161,10 +161,8 @@ function TrackEntity:Initialize()
         self:GetNW2Float("MEXTunnelWall", 12),
         self:GetNW2Int("MEXTrackCount", 1),
         self:GetNW2Float("MEXTrackSpacing", 240),
-        self:GetNW2Bool("MEXThirdRail", true),
-        self:GetNW2String("MEXThirdRailSide", "outside"),
-        self:GetNW2Float("MEXThirdRailOffset", 112),
-        self:GetNW2Float("MEXThirdRailHeight", 20)
+        false, -- stock model supplies its own contact-rail physics
+        "outside", 112, 20
     )
 
     self:PhysicsInitMultiConvex(convexes)
@@ -390,31 +388,23 @@ if CLIENT then
     end
 
     function TrackEntity:Draw()
+        -- The original .mdl already contains its own contact rail and ties.
+        -- No duplicated yellow addon-made rail, mesh sleepers, or tunnel.
         if self:GetNW2Bool("MEXCurveCovered", false) then
-            local curveModel = self:GetNW2String("MEXCurveModel", "")
-            if Builder.Geometry.IsNativeCurveMounted(curveModel) then
-                -- Only the first piece draws the original turn1 MDL; every
-                -- section retains its actual separate physics rails.
+            local model = self:GetNW2String("MEXCurveModel", "")
+            if Builder.Geometry.IsNativeCurveMounted(model) then
                 if self:GetNW2Bool("MEXCurveOwner", false) then
                     Builder.Geometry.DrawNativeCurve(self)
                 end
-                Builder.Geometry.DrawContactRailOnly(self)
                 return
             end
-            -- Not mounted on this client => preserve the generated tunnel
-            -- graphics on all pieces, with no invisible segment gaps.
         end
-        if (self:GetNW2Bool("MEXRigidSection", false)
-            or self:GetNW2Bool("MEXAutoNativeModels", true))
-            and Builder.Geometry.DrawPackModel(self) then
-            -- Real Metrostroi / Track Pack .mdl never includes the separate
-            -- contact rail; draw it in one cached supplemental GPU mesh.
-            Builder.Geometry.DrawContactRailOnly(self)
-            return
-        end
+        if Builder.Geometry.DrawPackModel(self) then return end
+        -- Legacy saved routes may still use the procedural renderer.
+        -- New routes in stock-model-only mode are rejected if unmatched.
+        if self:GetNW2Bool("MEXStockModelsOnly", false) then return end
         if self:GetNW2Bool("MEXFastGeometry", true)
-            or self:GetNW2Int("MEXTrackCount", 1) == 2
-            or self:GetNW2Bool("MEXThirdRail", false) then
+            or self:GetNW2Int("MEXTrackCount", 1) == 2 then
             Builder.Geometry.Draw(self)
             return
         end
@@ -512,10 +502,7 @@ local function CollectTrackSnapNodes(spacing)
                     tunnel_height = ent:GetNW2Float("MEXTunnelHeight", 280),
                     tunnel_wall = ent:GetNW2Float("MEXTunnelWall", 12),
                     tunnel_style = ent:GetNW2String("MEXTunnelStyle", "metrostroi"),
-                    third_rail = ent:GetNW2Bool("MEXThirdRail", true),
-                    third_rail_side = ent:GetNW2String("MEXThirdRailSide", "outside"),
-                    third_rail_offset = ent:GetNW2Float("MEXThirdRailOffset", 112),
-                    third_rail_height = ent:GetNW2Float("MEXThirdRailHeight", 20),
+
                     lane = lane,
                 }
                 nodes[#nodes + 1] = node
@@ -788,10 +775,10 @@ local function CopySettings(settings)
             and tonumber(settings.auto_native_models or 1) ~= 0,
         -- Side conductor rail is separate from the two running rails; rendering
         -- it does not create a conflicting wheel/bogey collision surface.
-        third_rail = settings.third_rail ~= false and tonumber(settings.third_rail or 1) ~= 0,
-        third_rail_side = Builder.Geometry.SafeThirdRailSide(settings.third_rail_side),
-        third_rail_offset = math.Clamp(tonumber(settings.third_rail_offset) or 112, 95, 155),
-        third_rail_height = math.Clamp(tonumber(settings.third_rail_height) or 20, 12, 36),
+        -- Stock models include the conductor rail already. The historical
+        -- addon-side third-rail controls are intentionally ignored.
+        stock_models_only = settings.stock_models_only == true
+            or tonumber(settings.stock_models_only or 0) == 1,
         -- Keep a high-resolution Metrostroi rail graph, but use fewer
         -- physical entities on long straight and gently curved sections.
         geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
@@ -1030,10 +1017,7 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     ent:SetNW2Float("MEXTunnelWall", settings.tunnel_wall)
     ent:SetNW2String("MEXTunnelStyle", settings.tunnel_style)
     ent:SetNW2Bool("MEXAutoNativeModels", settings.auto_native_models)
-    ent:SetNW2Bool("MEXThirdRail", settings.third_rail)
-    ent:SetNW2String("MEXThirdRailSide", settings.third_rail_side)
-    ent:SetNW2Float("MEXThirdRailOffset", settings.third_rail_offset)
-    ent:SetNW2Float("MEXThirdRailHeight", settings.third_rail_height)
+    ent:SetNW2Bool("MEXStockModelsOnly", settings.stock_models_only)
     ent:SetNW2Int("MEXTrackCount", settings.track_count)
     ent:SetNW2Float("MEXTrackSpacing", settings.track_spacing)
     ent:SetNW2Bool("MEXRigidSection", settings.rigid_section)
@@ -1548,10 +1532,7 @@ function Builder.AddPoint(ply, pos, settings, anchor)
                 newSettings.tunnel_height = anchor.tunnel_height or newSettings.tunnel_height
                 newSettings.tunnel_wall = anchor.tunnel_wall or newSettings.tunnel_wall
                 newSettings.tunnel_style = anchor.tunnel_style or newSettings.tunnel_style
-                newSettings.third_rail = anchor.third_rail
-                newSettings.third_rail_side = anchor.third_rail_side or newSettings.third_rail_side
-                newSettings.third_rail_offset = anchor.third_rail_offset or newSettings.third_rail_offset
-                newSettings.third_rail_height = anchor.third_rail_height or newSettings.third_rail_height
+
             end
         end
         active = {
