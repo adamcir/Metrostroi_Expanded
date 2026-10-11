@@ -2026,6 +2026,11 @@ function Builder.AutoLoopClick(
         return false
     end
 
+    -- A safe loop is always a curved route, even if the user's last
+    -- fixed-module setting remains enabled. Otherwise the physical geometry
+    -- collapses the whole loop to one giant straight rigid chord.
+    local loopSettings = CopySettings(start.settings)
+    loopSettings.rigid_section = false
     local route = {
         points = {
             start.pos,
@@ -2042,7 +2047,7 @@ function Builder.AutoLoopClick(
                 or nil,
         },
         generated_points = result.points,
-        settings = CopySettings(start.settings),
+        settings = loopSettings,
         network = network ~= false,
         kind = "auto_loop",
     }
