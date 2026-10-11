@@ -1292,6 +1292,7 @@ local function CheckNativeCoverage(points, settings)
     end
     return true
 end
+Builder.CheckNativeCoverage = CheckNativeCoverage
 
 local function SpawnPolyline(points, settings, routeID)
     local entities = {}
@@ -1378,6 +1379,15 @@ local function RebuildActiveRoute(active)
         end
         if not routeID then return end
 
+        if active.settings.stock_models_only and Builder.CheckNativeCoverage then
+            local allowed, why = Builder.CheckNativeCoverage(
+                active.render_points, active.settings)
+            if not allowed then
+                active.native_model_error = why
+                return
+            end
+        end
+        active.native_model_error = nil
         local route = active.edit_route
         route.points = active.points
         route.anchors = active.anchors
@@ -2275,6 +2285,10 @@ function Builder.FinishRoute(ply, network)
     -- Undoing a saved route puts its endpoint back into edit mode. Adding
     -- points edits that same route in place; RMB only finishes the edit.
     if active.edit_route and #active.points >= 2 then
+        if active.native_model_error then
+            ply:ChatPrint("[MEX Track Builder] Cannot finish edit: " .. active.native_model_error)
+            return false
+        end
         Builder.Active[ply] = nil
         SetActiveStart(ply, nil)
         if IsValid(ply) then
