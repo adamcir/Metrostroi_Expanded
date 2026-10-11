@@ -169,12 +169,13 @@ local tunnelFloorMaterial = SolidMaterial("mex_track_tunnel_floor_v8", {
     "metro/metroconcrete004",
     "metro/metroconcrete001",
 }, "[0.48 0.46 0.43]")
-local contactMaterial = SolidMaterial("mex_track_contact_metro_v5", {
+local contactMaterial = SolidMaterial("mex_track_contact_metal_v9", {
+    "models/props_c17/metalladder003",
     "vgui/white",
-}, "[0.55 0.52 0.43]")
-local contactCoverMaterial = SolidMaterial("mex_track_contact_cover_v5", {
+}, "[0.53 0.55 0.55]")
+local contactCoverMaterial = SolidMaterial("mex_track_contact_yellow_v9", {
     "vgui/white",
-}, "[0.21 0.21 0.20]")
+}, "[0.78 0.61 0.21]")
 local insulatorMaterial = SolidMaterial("mex_track_contact_insulator_v5", {
     "vgui/white",
 }, "[0.46 0.35 0.23]")
@@ -184,6 +185,9 @@ local cableMaterial = SolidMaterial("mex_track_cable_matte_v8", {
 local cableBracketMaterial = SolidMaterial("mex_track_cable_bracket_v8", {
     "vgui/white",
 }, "[0.25 0.25 0.26]")
+local railClipMaterial = SolidMaterial("mex_track_rail_clips_v9", {
+    "vgui/white",
+}, "[0.26 0.27 0.29]")
 local ceilingBeamMaterial = SolidMaterial("mex_track_ceiling_beam_v8", {
     "metro/metroconcrete001",
     "models/props_c17/concretewall001a",
@@ -636,6 +640,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
                             sleeperLength, sleeperWidth, sleeperHeight,
                             tunnelType, radius, width, height, wall, trackCount, trackSpacing)
     local rails, sleepers, tunnel = {}, {}, {}
+    local railClips = {}
     local ballast, rings, walkway = {}, {}, {}
     local cables, clamps, beams, wallSeams = {}, {}, {}, {}
     local thirdRail = ent:GetNW2Bool("MEXThirdRail", true)
@@ -650,9 +655,18 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
     for lane = 1, trackCount do
         local middle = trackCount == 2 and (lane == 1 and -trackSpacing * 0.5 or trackSpacing * 0.5) or 0
         for _, y in ipairs({middle - gauge * 0.5, middle + gauge * 0.5}) do
+            -- Three-layer steel rail profile: broad base, slender web and
+            -- running head exactly at z=10 SU (Metrostroi rerail height).
+            -- Physics remains the old narrow continuous rail collision hull.
             AddBox(rails,
-                Vector(-half - 0.3, y - railWidth * 0.5, 0),
-                Vector(half + 0.3, y + railWidth * 0.5, 10))
+                Vector(-half - 0.35, y - railWidth * 0.88, 5.1),
+                Vector(half + 0.35, y + railWidth * 0.88, 6.5))
+            AddBox(rails,
+                Vector(-half - 0.35, y - 1.7, 6.4),
+                Vector(half + 0.35, y + 1.7, 8.9))
+            AddBox(rails,
+                Vector(-half - 0.35, y - railWidth * 0.5, 8.7),
+                Vector(half + 0.35, y + railWidth * 0.5, 10))
         end
     end
 
@@ -676,6 +690,15 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
             AddBox(sleepers,
                 Vector(x - sleeperWidth * 0.5, middle - sleeperLength * 0.5, sleeperBase),
                 Vector(x + sleeperWidth * 0.5, middle + sleeperLength * 0.5, sleeperTop))
+            -- Lightweight dark clips at each running rail/sleeper crossing.
+            for _, railY in ipairs({middle - gauge * 0.5, middle + gauge * 0.5}) do
+                for _, side in ipairs({-1, 1}) do
+                    local boltY = railY + side * (railWidth * 0.5 + 2.5)
+                    AddBox(railClips,
+                        Vector(x - 3.1, boltY - 1.9, sleeperTop),
+                        Vector(x + 3.1, boltY + 1.9, sleeperTop + 1.8))
+                end
+            end
         end
     end
 
@@ -777,6 +800,7 @@ local function CreateMeshes(ent, length, gauge, railWidth, sleeperSpacing,
         if result then meshes[#meshes + 1] = {mesh = result, material = mat} end
     end
     Keep(rails, railMaterial)
+    Keep(railClips, railClipMaterial)
     -- Separate mesh makes the diagnostic toggle free of regeneration.
     local sleeperMesh = MakeMesh(sleepers)
     if sleeperMesh then
@@ -825,7 +849,7 @@ function G.Draw(ent)
     -- Rebuild only when networked geometry SETTINGS change, never every frame.
     local uvStart = ent:GetNW2Float("MEXUVStart", 0)
     local key = string.format(
-        "metro-classic-v8/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
+        "metro-classic-rails-v9/%d/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%.2f/%s/%s/%.2f/%.2f/%.2f/%.2f/%d/%s/%.2f/%.2f/%.2f",
         trackCount, trackSpacing, length, gauge, rw, spacing, sl, sw, sh,
         tunnelType, tunnelStyle, radius, width, height, wall,
         thirdRail and 1 or 0, contactSide, contactOffset, contactHeight,
