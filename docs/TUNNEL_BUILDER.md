@@ -43,13 +43,15 @@ to rebuild and release client-side cached meshes.
 
 The tunnel used to render as a completely black shell, and the rails/pieces
 could show pink checkerboards when incompatible/missing materials were used.
-The fast renderer now resolves textures from the installed **original Metrostroi**
-material set:
-
-- `materials/models/metrostroi_tunnels/tunnelwall_002.vtf` – textured lining
-- `materials/models/metrostroi_tunnels/tunnelfloor_001.vtf` – floor/deck
-- `materials/models/metrostroi_tunnels/railroad_001.vtf` – rail bed
-- `materials/metrostroi/metro_contactrail_001.vtf` – contact rail
+For the **procedurally created parts**, the fast renderer uses
+tileable Metrostroi concrete from `metro/metroconcrete001`, with stock
+Source tileable concrete as fallback. Railroad/tunnelwall *atlases* from
+compiled Metrostroi prefabs are not UV-compatible with simple Lua meshes
+and must **not** be stretched over rectangular walls or straight rail bars.
+Solid dark cable/conductor covers and metal-running rails complement the
+concrete. The original `models/metrostroi/tracks/tunnel*.mdl` prefabs,
+when mounted and dimensionally compatible, still render with their genuine
+stock model materials and UVs.
 
 The runtime uses toned UnlitGeneric material variants so that walls still
 have visible detail when a construction map has **no baked tunnel lighting**.
@@ -61,16 +63,26 @@ white material instead of the error checkerboard. All stock materials and
 native models are referenced from the player's installed Metrostroi content,
 not bundled or redistributed by this repository.
 
-**Classic Metrostroi** appearance includes tubbing seams, side service
-walkways, a floor deck that hides grass below the bore, and the characteristic
-circular or rectangular profile. **Basic geometry** suppresses the panel seam
-ribs. The shell is still a procedural approximation on freely curved track.
+**Classic Metrostroi** appearance now includes surface-tiled
+concrete tunnel walls, six dark cable conduits on **each wall**, individual
+cable mounting brackets, concrete rectangular ceiling ribs at 192-SU
+intervals, panel seams, a concrete rail deck, side service walkways and
+the characteristic tunnel profile. Cable curves, clamps and beam spacing use
+the same global along-route distance as track/sleeper meshes and are batched
+by shared materials. On genuine straight original MDLs, these details come
+from the **stock model**, so we do not double-layer procedural cable racks.
+
+**Basic geometry** suppresses decorative cable/rib meshes and keeps the
+simple profile. Freely bendable tunnels are still procedural approximations;
+Lua cannot warp the actual compiled trackpack MDL into arbitrary curves.
 
 **Real installed Metrostroi MDLs**: a straight tunnel of the correct native
 length will automatically use mounted stock `tunnel64.mdl`,
 `tunnel256.mdl`, `tunnel1024.mdl` and their matching rectangular or double
-variants, without deforming the model. Straight routes are split into native
-lengths only when they are truly straight. Missing/incompatible models, curves,
+variants, without deforming the model. Truly straight routes are now
+partitioned **greedily into 1024, then 256, then 64 SU native lengths**
+(single-track); double-track originals use 1024 SU chunks. This reduces
+the number of runtime models and maximizes original classic prefabs. Missing/incompatible models, curves,
 and route remainders fall back to textured procedural geometry. This is
 toggleable via **Use real Metrostroi models on exact straight sections**.
 On fixed station sections you can instead select a valid custom Track Pack
