@@ -165,7 +165,8 @@ function TrackEntity:InstallNativeVisual(model, position, angles)
     visual:SetPos(position)
     visual:SetAngles(angles)
     visual:Spawn()
-    if not IsValid(visual) or visual:GetModel() ~= model then
+    if not IsValid(visual)
+        or string.lower(visual:GetModel() or "") ~= string.lower(model) then
         if IsValid(visual) then visual:Remove() end
         return false, "GMod could not spawn the original model: " .. model
     end
@@ -1828,6 +1829,20 @@ function Builder.AddPoint(ply, pos, settings, anchor)
         end
     end
 
+    if active.settings.rigid_section and active.settings.stock_models_only then
+        -- Fixed prefab placement must report an unsupported model BEFORE
+        -- accepting a second click. Waiting for RMB made it look as if the
+        -- tool had broken even when the player simply chose an unsupported
+        -- length/profile (notably double tracks under 1024 SU).
+        local trial = {active.points[1], pos}
+        local straight = Builder.BuildSmoothPoints(trial, active.settings, active.anchors)
+        local valid, reason = CheckNativeCoverage(straight, active.settings)
+        if not valid then
+            ply:ChatPrint("[MEX Track Builder] Cannot place original prefab: " .. reason)
+            return false
+        end
+    end
+
     active.points[#active.points + 1] = pos
 
     if istable(anchor) and isvector(anchor.dir) then
@@ -1838,6 +1853,12 @@ function Builder.AddPoint(ply, pos, settings, anchor)
 
     RebuildActiveRoute(active)
     SetActiveStart(ply, pos)
+    if active.native_model_error then
+        ply:ChatPrint("[MEX Track Builder] Preview unavailable: "
+            .. active.native_model_error)
+        -- Flexible routes can be extended to complete a genuine curved
+        -- model; never silently discard the accepted control point.
+    end
 
     return true
 end
