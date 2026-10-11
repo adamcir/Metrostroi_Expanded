@@ -1046,7 +1046,8 @@ local function SpawnSegment(a, b, settings, routeID, segmentIndex, uvStart)
     if nativeModel and available and packModel == "" then
         local modelPos, modelAng = Builder.Geometry.NativeStraightPose(
             ent:GetPos(), ent:GetAngles(), length, settings.track_count,
-            settings.pack_z_offset)
+            settings.pack_z_offset - (settings.stock_models_only
+                and 0 or Builder.Geometry.NativeModelLift))
         ent:InstallNativePhysics(nativeModel, modelPos, modelAng)
     elseif packModel ~= "" then
         -- Track Pack custom pieces can be physics-backed by their native .phy
@@ -1182,7 +1183,8 @@ local function PlanPolyline(points, settings)
         local index = 1
         while index < #geometryPoints - 2 and #modelCurves < 256 do
             local match = Builder.Geometry.MatchNativeCurve(geometryPoints, index, settings)
-            if match and util.IsValidModel(match.model) then
+            if match and util.IsValidModel(match.model)
+                and file.Exists(string.gsub(match.model, "%.mdl$", ".phy"), "GAME") then
                 -- Insert the precise arc-length boundary within an existing
                 -- physical chord. Endpoints remain on the spline, and
                 -- adjoining modules cannot drift across segment seams.
@@ -1223,7 +1225,8 @@ local function CheckNativeCoverage(points, settings)
             local length = geometryPoints[i]:Distance(geometryPoints[i + 1])
             local mdl = Builder.Geometry.SelectNativeTunnel(
                 settings.tunnel_type, settings.track_count, length)
-            if not mdl or not util.IsValidModel(mdl) then
+            if not mdl or not util.IsValidModel(mdl)
+                or not file.Exists(string.gsub(mdl or "", "%.mdl$", ".phy"), "GAME") then
                 return false, string.format(
                     "No matching original Metrostroi model for segment %d (%.1f SU). Use exact 64/256/1024 SU modules or a supported 3072/4096/8192 SU turn radius.",
                     i, length)
@@ -1262,7 +1265,8 @@ local function SpawnPolyline(points, settings, routeID)
                     -- tubbing/rail/sleeper/contact-rail module.
                     local nativePos, nativeAngle = Builder.Geometry.NativeCurvePose(
                         model.model_origin, model.model_angle, settings.track_count,
-                        settings.pack_z_offset)
+                        settings.pack_z_offset - (settings.stock_models_only
+                            and 0 or Builder.Geometry.NativeModelLift))
                     local installed = ent:InstallNativePhysics(model.model, nativePos, nativeAngle)
                     if installed then
                         model.native_physics_ok = true
