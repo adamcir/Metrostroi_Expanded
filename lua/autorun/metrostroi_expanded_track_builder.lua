@@ -24,20 +24,6 @@ local METROSTROI_RAIL_HEIGHT = 10
 local DEFAULT_TRACK_GAUGE = METROSTROI_INNER_GAUGE + METROSTROI_RAIL_WIDTH
 local METROSTROI_MODEL_GAUGE = DEFAULT_TRACK_GAUGE
 
--- Curved MEX track is built from Metrostroi's short 16-SU tile.
--- Long 1024/4096 models cannot bend and caused the huge rail "fan".
-local VALID_TRACK_MODELS = {
-    ["models/metrostroi/tracks/railroad16.mdl"] = true,
-}
-
-local function SafeTrackModel(model)
-    model = tostring(model or "")
-    if VALID_TRACK_MODELS[model] then
-        return model
-    end
-    return DEFAULT_TRACK_MODEL
-end
-
 local TrackEntity = {}
 TrackEntity.Type = "anim"
 TrackEntity.Base = "base_anim"
@@ -526,27 +512,18 @@ local function CopySettings(settings)
         tunnel_height = math.Clamp(tonumber(settings.tunnel_height) or 280, 230, 480),
         tunnel_wall = math.Clamp(tonumber(settings.tunnel_wall) or 12, 6, 32),
         tunnel_style = tostring(settings.tunnel_style) == "plain" and "plain" or "metrostroi",
-        auto_native_models = false,
-        -- Side conductor rail is separate from the two running rails; rendering
-        -- it does not create a conflicting wheel/bogey collision surface.
-        -- Stock models include the conductor rail already. The historical
-        -- addon-side third-rail controls are intentionally ignored.
-        stock_models_only = false,
         -- Keep a high-resolution Metrostroi rail graph, but use fewer
         -- physical entities on long straight and gently curved sections.
         geometry_tolerance = math.Clamp(tonumber(settings.geometry_tolerance) or 0.5, 0.1, 2),
         geometry_max_length = math.Clamp(tonumber(settings.geometry_max_length) or 192, 64, 256),
         -- Requested minimum radius is measured at the INNER track when double.
         min_curve_radius = math.Clamp(tonumber(settings.min_curve_radius) or 3072, 1024, 8192),
-        experimental_native_curves = false,
         track_count = tonumber(settings.track_count) == 2 and 2 or 1,
         track_spacing = math.Clamp(tonumber(settings.track_spacing) or 240, 180, 400),
         rigid_section = settings.rigid_section == true or tonumber(settings.rigid_section or 0) == 1,
         rigid_length = math.Clamp(tonumber(settings.rigid_length) or 0, 0, 1024),
         inherit_double_profile = settings.inherit_double_profile ~= false
             and tonumber(settings.inherit_double_profile or 1) ~= 0,
-        pack_model = "",
-        pack_z_offset = 0,
     }
 end
 
@@ -877,13 +854,10 @@ local function RebuildActiveRoute(active)
         end
         if not routeID then return end
 
-        if active.settings.stock_models_only and CheckTrackAssets then
-            local allowed, why = Builder.CheckTrackAssets(
-                active.render_points, active.settings)
-            if not allowed then
-                active.native_model_error = why
-                return
-            end
+        local allowed, why = CheckTrackAssets()
+        if not allowed then
+            active.native_model_error = why
+            return
         end
         active.native_model_error = nil
         local route = active.edit_route
@@ -1053,9 +1027,7 @@ local function NetworkPoints(route)
             local right = tangent:Cross(Vector(0, 0, 1))
             if right:LengthSqr() < 0.001 then right = Vector(0, -1, 0) end
             right:Normalize()
-            path[#path + 1] = point + right * sideways + Vector(0, 0,
-                METROSTROI_RAIL_HEIGHT + (settings.stock_models_only
-                    and (Builder.Geometry.NativeModelLift + settings.pack_z_offset) or 0))
+            path[#path + 1] = point + right * sideways + Vector(0, 0, METROSTROI_RAIL_HEIGHT)
         end
         result[#result + 1] = path
     end
@@ -1236,20 +1208,6 @@ function Builder.AddPoint(ply, pos, settings, anchor)
             ply:ChatPrint(string.format(
                 "[MEX Track Builder] Cannot build: curve radius %.0f SU is below minimum %.0f SU. Place control points farther apart or choose a wider bend.",
                 math.max(0, radius), active.settings.min_curve_radius))
-            return false
-        end
-    end
-
-    if active.settings.rigid_section and active.settings.stock_models_only then
-        -- Fixed prefab placement must report an unsupported model BEFORE
-        -- accepting a second click. Waiting for RMB made it look as if the
-        -- tool had broken even when the player simply chose an unsupported
-        -- length/profile (notably double tracks under 1024 SU).
-        local trial = {active.points[1], pos}
-        local straight = Builder.BuildSmoothPoints(trial, active.settings, active.anchors)
-        local valid, reason = CheckTrackAssets(straight, active.settings)
-        if not valid then
-            ply:ChatPrint("[MEX Track Builder] Cannot place original prefab: " .. reason)
             return false
         end
     end
@@ -1883,34 +1841,9 @@ function Builder.FinishRoute(ply, network)
     end
 
     if IsValid(ply) then
-        local realModels, nativeCurves, generated, missingModels = 0, 0, 0, 0
-        for _, piece in ipairs(finishedPieces) do
-            if IsValid(piece) then
-                if piece:GetNW2Bool("MEXCurveOwner", false) then
-                    nativeCurves = nativeCurves + 1
-                elseif piece:GetNW2Bool("MEXCurveCovered", false) then
-                    -- Additional physical segments underneath one authentic
-                    -- curved prefab are not separate procedural tunnel shells.
-                elseif piece:GetNW2Bool("MEXNativeAvailable", false) then
-                    realModels = realModels + 1
-                else
-                    generated = generated + 1
-                    if piece:GetNW2Bool("MEXNativeExpected", false) then
-                        missingModels = missingModels + 1
-                    end
-                end
-            end
-        end
         ply:ChatPrint(string.format(
-            "[MEX Track Builder] Route #%d: %d original straight models, %d original curved models, %d generated sections.",
-            routeID, realModels, nativeCurves, generated
-        ))
-        if missingModels > 0 then
-            ply:ChatPrint("[MEX Track Builder] Missing original models! Open Q > Track Builder > Check installed models.")
-        elseif generated > 0 and route.settings.auto_native_models
-            and route.settings.tunnel_type ~= "none" then
-            ply:ChatPrint("[MEX Track Builder] Curves or nonstandard lengths use generated segments. Fixed 64/256/1024 SU sections use genuine Metrostroi models.")
-        end
+            "[MEX Track Builder] Route #%d saved: %d original rail sections.",
+            routeID, #finishedPieces))
     end
 
     return true
@@ -2717,32 +2650,20 @@ hook.Add("InitPostEntity", "MEXTrackBuilderLoad", function()
     end)
 end)
 
--- Removing a whole saved route is deliberately separate from Undo (R).
--- Verify that both the visible stock model and its original model PHY
--- are actually installed after a map reload (not just valid names).
+-- Verify actual live static multi-convex physics on each route section.
 concommand.Add("mex_track_builder_collision_status", function(ply)
     if IsValid(ply) and not ply:IsAdmin() then return end
-    local installed, missing = 0, 0
+    local valid, invalid = 0, 0
     for _, ent in ipairs(ents.FindByClass(TRACK_CLASS)) do
-        if IsValid(ent) and ent:GetNW2Bool("MEXStockModelsOnly", false) then
-            local proxy = ent.MEXNativePhysicsProxy
-            if IsValid(proxy) and IsValid(proxy:GetPhysicsObject()) then
-                installed = installed + 1
-            elseif ent:GetNW2Bool("MEXCurveCovered", false)
-                and not ent:GetNW2Bool("MEXCurveOwner", false) then
-                -- These pieces intentionally share the preceding native
-                -- curved prefab's collision hull, rather than duplicating it.
-            else
-                missing = missing + 1
-            end
+        if IsValid(ent) and IsValid(ent:GetPhysicsObject()) then
+            valid = valid + 1
+        else
+            invalid = invalid + 1
         end
     end
-    local proxyCount = #ents.FindByClass("mex_track_native_collision")
-    local summary = string.format(
-        "[MEX Track Builder] Native stock physics: %d valid PHY parts, %d missing, %d shared collision proxies.",
-        installed, missing, proxyCount)
-    print(summary)
-    if IsValid(ply) then ply:ChatPrint(summary) end
+    local msg = string.format("[MEX Track Builder] Static rail collisions: %d OK, %d missing.", valid, invalid)
+    print(msg)
+    if IsValid(ply) then ply:ChatPrint(msg) end
 end)
 
 concommand.Add("mex_track_builder_delete_aimed_route", function(ply)
