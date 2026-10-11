@@ -136,7 +136,12 @@ function N.Candidate(start, yaw, aimed, settings)
         if not spec or spec.kind ~= mode then
             return nil, "No calibrated original junction profile is selected. Register its real model and ports first."
         end
-        if not ValidModel(spec.model) then return nil, "The original junction model is not installed." end
+        local selected = spec.variants and spec.variants[tostring(tonumber(settings.branch) or 2)] or spec.model
+        if spec.kind == "switch" and not spec.variants
+            and tonumber(settings.branch or 2) ~= 2 then
+            return nil, "This original switch has a fixed main route. Install and register matching main/diverging .phy model variants to enable port 3."
+        end
+        if not ValidModel(selected) then return nil, "The selected original junction model is not installed." end
         local ang = ModelAngles(yaw)
         local reference = V(spec.ports[1])
         reference:Rotate(ang)
@@ -147,7 +152,7 @@ function N.Candidate(start, yaw, aimed, settings)
         local portPos = origin + port - Vector(0, 0, 5)
         local yawOut = yaw + (tonumber(spec.ports[output][4]) or 0)
         result.parts[1] = {
-            model = spec.model, pos = P(origin), ang = {ang.p, ang.y, ang.r},
+            model = selected, pos = P(origin), ang = {ang.p, ang.y, ang.r},
             start = P(start), yaw = yaw, length = 0, lane = lane,
             junction = spec.id, branch = output,
         }
@@ -390,6 +395,13 @@ local function ValidProfile(profile)
         or (profile.kind ~= "switch" and profile.kind ~= "crossing")
         or not istable(profile.ports) or not istable(profile.paths) then return false end
     if #profile.ports ~= (profile.kind == "switch" and 3 or 4) then return false end
+    if profile.variants then
+        if profile.kind ~= "switch" or not istable(profile.variants)
+            or not isstring(profile.variants["2"])
+            or not isstring(profile.variants["3"]) then return false end
+        if not string.StartWith(profile.variants["2"], ROOT)
+            or not string.StartWith(profile.variants["3"], ROOT) then return false end
+    end
     for _, port in ipairs(profile.ports) do
         if not istable(port) or #port < 4 then return false end
         for j = 1, 4 do if not tonumber(port[j]) then return false end end
@@ -735,30 +747,48 @@ hook.Add("PlayerUse", "MEXNativeSwitchOperate", function(ply, ent)
     local route = N.Routes[ent:GetNW2Int("MEXNativeRoute", 0)]
     local part = route and route.parts[ent:GetNW2Int("MEXNativeIndex", 0)]
     if not part then return false end
-    -- Never throw a switch while a train or bogey occupies the section.
+    if not profile.variants then
+        Notify(ply, "Switch cannot move: calibrated main/diverging original MDL + .phy variants are not registered.")
+        return false
+    end
+    -- Never move physical switch rails under any train or bogey.
     for _, nearby in ipairs(ents.FindInSphere(ent:GetPos(), 512)) do
         if IsValid(nearby) and nearby ~= ent
             and (string.StartWith(nearby:GetClass(), "gmod_subway_")
                 or nearby:GetClass() == "gmod_train_bogey") then
-            Notify(ply, "Turnout is occupied by a train; switching blocked.")
+            Notify(ply, "Turnout occupied by a train; switching blocked.")
             return false
         end
     end
-    local choices = {}
-    for _, link in ipairs(profile.paths) do
-        if link[1] == 1 then choices[#choices + 1] = link[2]
-        elseif link[2] == 1 then choices[#choices + 1] = link[1] end
+    local nextBranch = part.branch == 2 and 3 or 2
+    local model = profile.variants[tostring(nextBranch)]
+    if not ValidModel(model) then
+        Notify(ply, "The alternative original switch model is missing.")
+        return false
     end
-    table.sort(choices)
-    if #choices < 2 then return false end
-    local index = table.KeyFromValue(choices, part.branch or choices[1]) or 1
-    part.branch = choices[index % #choices + 1]
-    ent:SetNW2Int("MEXNativeBranch", part.branch)
+    -- Source compiles collision into the MDL/PHY. Rebuilding physics after
+    -- switching models makes rails and collision select the same variant.
+    local prior = part.model
+    ent:SetModel(model)
+    ent:PhysicsInit(SOLID_VPHYSICS)
+    local phys = ent:GetPhysicsObject()
+    if not IsValid(phys) then
+        ent:SetModel(prior)
+        ent:PhysicsInit(SOLID_VPHYSICS)
+        local oldPhys = ent:GetPhysicsObject()
+        if IsValid(oldPhys) then oldPhys:EnableMotion(false) end
+        Notify(ply, "Alternative original switch .phy is missing. State unchanged.")
+        return false
+    end
+    phys:EnableMotion(false)
+    phys:Sleep()
+    part.model, part.branch = model, nextBranch
+    ent:SetNW2Int("MEXNativeBranch", nextBranch)
     Save()
     if MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
         MEXTrackBuilder.RebuildMetrostroiNetwork(ply)
     end
-    Notify(ply, "Turnout switched to port " .. part.branch .. ".")
+    Notify(ply, "Turnout switched to port " .. nextBranch .. ".")
     return false
 end)
 concommand.Add("mex_native_finish", function(ply) if IsValid(ply) then N.Finish(ply) end end)
@@ -790,6 +820,21 @@ concommand.Add("mex_native_register_junction", function(ply, _, args)
     file.Write(JUNCTION_FILE, util.TableToJSON(N.Junctions, true))
     SendProfiles()
     Notify(ply, "Original junction model and connector topology saved.")
+end)
+concommand.Add("mex_native_set_switch_variants", function(ply, _, args)
+    if IsValid(ply) and not ply:IsSuperAdmin() then return end
+    local id, mainModel, divergeModel = unpack(args)
+    local profile = id and N.Junctions[id]
+    if not profile or profile.kind ~= "switch"
+        or not ValidModel(mainModel) or not ValidModel(divergeModel) then
+        Notify(ply, "Usage: mex_native_set_switch_variants <registered_id> <original_main.mdl> <original_diverging.mdl>")
+        return
+    end
+    profile.variants = {["2"] = mainModel, ["3"] = divergeModel}
+    file.CreateDir("metrostroi_expanded")
+    file.Write(JUNCTION_FILE, util.TableToJSON(N.Junctions, true) or "{}")
+    SendProfiles()
+    Notify(ply, "Original moving-switch variants registered; .phy is checked during placement.")
 end)
 concommand.Add("mex_native_list_junction_models", function(ply)
     if IsValid(ply) and not ply:IsAdmin() then return end
