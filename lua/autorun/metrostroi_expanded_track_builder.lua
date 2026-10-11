@@ -159,13 +159,15 @@ if CLIENT then
             for i = 1, count do
                 local x = -length * 0.5 + (i - 0.5) * step
                 local target = self:LocalToWorld(Vector(x, lateral, 0))
-                piece:SetRenderOrigin(target - localAnchor)
-                piece:SetRenderAngles(rotation)
+                -- Updating RenderOrigin alone is cached incorrectly for
+                -- repeated draws of the same Source model. Move the actual
+                -- clientside model, then update its bones for each tile.
+                piece:SetPos(target - localAnchor)
+                piece:SetAngles(rotation)
+                piece:SetupBones()
                 piece:DrawModel()
             end
         end
-        piece:SetRenderOrigin(nil)
-        piece:SetRenderAngles(nil)
         return true
     end
 
