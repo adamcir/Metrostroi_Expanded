@@ -6,6 +6,10 @@ if SERVER then AddCSLuaFile() end
 MEXNativeTrack = MEXNativeTrack or {}
 local N = MEXNativeTrack
 local ROOT = "models/metrostroi/tracks/"
+if CLIENT then
+    CreateClientConVar("mex_native_outdoor_brightness", "0.85", true, false,
+        "Neutral model lighting for real Metrostroi surface railway prefabs", 0.35, 1.5)
+end
 -- Track-placement points sit at the original MDL's baseline, whereas a
 -- visible/snap marker belongs at the running rail surface. Never feed that
 -- display-only Z offset into another module's origin (it would stair-step).
@@ -71,7 +75,10 @@ function NativePiece:Draw()
     -- be inside grass/BSP, turning the long outside rail nearly black.
     -- Give ONLY these original MDLs neutral vertex-light fill, never replace
     -- the original materials or recolor their textures.
-    local fill = self:GetNW2Bool("MEXNativeSurface", false) and 0.78 or 0.55
+    local brightness = GetConVar("mex_native_outdoor_brightness")
+    local fill = self:GetNW2Bool("MEXNativeSurface", false)
+        and (brightness and math.Clamp(brightness:GetFloat(), 0.35, 1.5) or 0.85)
+        or 0.55
     render.SuppressEngineLighting(true)
     render.ResetModelLighting(fill, fill, fill)
     self:DrawModel()
