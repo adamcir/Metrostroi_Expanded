@@ -47,6 +47,71 @@ local TURNS = {
         single = {[3072] = {file = "tunnel3072_rect_turn1.mdl", parts = 3}},
     },
 }
+-- Measured directly from the *running-rail mesh* (railroad_001b)
+-- in the original PhoenixBlack/Metrostroi MDL/VVD files. The "turn1"
+-- models are TRANSITION curves, not constant-radius circular pieces.
+-- They start tangent along model +Y but end with a much SMALLER tangent
+-- sweep than 90/3, 90/4 or 90/8. Using circles with the nominal radius
+-- made the next piece start hundreds of SU away from the actual rail.
+-- Endpoints below are midpoints of the two LAST rail-end mesh vertices.
+local STOCK_CURVE_PORTS = {
+    [ROOT .. "tunnel3072_turn1.mdl"] = {
+        x = -297.195, y = 1623.610, sweep = 23.490,
+        track = {0, -1.6, -6.1, -12.9, -24, -39.6, -58.7,
+            -75.1, -102.2, -135.6, -173.2, -215.4, -259.2},
+    },
+    [ROOT .. "tunnel3072_rect_turn1.mdl"] = {
+        x = -297.195, y = 1623.610, sweep = 23.490,
+        track = {0, -1.6, -6.1, -12.9, -24, -39.6, -58.7,
+            -75.1, -102.2, -135.6, -173.2, -215.4, -259.2},
+    },
+    [ROOT .. "tunnel4096_turn1.mdl"] = {
+        x = -205.630, y = 1644.390, sweep = 16.300,
+        track = {0, -1.3, -4.6, -9.6, -17.7, -28.9, -40.2,
+            -54.3, -73.3, -96.6, -122.6, -152.6, -181.3},
+    },
+    [ROOT .. "tunnel8192_turn1.mdl"] = {
+        x = -89.665, y = 1658.955, sweep = 6.830,
+        track = {0, -0.8, -2.4, -4.9, -8.7, -13.1, -19.3,
+            -25.8, -34.5, -44.9, -54.4, -67.6, -79.4},
+    },
+}
+-- X samples in the stock mesh above are at Y=0,128,...1536.
+-- Explicit final endpoints are exact rail-end cross-section centers.
+local function StockCurveProfile(model)
+    return STOCK_CURVE_PORTS[string.lower(tostring(model or ""))]
+end
+local function RotateLocal(localPoint, angle)
+    local out = Vector(localPoint.x, localPoint.y, localPoint.z)
+    out:Rotate(angle)
+    return out
+end
+local function StockCurveWorldPart(start, yaw, model, turn, radius, lane)
+    local profile = StockCurveProfile(model)
+    if not profile then return nil end
+    local left = turn == -1
+    local localExit = Vector(profile.x, profile.y, 0)
+    local sweep = profile.sweep
+    local poseYaw = left and yaw or (yaw - sweep + 180)
+    local ang = ModelAngles(poseYaw)
+    -- For a LEFT curve the authored origin is the requested input node.
+    -- For a RIGHT curve the authored track is traversed BACKWARDS:
+    -- the model's real EXIT (not its origin) must meet the current node.
+    local baseOrigin = left and start or (start - RotateLocal(localExit, ang))
+    local worldStart = baseOrigin
+    local worldEnd = baseOrigin + RotateLocal(localExit, ang)
+    local finish = left and worldEnd or worldStart
+    local mdlOrigin = baseOrigin + Vector(0, 0, MODEL_LIFT)
+    if lane == "double" then mdlOrigin = mdlOrigin + ang:Forward() * 132 end
+    return {
+        model = model, pos = P(mdlOrigin), ang = {ang.p, ang.y, ang.r},
+        start = P(start), finish = P(finish), yaw = yaw,
+        length = math.sqrt(profile.x * profile.x + profile.y * profile.y),
+        lane = lane, turn = turn, radius = radius, sweep = sweep,
+        calibrated = true,
+    }, finish, yaw + (left and sweep or -sweep)
+end
+
 N.Junctions = N.Junctions or {}
 
 -- A native scripted static prop uses the original MDL for BOTH rendering
@@ -181,24 +246,15 @@ function N.Candidate(start, yaw, aimed, settings)
         -- The optional size fallback always uses a REAL installed prefab.
         -- Geometry, endpoint connectors, and network paths all use its TRUE
         -- nominal radius, never the uninstalled radius requested by the tool.
-        local sweep = 90 / spec.parts
         local sign = mode == "curve_right" and 1 or -1
-        local angle = math.rad(sweep)
-        local finish = start + Direction(yaw) * (radius * math.sin(angle))
-            + Right(yaw) * (sign * radius * (1 - math.cos(angle)))
-        local finalYaw = yaw - sign * sweep
-        local pose
-        if sign == 1 then
-            pose = Placement(start, yaw, ROOT .. spec.file, radius * angle, lane, sign, radius, sweep)
-        else
-            -- Reversing the original right-handed arc yields a left curve,
-            -- without mirroring the mesh or changing its contact rail.
-            pose = Placement(finish, finalYaw + 180, ROOT .. spec.file,
-                radius * angle, lane, sign, radius, sweep)
+        local model = ROOT .. spec.file
+        local part, finish, exitYaw = StockCurveWorldPart(
+            start, yaw, model, sign, radius, lane)
+        if not part then
+            return nil, "This original curve has no verified rail-end coordinates."
         end
-        pose.start, pose.finish = P(start), P(finish)
-        result.parts[1] = pose
-        result.pos, result.yaw = finish, finalYaw
+        result.parts[1] = part
+        result.pos, result.yaw = finish, exitYaw
         return result
     end
     if mode == "switch" or mode == "crossing" then
@@ -298,13 +354,41 @@ function N.ModulePaths(part)
                 nodes[#nodes + 1] = V(part.start) + Direction(part.yaw) * (part.length * i / steps)
             end
         else
-            local sweep = math.rad(part.sweep)
-            local steps = math.max(2, math.ceil(part.radius * sweep / 64))
-            for step = 0, steps do
-                local q = sweep * step / steps
-                nodes[#nodes + 1] = V(part.start)
-                    + Direction(part.yaw) * (part.radius * math.sin(q))
-                    + Right(part.yaw) * (part.turn * part.radius * (1 - math.cos(q)))
+            -- The original "turn1" models are eased transition track. Their
+            -- measured running-rail centerlines are NOT nominal circles.
+            -- Transform the exact model-local rail path. For right curves
+            -- traverse its mesh in reverse instead of drawing a false arc.
+            local profile = StockCurveProfile(part.model)
+            if profile then
+                local ang = Angle(part.ang[1], part.ang[2], part.ang[3])
+                local authoredOrigin = V(part.pos) - Vector(0, 0, MODEL_LIFT)
+                if part.lane == "double" then
+                    authoredOrigin = authoredOrigin - ang:Forward() * 132
+                end
+                local points = {{x = 0, y = 0}}
+                for i = 2, #profile.track do
+                    points[#points + 1] = {x = profile.track[i], y = (i - 1) * 128}
+                end
+                points[#points + 1] = {x = profile.x, y = profile.y}
+                if part.turn == 1 then
+                    local rev = {}
+                    for i = #points, 1, -1 do rev[#rev + 1] = points[i] end
+                    points = rev
+                end
+                for _, point in ipairs(points) do
+                    nodes[#nodes + 1] = authoredOrigin +
+                        RotateLocal(Vector(point.x, point.y, 0), ang)
+                end
+            else
+                local sweep = math.rad(part.sweep)
+                local steps = math.max(2, math.ceil(part.radius * sweep / 64))
+                for step = 0, steps do
+                    local q = sweep * step / steps
+                    nodes[#nodes + 1] = V(part.start)
+                        + Direction(part.yaw) * (part.radius * math.sin(q))
+                        + Right(part.yaw) * (part.turn *
+                            part.radius * (1 - math.cos(q)))
+                end
             end
         end
         if part.lane ~= "double" then return {nodes} end
