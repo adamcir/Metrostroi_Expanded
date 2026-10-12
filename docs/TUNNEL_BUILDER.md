@@ -42,6 +42,20 @@ clicking a connector. Double-track curves expose two rail connectors per end,
 based on their OWN unique model pivot, not a copied straight-track pivot.
 Internal joined ports are hidden.
 
+**Precision fixes:** clicking anywhere on a saved original rail module now
+selects its nearest actual saved end port, not the wall/track hit position.
+The client ghost uses that exact same model port before clicking, preventing
+the preview and the built model from jumping to different places. Curved
+module ports are recalibrated from the installed Metrostroi model's actual
+railhead vertex meshes when accessible. Measurements are cached; verified
+original stock rail-end coordinates remain as fallback for versions where
+the railhead mesh cannot be extracted. Saved older curved sections are
+recalibrated on map load **without moving the visible models**.
+
+Use `mex_native_curve_assets` to view each installed original curved
+model's port coordinates and whether the result is **MESH-MEASURED** or
+**STOCK-CALIBRATED**.
+
 ### Original stock model catalog
 
 Models are referenced by path under `models/metrostroi/tracks/`.
