@@ -253,7 +253,7 @@ local function StockCurveProfile(model)
     model = string.lower(tostring(model or ""))
     local fallback = STOCK_CURVE_PORTS[model]
     if not fallback then return nil end
-    if not curveMeshCache[model] then
+    if curveMeshCache[model] == nil then
         curveMeshCache[model] = DetectCurveRailMesh(model, fallback) or false
     end
     return curveMeshCache[model] or fallback
