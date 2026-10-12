@@ -1323,7 +1323,7 @@ end
 concommand.Add("mex_native_realign_routes", function(ply)
     if IsValid(ply) and not ply:IsAdmin() then return end
     local raw = file.Read(FILE, "DATA") or "{}"
-    local backup = FILE .. ".before_manual_realign"
+    local backup = string.gsub(FILE, "%.json$", "_before_manual_realign.json")
     if not file.Exists(backup, "DATA") then file.Write(backup, raw) end
     local count = 0
     for id, current in ipairs(N.Routes) do
@@ -1364,8 +1364,19 @@ hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
     local raw = file.Read(FILE, "DATA") or "{}"
     local decoded = util.JSONToTable(raw) or {}
     local upgrade = (tonumber(decoded.version) or 1) < 2
+    if not upgrade then
+        for _, route in ipairs(decoded.routes or {}) do
+            for _, part in ipairs(route.parts or {}) do
+                if StockCurveProfile(part.model) and not part.calibrated then
+                    upgrade = true
+                    break
+                end
+            end
+            if upgrade then break end
+        end
+    end
     if upgrade and istable(decoded.routes) and #decoded.routes > 0 then
-        local backup = FILE .. ".before_native_ports_v2"
+        local backup = string.gsub(FILE, "%.json$", "_before_native_ports_v2.json")
         if not file.Exists(backup, "DATA") then file.Write(backup, raw) end
         for _, saved in ipairs(decoded.routes) do
             if istable(saved) then RecalibrateRoute(saved) end
