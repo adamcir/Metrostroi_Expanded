@@ -34,10 +34,12 @@ Open **Q → Tools → Metrostroi Expanded → Track Builder**.
    from the selective **R** delete action.
 
 Green markers indicate available starts, orange markers indicate free ends.
-Internal joined module ports are hidden. A double-track model exposes its
-four rail-end ports, two per end, but snaps the tunnel centerline for continued
-double-track construction. Unconnected endpoints stay visible while the tool
-is selected.
+These include both ends of **original curved track sections**. Node markers
+are rendered at the **running rail surface**, not the terrain or model pivot;
+actual connection geometry retains its separate world-space baseline, so
+successive sections cannot step upward by 10 SU per click. A double-track model
+exposes all four rail-end ports, two per end, and snaps the tunnel centerline
+for double-track continuation. Internal joined ports are hidden.
 
 ### Original stock model catalog
 
@@ -56,9 +58,16 @@ They are **not copied or redistributed by MEX**.
 
 The available catalog depends on installed Metrostroi content. Missing
 original files cause an explicit construction error, **not** a fallback
-generated model. Curves use the original turn1 prefab's nominal sweep
-(30°, 22.5° or 11.25°, depending on radius). To turn left the same
-prefab is reversed in direction, not stretched or mirrored.
+generated model. For a requested radius not mounted, the tool selects the
+**closest radius with a real installed original matching curved MDL** and
+displays the effective radius. If no real curved MDL exists for the selected
+tunnel layout, the preview shows an error rather than a misleading straight
+module. Use `mex_native_curve_assets` or the matching Track Builder button
+to list actual model availability.
+
+Curves use the original turn1 prefab's nominal sweep (30°, 22.5° or 11.25°,
+depending on radius). To turn left the same prefab is reversed in direction,
+not stretched or mirrored.
 
 **Important:** The exact model pivot, turn1 geometry, wheel contact and
 double-track centers must be validated against the mounted model version
@@ -158,6 +167,10 @@ finish. Check the GMod server console for full errors.
 - An actual diamond crossing or moving turnout is only constructible after
   the relevant real model and **measured** ports are registered. There is no
   bundled, invented generic junction asset.
+- Model lighting: original static-asset textures are preserved. Native model
+  rendering adds scoped neutral fill illumination because long Source scripted
+  entities often sample map lighting underneath terrain and appear black.
+  Grey preview modules get brighter neutral illumination too.
 - Current stock centerline assumptions and turn1 pivots are not verified live.
   First test a 64/256 SU single straight, a curve in each direction, a
   double-track module, then a registered crossing/switch on a test map.
