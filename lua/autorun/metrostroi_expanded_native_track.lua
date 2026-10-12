@@ -56,12 +56,12 @@ local TURNS = {
 -- Endpoints below are midpoints of the two LAST rail-end mesh vertices.
 local STOCK_CURVE_PORTS = {
     [ROOT .. "tunnel3072_turn1.mdl"] = {
-        x = -297.195, y = 1623.610, sweep = 23.490,
+        x = -297.195, y = 1623.610, sweep = 24.494,
         track = {0, -1.6, -6.1, -12.9, -24, -39.6, -58.7,
             -75.1, -102.2, -135.6, -173.2, -215.4, -259.2},
     },
     [ROOT .. "tunnel3072_rect_turn1.mdl"] = {
-        x = -297.195, y = 1623.610, sweep = 23.490,
+        x = -297.195, y = 1623.610, sweep = 24.494,
         track = {0, -1.6, -6.1, -12.9, -24, -39.6, -58.7,
             -75.1, -102.2, -135.6, -173.2, -215.4, -259.2},
     },
