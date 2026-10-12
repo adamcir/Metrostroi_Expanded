@@ -169,8 +169,94 @@ local STOCK_CURVE_PORTS = {
 }
 -- X samples in the stock mesh above are at Y=0,128,...1536.
 -- Explicit final endpoints are exact rail-end cross-section centers.
+-- Calibrate attachment ports from the railhead vertices of the exact
+-- installed original MDL, NOT from the tunnel shell's OBB or a nominal R
+-- circle. This handles different Workshop revisions of original turn1
+-- models. No geometry is generated: vertices are inspected only to locate
+-- the existing authored track end faces.
+local curveMeshCache = {}
+local function DetectCurveRailMesh(model, fallback)
+    if not util.GetModelMeshes then return nil end
+    local ok, meshes = pcall(util.GetModelMeshes, model, 0)
+    if not ok or not istable(meshes) then return nil end
+    local selected = {}
+    local lowY, highY = math.huge, -math.huge
+    for _, meshData in ipairs(meshes) do
+        local material = string.lower(tostring(meshData.material or ""))
+        -- The stock railhead material was used to measure the original
+        -- turn1 profiles. Do not include sleeper, tunnel wall or third-rail
+        -- meshes, which have different local offsets and endpoints.
+        if string.find(material, "railroad_001b", 1, true) then
+            local vertices = meshData.verticies or meshData.triangles or {}
+            selected[#selected + 1] = vertices
+            for _, vertex in ipairs(vertices) do
+                local pos = vertex.pos
+                if isvector(pos) then
+                    lowY = math.min(lowY, pos.y)
+                    highY = math.max(highY, pos.y)
+                end
+            end
+        end
+    end
+    if #selected == 0 or highY - lowY < 1024
+        or highY - lowY > 2048 then return nil end
+    -- Average BOTH running railhead strips at regular original-model
+    -- intervals. The midpoint of those rails is the true track center.
+    local span = highY - lowY
+    local samples = {}
+    for i = 0, 12 do
+        samples[#samples + 1] = {x = 0, y = lowY + span * i / 12,
+            count = 0}
+    end
+    for _, vertices in ipairs(selected) do
+        for _, vertex in ipairs(vertices) do
+            local pos = vertex.pos
+            if isvector(pos) then
+                local t = (pos.y - lowY) / span * 12
+                local index = math.Clamp(math.floor(t + 0.5) + 1, 1, 13)
+                local sample = samples[index]
+                if math.abs(pos.y - sample.y) < 20 then
+                    sample.x = sample.x + pos.x
+                    sample.count = sample.count + 1
+                end
+            end
+        end
+    end
+    local valid = {}
+    for _, sample in ipairs(samples) do
+        if sample.count >= 4 then
+            valid[#valid + 1] = {x = sample.x / sample.count,
+                y = sample.y}
+        end
+    end
+    if #valid < 6 then return nil end
+    local first, last = valid[1], valid[#valid]
+    -- End caps must be represented. Otherwise intermediate strips would be
+    -- mistaken for connector faces and shift the next section into a gap.
+    if first.y - lowY > 24 or highY - last.y > 24 then return nil end
+    if math.abs(first.x - (fallback.entryX or 0)) > 96
+        or math.abs(last.x - fallback.x) > 96
+        or math.abs(last.y - fallback.y) > 96 then return nil end
+    local preceding = valid[#valid - 1]
+    local dx = last.x - preceding.x
+    local dy = last.y - preceding.y
+    local angle = math.deg(math.atan2(-dx, dy))
+    if angle < 0 or angle > 45 then angle = fallback.sweep end
+    return {
+        entryX = first.x, entryY = first.y,
+        x = last.x, y = last.y, sweep = angle,
+        samples = valid,
+    }
+end
+
 local function StockCurveProfile(model)
-    return STOCK_CURVE_PORTS[string.lower(tostring(model or ""))]
+    model = string.lower(tostring(model or ""))
+    local fallback = STOCK_CURVE_PORTS[model]
+    if not fallback then return nil end
+    if not curveMeshCache[model] then
+        curveMeshCache[model] = DetectCurveRailMesh(model, fallback) or false
+    end
+    return curveMeshCache[model] or fallback
 end
 local function RotateLocal(localPoint, angle)
     local out = Vector(localPoint.x, localPoint.y, localPoint.z)
@@ -181,7 +267,7 @@ local function StockCurveWorldPart(start, yaw, model, turn, radius, lane)
     local profile = StockCurveProfile(model)
     if not profile then return nil end
     local left = turn == -1
-    local localStart = Vector(profile.entryX or 0, 0, 0)
+    local localStart = Vector(profile.entryX or 0, profile.entryY or 0, 0)
     local localEnd = Vector(profile.x, profile.y, 0)
     local sweep = profile.sweep
     -- The measured original track mesh bends toward local negative X.
@@ -379,11 +465,19 @@ function N.ModulePaths(part)
             if profile then
                 local ang = Angle(part.ang[1], part.ang[2], part.ang[3])
                 local authoredOrigin = V(part.pos) - Vector(0, 0, MODEL_LIFT)
-                local points = {{x = profile.entryX or 0, y = 0}}
-                for i = 2, #profile.track do
-                    points[#points + 1] = {x = profile.track[i], y = (i - 1) * 128}
+                local points = {}
+                if profile.samples then
+                    for _, sample in ipairs(profile.samples) do
+                        points[#points + 1] = sample
+                    end
+                else
+                    points[1] = {x = profile.entryX or 0, y = profile.entryY or 0}
+                    for i = 2, #profile.track do
+                        points[#points + 1] = {x = profile.track[i],
+                            y = (i - 1) * 128}
+                    end
+                    points[#points + 1] = {x = profile.x, y = profile.y}
                 end
-                points[#points + 1] = {x = profile.x, y = profile.y}
                 if part.turn == 1 then
                     local rev = {}
                     for i = #points, 1, -1 do rev[#rev + 1] = points[i] end
