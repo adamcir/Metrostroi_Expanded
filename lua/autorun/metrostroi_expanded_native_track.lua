@@ -1315,6 +1315,43 @@ local function RecalibrateRoute(route)
     return changed
 end
 
+-- A manual one-shot repair for worlds loaded before the update (for
+-- example GMod Lua auto-refresh without a full map restart).
+concommand.Add("mex_native_realign_routes", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local raw = file.Read(FILE, "DATA") or "{}"
+    local backup = FILE .. ".before_manual_realign"
+    if not file.Exists(backup, "DATA") then file.Write(backup, raw) end
+    local count = 0
+    for id, current in ipairs(N.Routes) do
+        local candidate = table.Copy(current)
+        if RecalibrateRoute(candidate) then
+            candidate.id = id
+            local props, err = SpawnRoute(candidate)
+            if props then
+                RemoveProps(id)
+                N.Routes[id], N.Props[id] = candidate, props
+                count = count + 1
+            else
+                print("[MEX Native Track] Route #" .. id ..
+                    " calibration rejected: " .. tostring(err))
+            end
+        end
+    end
+    if count > 0 then
+        Save()
+        if MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
+            MEXTrackBuilder.RebuildMetrostroiNetwork(ply)
+        end
+    end
+    print("[MEX Native Track] Realigned " .. count ..
+        " saved routes using measured rail seam vertices.")
+    if IsValid(ply) then
+        ply:ChatPrint("[MEX Native Track] Realigned " .. count ..
+            " routes; original save backup retained.")
+    end
+end)
+
 hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
     file.CreateDir("metrostroi_expanded")
     local profiles = util.JSONToTable(file.Read(JUNCTION_FILE, "DATA") or "{}") or {}
