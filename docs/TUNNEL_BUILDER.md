@@ -170,9 +170,12 @@ finish. Check the GMod server console for full errors.
 - Model lighting: original static-asset textures are preserved. Native model
   rendering adds scoped neutral fill illumination because long Source scripted
   entities often sample map lighting underneath terrain and appear black.
-  Grey preview modules get brighter neutral illumination too. The **Outdoor
-  rail model brightness** slider adjusts original surface MDL lighting
-  without recoloring the textures; its client cvar is
+  Grey preview modules get brighter neutral illumination too. MEX checks
+  for an unobstructed sky above the MDL at spawn time, so above-ground
+  Metrostroi tunnel pieces receive daylight fill as well as standalone
+  surface railway pieces. Buried tunnels retain softer fill illumination.
+  The **Outdoor rail model brightness** slider adjusts the lighting without
+  recoloring original textures; its client cvar is
   `mex_native_outdoor_brightness` (default 0.85).
 - Current stock centerline assumptions and turn1 pivots are not verified live.
   First test a 64/256 SU single straight, a curve in each direction, a
