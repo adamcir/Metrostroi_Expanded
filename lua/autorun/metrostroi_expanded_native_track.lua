@@ -873,7 +873,18 @@ if CLIENT then
                     local ok = ValidModel(model)
                     print(string.format("  [%s] %s / %s / R%d: %s",
                         ok and "OK" or "MISSING", family, layout, radius, model))
-                    if ok then installed = installed + 1 end
+                    if ok then
+                        installed = installed + 1
+                        local profile = StockCurveProfile(model)
+                        if profile then
+                            print(string.format(
+                                "      %s rail-end ports: (%.2f,%.2f) -> (%.2f,%.2f), exit sweep %.2f degrees",
+                                profile.samples and "MESH-MEASURED" or "STOCK-CALIBRATED",
+                                profile.entryX or 0, profile.entryY or 0,
+                                profile.x, profile.y, profile.sweep
+                            ))
+                        end
+                    end
                 end
             end
         end
