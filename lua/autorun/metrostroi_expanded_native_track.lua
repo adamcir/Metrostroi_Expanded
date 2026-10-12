@@ -496,21 +496,24 @@ if CLIENT then
                 N.PreviewCurveRadius = nil
             end
         else
-            -- Always show a real grey stock model even when the aimed route
-            -- cannot yet be assembled. The HUD explains the rejected route;
-            -- no fabricated replacement section is drawn.
-            -- In idle mode preview begins at the cursor, with an active route
-            -- the original model starts exactly at the current free endpoint.
-            local tunnel, lane = Settings(settings)
-            local kit = KIT[tunnel] and KIT[tunnel][lane]
-            local name
-            for _, len in ipairs({64, 256, 1024, 4096}) do
-                if kit and kit[len] and ValidModel(ROOT .. kit[len]) then
-                    name = ROOT .. kit[len]
-                    break
+            -- Never draw an unrelated STRAIGHT MDL when a curved tunnel is
+            -- requested but not installed: its apparent endpoints would be
+            -- wrong and the next click could never actually place it.
+            -- In straight mode show a valid original sample at the cursor.
+            if settings.mode == "straight" then
+                local tunnel, lane = Settings(settings)
+                local kit = KIT[tunnel] and KIT[tunnel][lane]
+                local name, realLength
+                for _, len in ipairs({64, 256, 1024, 4096}) do
+                    if kit and kit[len] and ValidModel(ROOT .. kit[len]) then
+                        name, realLength = ROOT .. kit[len], len
+                        break
+                    end
+                end
+                if name then
+                    DrawGhost(Placement(origin, yaw, name, realLength, lane), 1, false)
                 end
             end
-            if name then DrawGhost(Placement(origin, yaw, name, 64, lane), 1, false) end
         end
         render.SetColorMaterial()
         local eye, aimDir = ply:GetShootPos(), ply:GetAimVector()
@@ -593,6 +596,32 @@ if CLIENT then
     end)
     hook.Add("ShutDown", "MEXNativeGhostCleanup", function()
         for _, ghost in pairs(ghosts) do if IsValid(ghost) then ghost:Remove() end end
+    end)
+    concommand.Add("mex_native_curve_assets", function()
+        local installed = 0
+        print("[MEX Native Track] Original curved model availability:")
+        for family, layouts in pairs(TURNS) do
+            for layout, specs in pairs(layouts) do
+                for radius, spec in pairs(specs) do
+                    local model = ROOT .. spec.file
+                    local ok = ValidModel(model)
+                    print(string.format("  [%s] %s / %s / R%d: %s",
+                        ok and "OK" or "MISSING", family, layout, radius, model))
+                    if ok then installed = installed + 1 end
+                end
+            end
+        end
+        local available = file.Find(ROOT .. "*.mdl", "GAME") or {}
+        print("[MEX Native Track] Other mounted original curve candidates:")
+        for _, name in ipairs(available) do
+            if string.find(name, "turn", 1, true)
+                or string.find(name, "curve", 1, true) then
+                print("    " .. ROOT .. name)
+            end
+        end
+        chat.AddText(Color(230, 230, 230),
+            "[MEX Track Builder] " .. installed ..
+            " original curve profiles installed. See client console for exact filenames.")
     end)
     net.Receive("MEXNativeJunctionProfiles", function()
         local decoded = util.JSONToTable(net.ReadString() or "") or {}
