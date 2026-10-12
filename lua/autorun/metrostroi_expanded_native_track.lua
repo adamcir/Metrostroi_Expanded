@@ -151,12 +151,27 @@ function N.Candidate(start, yaw, aimed, settings)
         return result
     end
     if mode == "curve_left" or mode == "curve_right" then
-        local radius = tonumber(settings.radius) or 4096
-        local spec = TURNS[tunnel] and TURNS[tunnel][lane]
-        spec = spec and spec[radius]
-        if not spec or not ValidModel(ROOT .. spec.file) then
-            return nil, "Original turn1 model not found for this radius, tunnel and layout."
+        local requestedRadius = tonumber(settings.radius) or 4096
+        local profiles = TURNS[tunnel] and TURNS[tunnel][lane]
+        if not profiles then
+            return nil, "No original curved tunnel is catalogued for this layout."
         end
+        local radius, spec
+        local bestDifference = math.huge
+        for nominal, available in pairs(profiles) do
+            if ValidModel(ROOT .. available.file) then
+                local diff = math.abs(nominal - requestedRadius)
+                if diff < bestDifference then
+                    radius, spec, bestDifference = nominal, available, diff
+                end
+            end
+        end
+        if not spec then
+            return nil, "No authentic turn1 MDL is mounted for this tunnel layout. Install the Metrostroi track models."
+        end
+        -- The optional size fallback always uses a REAL installed prefab.
+        -- Geometry, endpoint connectors, and network paths all use its TRUE
+        -- nominal radius, never the uninstalled radius requested by the tool.
         local sweep = 90 / spec.parts
         local sign = mode == "curve_right" and 1 or -1
         local angle = math.rad(sweep)
@@ -452,13 +467,34 @@ if CLIENT then
         }
         local candidate, errorText = N.Candidate(origin, yaw, aim, settings)
         N.PreviewError = candidate and nil or errorText
+        N.PreviewCurveRadius = nil
         if candidate and #candidate.parts > 0 then
             for i, part in ipairs(candidate.parts) do
                 if i <= 64 then DrawGhost(part, i, false) end
             end
             render.SetColorMaterial()
-            render.DrawWireframeSphere(origin, 9, 9, 9, Color(55, 245, 120), true)
-            render.DrawWireframeSphere(candidate.pos, 9, 9, 9, Color(255, 185, 70), true)
+            -- Show attachment markers at the ACTUAL final rail surface and
+            -- independently at both lanes of double-track original modules.
+            -- Do not render green/orange spheres at the ground-level origin.
+            local firstPorts = N.ModulePorts(candidate.parts[1])
+            local lastPorts = N.ModulePorts(candidate.parts[#candidate.parts])
+            for _, port in ipairs(firstPorts) do
+                if port.start then
+                    render.DrawWireframeSphere(port.pos, 9, 10, 10,
+                        Color(55, 245, 120), true)
+                end
+            end
+            for _, port in ipairs(lastPorts) do
+                if port.start == false then
+                    render.DrawWireframeSphere(port.pos, 9, 10, 10,
+                        Color(255, 185, 70), true)
+                end
+            end
+            if settings.mode == "curve_left" or settings.mode == "curve_right" then
+                N.PreviewCurveRadius = candidate.parts[1].radius
+            else
+                N.PreviewCurveRadius = nil
+            end
         else
             -- Always show a real grey stock model even when the aimed route
             -- cannot yet be assembled. The HUD explains the rejected route;
@@ -502,7 +538,8 @@ if CLIENT then
             end
         end
         if active then
-            render.DrawWireframeSphere(origin, 9, 9, 9, Color(60, 245, 110), true)
+            render.DrawWireframeSphere(RenderPort(origin), 9, 9, 9,
+                Color(60, 245, 110), true)
         end
     end)
     -- The tool shows exactly what R will delete before the key is pressed.
@@ -540,11 +577,19 @@ if CLIENT then
     hook.Add("HUDPaint", "MEXNativeTrackPreviewWarning", function()
         if not Tool() or not N.PreviewError then return end
         draw.SimpleTextOutlined(
-            "Original model unavailable: " .. N.PreviewError,
+            "Cannot place original model: " .. N.PreviewError,
             "DermaDefaultBold", ScrW() * 0.5, ScrH() * 0.72,
             Color(255, 160, 100), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
             1, Color(0, 0, 0, 220)
         )
+    end)
+    hook.Add("HUDPaint", "MEXNativeTrackCurveRadiusInfo", function()
+        if not Tool() or not N.PreviewCurveRadius then return end
+        draw.SimpleTextOutlined("Original curve radius: " ..
+            tostring(N.PreviewCurveRadius) .. " SU",
+            "DermaDefaultBold", ScrW() * 0.5, ScrH() * 0.68,
+            Color(235, 235, 235), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
+            1, Color(0, 0, 0, 220))
     end)
     hook.Add("ShutDown", "MEXNativeGhostCleanup", function()
         for _, ghost in pairs(ghosts) do if IsValid(ghost) then ghost:Remove() end end
