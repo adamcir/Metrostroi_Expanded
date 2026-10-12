@@ -562,8 +562,6 @@ if CLIENT then
         local aim = tr.Hit and not tr.HitSky and tr.HitPos
             or (ply:GetShootPos() + ply:GetAimVector() * 800)
         local active = ply:GetNW2Bool("MEXNativeActive", false)
-        local origin = active and ply:GetNW2Vector("MEXNativeEnd", aim) or aim
-        local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0) or ply:EyeAngles().y
         local settings = {
             mode = tool:GetClientInfo("native_mode"),
             tunnel = tool:GetClientInfo("native_tunnel"),
@@ -572,6 +570,12 @@ if CLIENT then
             junction = tool:GetClientInfo("native_junction"),
             branch = tool:GetClientNumber("native_branch", 2),
         }
+        local anchor = not active and N.PortFromAimedEntity(tr, settings.tracks)
+            or nil
+        local origin = active and ply:GetNW2Vector("MEXNativeEnd", aim)
+            or (anchor and anchor.center or aim)
+        local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
+            or (anchor and anchor.yaw or ply:EyeAngles().y)
         local candidate, errorText = N.Candidate(origin, yaw, aim, settings)
         N.PreviewError = candidate and nil or errorText
         N.PreviewCurveRadius = nil
