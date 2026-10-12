@@ -66,7 +66,16 @@ function NativePiece:Initialize()
     self:DrawShadow(false)
 end
 function NativePiece:Draw()
+    -- Stock Source tunnel/railroad models usually received baked map lighting
+    -- as static props. When spawned as scripted entities their light sample can
+    -- be inside grass/BSP, turning the long outside rail nearly black.
+    -- Give ONLY these original MDLs neutral vertex-light fill, never replace
+    -- the original materials or recolor their textures.
+    local fill = self:GetNW2Bool("MEXNativeSurface", false) and 0.78 or 0.55
+    render.SuppressEngineLighting(true)
+    render.ResetModelLighting(fill, fill, fill)
     self:DrawModel()
+    render.SuppressEngineLighting(false)
 end
 function NativePiece:Use(activator)
     if SERVER and N.ToggleSwitch then N.ToggleSwitch(activator, self) end
@@ -300,14 +309,14 @@ function N.ModulePaths(part)
             or (link[2] == 1 and link[1] == (part.branch or 2)) then
             local a, b = ports[link[1]], ports[link[2]]
             if a and b then
-                local path = {a.pos}
+                local path = {a.center or a.pos}
                 local ang = Angle(part.ang[1], part.ang[2], part.ang[3])
                 for _, waypoint in ipairs(link.via or {}) do
                     local worldOffset = V(waypoint)
                     worldOffset:Rotate(ang)
                     path[#path + 1] = V(part.pos) - Vector(0, 0, MODEL_LIFT) + worldOffset
                 end
-                path[#path + 1] = b.pos
+                path[#path + 1] = b.center or b.pos
                 paths[#paths + 1] = path
             end
         end
@@ -363,7 +372,7 @@ end
 
 if CLIENT then
     local ghosts = {}
-    local grey = Color(155, 155, 155, 130)
+    local grey = Color(207, 207, 207, 160)
     local function DrawGhost(part, index, warn)
         local ghost = ghosts[index]
         if not IsValid(ghost) or ghost:GetModel() ~= part.model then
@@ -377,10 +386,14 @@ if CLIENT then
         ghost:SetPos(V(part.pos))
         ghost:SetAngles(Angle(part.ang[1], part.ang[2], part.ang[3]))
         ghost:SetColor(warn and Color(220, 80, 80, 125) or grey)
-        render.SetBlend(0.48)
-        render.SetColorModulation(warn and 1 or 0.68, warn and 0.45 or 0.68, warn and 0.45 or 0.68)
+        render.SetBlend(0.57)
+        render.SetColorModulation(warn and 1 or 0.95,
+            warn and 0.45 or 0.95, warn and 0.45 or 0.95)
+        render.SuppressEngineLighting(true)
+        render.ResetModelLighting(0.78, 0.78, 0.78)
         ghost:SetupBones()
         ghost:DrawModel()
+        render.SuppressEngineLighting(false)
         render.SetBlend(1)
         render.SetColorModulation(1, 1, 1)
     end
@@ -686,6 +699,8 @@ local function SpawnRoute(route, ghost)
         phys:EnableMotion(false)
         phys:Sleep()
         ent:SetNW2Bool("MEXNativeModule", true)
+        ent:SetNW2Bool("MEXNativeSurface",
+            string.find(string.lower(part.model), "/railroad", 1, true) ~= nil)
         ent:SetNW2Int("MEXNativeRoute", route.id or 0)
         ent:SetNW2Int("MEXNativeIndex", #new + 1)
     local ports = N.ModulePorts(part)
@@ -794,7 +809,7 @@ local function RefreshPreview(state)
             ent:SetPos(V(part.pos))
             ent:SetAngles(Angle(part.ang[1], part.ang[2], part.ang[3]))
             ent:SetRenderMode(RENDERMODE_TRANSCOLOR)
-            ent:SetColor(Color(145, 145, 145, 130))
+            ent:SetColor(Color(205, 205, 205, 170))
             ent:SetSolid(SOLID_NONE)
             ent:Spawn()
             ent:SetNotSolid(true)
