@@ -184,7 +184,10 @@ local function StockCurveWorldPart(start, yaw, model, turn, radius, lane)
     local localStart = Vector(profile.entryX or 0, 0, 0)
     local localEnd = Vector(profile.x, profile.y, 0)
     local sweep = profile.sweep
-    local poseYaw = left and yaw or (yaw - sweep + 180)
+    -- The measured original track mesh bends toward local negative X.
+    -- Starting tangent in local +Y; the end tangent rotates +sweep in
+    -- world yaw for forward traversal. Reverse traversal reverses sweep.
+    local poseYaw = left and yaw or (yaw + sweep + 180)
     local ang = ModelAngles(poseYaw)
     -- Use the ACTUAL authored local rail ports on BOTH ends. "turn1" is a
     -- transition module with a ~1600 SU advance; its end is NOT at
