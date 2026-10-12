@@ -6,6 +6,15 @@ if SERVER then AddCSLuaFile() end
 MEXNativeTrack = MEXNativeTrack or {}
 local N = MEXNativeTrack
 local ROOT = "models/metrostroi/tracks/"
+-- Track-placement points sit at the original MDL's baseline, whereas a
+-- visible/snap marker belongs at the running rail surface. Never feed that
+-- display-only Z offset into another module's origin (it would stair-step).
+local RAIL_SURFACE_OFFSET = 10
+local MODEL_LIFT = 5
+local RAIL_MARKER_OFFSET = Vector(0, 0, RAIL_SURFACE_OFFSET)
+local function RenderPort(base)
+    return base + RAIL_MARKER_OFFSET
+end
 local KIT = {
     none = {single = {[4096] = "railroad4096.mdl", [1024] = "railroad1024.mdl"}},
     round = {
@@ -85,7 +94,7 @@ local function Settings(settings)
 end
 local function Placement(start, yaw, model, length, kind, turn, radius, sweep)
     local ang = ModelAngles(yaw)
-    local origin = start + Vector(0, 0, 5)
+    local origin = start + Vector(0, 0, MODEL_LIFT)
     if kind == "double" then
         -- Calibrated original double-tunnel X center is -132 SU.
         origin = origin + ang:Forward() * 132
@@ -208,21 +217,25 @@ function N.ModulePorts(part)
         local endYaw = part.yaw - (part.turn or 0) * (part.sweep or 0)
         local lanes = part.lane == "double" and 2 or 1
         if lanes == 1 then
-            return {{pos = a, center = a, yaw = part.yaw + 180, lanes = 1},
-                {pos = b, center = b, yaw = endYaw, lanes = 1}}
+            return {
+                {pos = RenderPort(a), center = a, yaw = part.yaw + 180,
+                    lanes = 1, start = true},
+                {pos = RenderPort(b), center = b, yaw = endYaw,
+                    lanes = 1, start = false}
+            }
         end
         local ports = {}
         for lane = 1, 2 do
             local offset = lane == 1 and -132 or 132
             ports[#ports + 1] = {
-                pos = a + Right(part.yaw) * offset,
+                pos = RenderPort(a + Right(part.yaw) * offset),
                 center = a, yaw = part.yaw + 180, lanes = 2, start = true,
             }
         end
         for lane = 1, 2 do
             local offset = lane == 1 and -132 or 132
             ports[#ports + 1] = {
-                pos = b + Right(endYaw) * offset,
+                pos = RenderPort(b + Right(endYaw) * offset),
                 center = b, yaw = endYaw, lanes = 2, start = false,
             }
         end
@@ -236,7 +249,8 @@ function N.ModulePorts(part)
         local pos = V(data)
         pos:Rotate(ang)
         local yaw = (part.yaw + (tonumber(data[4]) or 0))
-        ports[i] = {pos = V(part.pos) - Vector(0, 0, 5) + pos, yaw = yaw,
+        local base = V(part.pos) - Vector(0, 0, MODEL_LIFT) + pos
+        ports[i] = {pos = RenderPort(base), center = base, yaw = yaw,
             lanes = part.lane == "double" and 2 or 1, start = i == 1}
     end
     return ports
@@ -291,7 +305,7 @@ function N.ModulePaths(part)
                 for _, waypoint in ipairs(link.via or {}) do
                     local worldOffset = V(waypoint)
                     worldOffset:Rotate(ang)
-                    path[#path + 1] = V(part.pos) - Vector(0, 0, 5) + worldOffset
+                    path[#path + 1] = V(part.pos) - Vector(0, 0, MODEL_LIFT) + worldOffset
                 end
                 path[#path + 1] = b.pos
                 paths[#paths + 1] = path
