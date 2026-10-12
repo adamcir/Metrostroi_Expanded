@@ -492,6 +492,39 @@ function N.GetAimedModule(ply, traced)
     return saved
 end
 
+function N.PortFromAimedEntity(trace, tracks)
+    local ent = trace and trace.Entity
+    if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
+        return nil
+    end
+    local wanted = tonumber(tracks) == 2 and 2 or 1
+    local num = ent:GetNW2Int("MEXNativePorts", 0)
+    local double = num == 4 and ent:GetNW2String("MEXNativeJunctionID", "") == ""
+    local count = double and 2 or 1
+    if count ~= wanted then return nil end
+    local best, d = nil, math.huge
+    for i = 1, num do
+        local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
+        local center = ent:GetNW2Vector("MEXNativePortCenter" .. i,
+            point - RAIL_MARKER_OFFSET)
+        if point ~= vector_origin then
+            local delta = trace.HitPos:DistToSqr(point)
+            if delta < d then
+                d = delta
+                best = {
+                    pos = point,
+                    center = center,
+                    yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
+                    lanes = count,
+                    ent = ent,
+                    index = i,
+                }
+            end
+        end
+    end
+    return best
+end
+
 if CLIENT then
     local ghosts = {}
     local grey = Color(207, 207, 207, 160)
@@ -838,38 +871,6 @@ end
 -- attachment metadata from that entity instead of the point on its wall,
 -- sleepers or collision surface. This works at ANY distance along a curve.
 -- Both server placement and client ghost rendering call the same function.
-function N.PortFromAimedEntity(trace, tracks)
-    local ent = trace and trace.Entity
-    if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
-        return nil
-    end
-    local wanted = tonumber(tracks) == 2 and 2 or 1
-    local num = ent:GetNW2Int("MEXNativePorts", 0)
-    local double = num == 4 and ent:GetNW2String("MEXNativeJunctionID", "") == ""
-    local count = double and 2 or 1
-    if count ~= wanted then return nil end
-    local best, d = nil, math.huge
-    for i = 1, num do
-        local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
-        local center = ent:GetNW2Vector("MEXNativePortCenter" .. i,
-            point - RAIL_MARKER_OFFSET)
-        if point ~= vector_origin then
-            local delta = trace.HitPos:DistToSqr(point)
-            if delta < d then
-                d = delta
-                best = {
-                    pos = point,
-                    center = center,
-                    yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
-                    lanes = count,
-                    ent = ent,
-                    index = i,
-                }
-            end
-        end
-    end
-    return best
-end
 
 function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
     local best, bestDist = nil, (distance or 72)^2
