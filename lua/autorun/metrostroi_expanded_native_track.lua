@@ -75,6 +75,20 @@ local STOCK_CURVE_PORTS = {
         track = {0, -0.8, -2.4, -4.9, -8.7, -13.1, -19.3,
             -25.8, -34.5, -44.9, -54.4, -67.6, -79.4},
     },
+    -- Double "turn1" models have a DIFFERENT local pivot from the
+    -- double STRAIGHT tunnel prefab: their two rail centers start at
+    -- X=+128 and X=-136 (center X=-4), not X=0 and X=-264.
+    -- Last-rail coordinates are from the original double VVD mesh.
+    [ROOT .. "tunnel4096_double_turn1.mdl"] = {
+        entryX = -4, x = -198.4, y = 1644.85, sweep = 17.40,
+        track = {-4, -5.3, -8.6, -13.6, -21.7, -32.9, -44.2,
+            -58.3, -77.3, -100.6, -126.6, -156.6, -185.3},
+    },
+    [ROOT .. "tunnel8192_double_turn1.mdl"] = {
+        entryX = -4, x = -86.2, y = 1657.85, sweep = 6.80,
+        track = {-4, -4.8, -6.4, -8.9, -12.7, -17.1, -23.3,
+            -29.8, -38.5, -48.9, -58.4, -71.6, -83.4},
+    },
 }
 -- X samples in the stock mesh above are at Y=0,128,...1536.
 -- Explicit final endpoints are exact rail-end cross-section centers.
@@ -90,28 +104,27 @@ local function StockCurveWorldPart(start, yaw, model, turn, radius, lane)
     local profile = StockCurveProfile(model)
     if not profile then return nil end
     local left = turn == -1
-    local localExit = Vector(profile.x, profile.y, 0)
+    local localStart = Vector(profile.entryX or 0, 0, 0)
+    local localEnd = Vector(profile.x, profile.y, 0)
     local sweep = profile.sweep
     local poseYaw = left and yaw or (yaw - sweep + 180)
     local ang = ModelAngles(poseYaw)
-    -- For a LEFT curve the authored origin is the requested input node.
-    -- For a RIGHT curve the authored track is traversed BACKWARDS:
-    -- the model's real EXIT (not its origin) must meet the current node.
-    local baseOrigin = left and start or (start - RotateLocal(localExit, ang))
-    local worldStart = baseOrigin
-    local worldEnd = baseOrigin + RotateLocal(localExit, ang)
-    local finish = left and worldEnd or worldStart
-    local mdlOrigin = baseOrigin + Vector(0, 0, MODEL_LIFT)
-    if lane == "double" then mdlOrigin = mdlOrigin + ang:Forward() * 132 end
+    -- Use the ACTUAL authored local rail ports on BOTH ends. "turn1" is a
+    -- transition module with a ~1600 SU advance; its end is NOT at
+    -- (R*(1-cos(90/parts)), R*sin(90/parts)).
+    local authoredEntry = left and localStart or localEnd
+    local authoredExit = left and localEnd or localStart
+    local modelBase = start - RotateLocal(authoredEntry, ang)
+    local finish = modelBase + RotateLocal(authoredExit, ang)
+    local mdlOrigin = modelBase + Vector(0, 0, MODEL_LIFT)
     return {
         model = model, pos = P(mdlOrigin), ang = {ang.p, ang.y, ang.r},
         start = P(start), finish = P(finish), yaw = yaw,
-        length = math.sqrt(profile.x * profile.x + profile.y * profile.y),
+        length = localStart:Distance(localEnd),
         lane = lane, turn = turn, radius = radius, sweep = sweep,
         calibrated = true,
     }, finish, yaw + (left and sweep or -sweep)
 end
-
 N.Junctions = N.Junctions or {}
 
 -- A native scripted static prop uses the original MDL for BOTH rendering
@@ -362,10 +375,7 @@ function N.ModulePaths(part)
             if profile then
                 local ang = Angle(part.ang[1], part.ang[2], part.ang[3])
                 local authoredOrigin = V(part.pos) - Vector(0, 0, MODEL_LIFT)
-                if part.lane == "double" then
-                    authoredOrigin = authoredOrigin - ang:Forward() * 132
-                end
-                local points = {{x = 0, y = 0}}
+                local points = {{x = profile.entryX or 0, y = 0}}
                 for i = 2, #profile.track do
                     points[#points + 1] = {x = profile.track[i], y = (i - 1) * 128}
                 end
