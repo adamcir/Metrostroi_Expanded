@@ -119,6 +119,7 @@ function TOOL.BuildCPanel(panel)
     panel:Button("Cancel construction", "mex_native_cancel")
     panel:Button("Delete entire aimed route (advanced)", "mex_native_delete_aimed")
     panel:Button("Show original-model status", "mex_native_status")
+    panel:Button("Realign older saved curve modules", "mex_native_realign_routes")
     panel:Button("Check installed original curve models", "mex_native_curve_assets")
     panel:Button("List available original junction models", "mex_native_list_junction_models")
 end
