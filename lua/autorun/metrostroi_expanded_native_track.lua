@@ -830,6 +830,43 @@ local function CollectPorts()
     end
     return nodes, count
 end
+-- When the crosshair hits an ORIGINAL MDL, use the exact saved rail
+-- attachment metadata from that entity instead of the point on its wall,
+-- sleepers or collision surface. This works at ANY distance along a curve.
+-- Both server placement and client ghost rendering call the same function.
+function N.PortFromAimedEntity(trace, tracks)
+    local ent = trace and trace.Entity
+    if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
+        return nil
+    end
+    local wanted = tonumber(tracks) == 2 and 2 or 1
+    local num = ent:GetNW2Int("MEXNativePorts", 0)
+    local double = num == 4 and ent:GetNW2String("MEXNativeJunctionID", "") == ""
+    local count = double and 2 or 1
+    if count ~= wanted then return nil end
+    local best, d = nil, math.huge
+    for i = 1, num do
+        local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
+        local center = ent:GetNW2Vector("MEXNativePortCenter" .. i,
+            point - RAIL_MARKER_OFFSET)
+        if point ~= vector_origin then
+            local delta = trace.HitPos:DistToSqr(point)
+            if delta < d then
+                d = delta
+                best = {
+                    pos = point,
+                    center = center,
+                    yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
+                    lanes = count,
+                    ent = ent,
+                    index = i,
+                }
+            end
+        end
+    end
+    return best
+end
+
 function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
     local best, bestDist = nil, (distance or 72)^2
     local nodes, count = CollectPorts()
@@ -899,7 +936,12 @@ local function SpawnRoute(route, ghost)
     local ports = N.ModulePorts(part)
         local portCount = #ports
         for portIndex = 1, math.min(portCount, 4) do
-            ent:SetNW2Vector("MEXNativePort" .. portIndex, ports[portIndex].pos)
+            local port = ports[portIndex]
+            ent:SetNW2Vector("MEXNativePort" .. portIndex, port.pos)
+            ent:SetNW2Vector("MEXNativePortCenter" .. portIndex,
+                port.center or (port.pos - RAIL_MARKER_OFFSET))
+            ent:SetNW2Float("MEXNativePortYaw" .. portIndex, port.yaw or 0)
+            ent:SetNW2Bool("MEXNativePortStart" .. portIndex, port.start == true)
         end
         ent:SetNW2Int("MEXNativePorts", portCount)
         if part.junction then
@@ -1027,8 +1069,9 @@ function N.Add(ply, aim, settings)
         local tr = ply:GetEyeTrace()
         local rayLength = tr and tr.Hit and not tr.HitSky
             and ply:GetShootPos():Distance(tr.HitPos) or nil
-        local connector = N.FindPort(aim, 72, settings.tracks,
-            ply:GetShootPos(), ply:GetAimVector(), rayLength)
+        local connector = N.PortFromAimedEntity(tr, settings.tracks)
+            or N.FindPort(aim, 72, settings.tracks,
+                ply:GetShootPos(), ply:GetAimVector(), rayLength)
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
