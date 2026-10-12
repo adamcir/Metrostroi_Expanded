@@ -292,6 +292,34 @@ local function StockCurveWorldPart(start, yaw, model, turn, radius, lane)
         calibrated = true,
     }, finish, yaw + (left and sweep or -sweep)
 end
+-- Migrate old saved native turn1 modules in-place. Their MDL position is
+-- authoritative: update ONLY the start/end rail ports using the visible
+-- mesh, without moving/rotating an existing saved original model.
+function N.RecalibrateCurvePart(part)
+    if not istable(part) or part.junction
+        or not part.turn or part.turn == 0 then return false end
+    local profile = StockCurveProfile(part.model)
+    if not profile or not istable(part.pos) or not istable(part.ang) then
+        return false
+    end
+    local ang = Angle(part.ang[1], part.ang[2], part.ang[3])
+    local pivot = V(part.pos) - Vector(0, 0, MODEL_LIFT)
+    local portA = pivot + RotateLocal(
+        Vector(profile.entryX or 0, profile.entryY or 0, 0), ang)
+    local portB = pivot + RotateLocal(Vector(profile.x, profile.y, 0), ang)
+    if part.turn == -1 then
+        part.start, part.finish = P(portA), P(portB)
+        part.yaw = part.ang[2] + 90
+    else
+        part.start, part.finish = P(portB), P(portA)
+        part.yaw = part.ang[2] + 90 + profile.sweep + 180
+    end
+    part.sweep = profile.sweep
+    part.length = portA:Distance(portB)
+    part.calibrated = true
+    return true
+end
+
 -- Generate a strict sequence of original-size stock modules. There is no
 -- arbitrary deformation, scaling, procedural tunnel or geometry fallback.
 function N.Candidate(start, yaw, aimed, settings)
@@ -1530,6 +1558,12 @@ hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
         if istable(route) and istable(route.parts) and #route.parts > 0 then
             local id = #N.Routes + 1
             route.id = id
+            -- Upgrade previous saves that used nominal-circle endpoint nodes.
+            -- The original placed models do not move; the real rail mesh
+            -- determines where next pieces may attach from now on.
+            for _, part in ipairs(route.parts) do
+                N.RecalibrateCurvePart(part)
+            end
             N.Routes[id] = route
             local props, err = SpawnRoute(route)
             N.Props[id] = props or {}
@@ -1542,6 +1576,7 @@ hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
         Save()
         print("[MEX Native Track] Migrated original curves to real model-local rail connectors. A backup was saved.")
     end
+    if #N.Routes > 0 then Save() end
     timer.Simple(2.5, function()
         if #N.Routes > 0 and MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
             MEXTrackBuilder.RebuildMetrostroiNetwork()
