@@ -747,7 +747,7 @@ local function SendProfiles(ply)
 end
 local function Save()
     file.CreateDir("metrostroi_expanded")
-    file.Write(FILE, util.TableToJSON({version = 1, routes = N.Routes}, true) or "{}")
+    file.Write(FILE, util.TableToJSON({version = 2, routes = N.Routes}, true) or "{}")
 end
 local function ValidProfile(profile)
     if not istable(profile) or not isstring(profile.id) or not isstring(profile.model)
@@ -1263,13 +1263,74 @@ function N.GetNetworkPaths()
     end
     return paths
 end
+-- Convert pre-calibration routes using their original saved start/direction.
+-- Old "turn1" ends were guessed from perfect circles; the genuine models
+-- have *eased* rail geometry with different pivots and terminal headings.
+-- Carry joined successors to the corrected output connector so old saved
+-- routes no longer retain invisible 100+ SU gaps after an addon update.
+local function RecalibrateRoute(route)
+    if not istable(route.parts) then return false end
+    local changed, oldEnd, newEnd, newYaw = false, nil, nil, nil
+    for index, part in ipairs(route.parts) do
+        local previousEnd = part.finish and V(part.finish)
+            or (not part.junction and V(part.start) +
+                Direction(part.yaw) * (part.length or 0))
+        -- Saved part.start is encoded as {x,y,z}, not a GMod Vector.
+        local originallyJoined = oldEnd and istable(part.start)
+            and oldEnd:DistToSqr(V(part.start)) < 16 * 16
+        local start = originallyJoined and newEnd or V(part.start)
+        local yaw = originallyJoined and newYaw or part.yaw
+        local profile = StockCurveProfile(part.model)
+        if profile and (part.turn == 1 or part.turn == -1) then
+            local calibrated, finish, finalYaw =
+                StockCurveWorldPart(start, yaw, part.model, part.turn,
+                    part.radius or 4096, part.lane or "single")
+            if calibrated then
+                -- Keep the old route's model and layout choices; only realign
+                -- its model pose / graph / rail nodes to the actual MDL.
+                route.parts[index] = calibrated
+                part = calibrated
+                newEnd, newYaw = finish, finalYaw
+                changed = true
+            end
+        elseif not part.junction and (part.turn or 0) == 0 then
+            if originallyJoined then
+                local recalibrated = Placement(start, yaw,
+                    part.model, part.length, part.lane or "single")
+                route.parts[index] = recalibrated
+                part = recalibrated
+                changed = true
+            end
+            newEnd = V(part.start) + Direction(part.yaw) * part.length
+            newYaw = part.yaw
+        else
+            local output = N.ModulePorts(part)
+            local endPort = output[part.branch or 2]
+            newEnd = endPort and (endPort.center or endPort.pos)
+                or previousEnd
+            newYaw = endPort and endPort.yaw or part.yaw
+        end
+        oldEnd = previousEnd
+    end
+    return changed
+end
+
 hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
     file.CreateDir("metrostroi_expanded")
     local profiles = util.JSONToTable(file.Read(JUNCTION_FILE, "DATA") or "{}") or {}
     for _, profile in pairs(profiles) do
         if ValidProfile(profile) then N.Junctions[profile.id] = profile end
     end
-    local decoded = util.JSONToTable(file.Read(FILE, "DATA") or "{}") or {}
+    local raw = file.Read(FILE, "DATA") or "{}"
+    local decoded = util.JSONToTable(raw) or {}
+    local upgrade = (tonumber(decoded.version) or 1) < 2
+    if upgrade and istable(decoded.routes) and #decoded.routes > 0 then
+        local backup = FILE .. ".before_native_ports_v2"
+        if not file.Exists(backup, "DATA") then file.Write(backup, raw) end
+        for _, saved in ipairs(decoded.routes) do
+            if istable(saved) then RecalibrateRoute(saved) end
+        end
+    end
     N.Routes = {}
     for _, route in ipairs(decoded.routes or {}) do
         if istable(route) and istable(route.parts) and #route.parts > 0 then
@@ -1282,6 +1343,10 @@ hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
                 ErrorNoHalt("[MEX Native Track] Route " .. id .. ": " .. tostring(err) .. "\\n")
             end
         end
+    end
+    if upgrade and #N.Routes > 0 then
+        Save()
+        print("[MEX Native Track] Migrated original curves to real model-local rail connectors. A backup was saved.")
     end
     timer.Simple(2.5, function()
         if #N.Routes > 0 and MEXTrackBuilder and MEXTrackBuilder.RebuildMetrostroiNetwork then
