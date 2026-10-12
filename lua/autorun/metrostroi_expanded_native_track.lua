@@ -47,6 +47,83 @@ local TURNS = {
         single = {[3072] = {file = "tunnel3072_rect_turn1.mdl", parts = 3}},
     },
 }
+N.Junctions = N.Junctions or {}
+
+-- A native scripted static prop uses the original MDL for BOTH rendering
+-- and its compiled .phy. PhysicsInitStatic supports static-prop models that
+-- prop_physics may reject; no custom convex hulls are synthesized.
+local NativePiece = {
+    Type = "anim", Base = "base_anim",
+    PrintName = "MEX Original Metrostroi Module",
+    Spawnable = false, AdminOnly = true, RenderGroup = RENDERGROUP_OPAQUE,
+}
+function NativePiece:Initialize()
+    if CLIENT then return end
+    self:SetMoveType(MOVETYPE_NONE)
+    self:SetSolid(SOLID_VPHYSICS)
+    local ok = self:PhysicsInitStatic(SOLID_VPHYSICS)
+    if not ok then
+        ErrorNoHalt("[MEX Native Track] Original model has no usable .phy: " ..
+            self:GetModel() .. "\\n")
+    end
+    self:SetUseType(SIMPLE_USE)
+    self:DrawShadow(false)
+end
+function NativePiece:Draw()
+    -- Stock Source tunnel/railroad models usually received baked map lighting
+    -- as static props. When spawned as scripted entities their light sample can
+    -- be inside grass/BSP, turning the long outside rail nearly black.
+    -- Give ONLY these original MDLs neutral vertex-light fill, never replace
+    -- the original materials or recolor their textures.
+    local brightness = GetConVar("mex_native_outdoor_brightness")
+    local outdoors = self:GetNW2Bool("MEXNativeOutdoor",
+        self:GetNW2Bool("MEXNativeSurface", false))
+    local fill = outdoors
+        and (brightness and math.Clamp(brightness:GetFloat(), 0.35, 1.5) or 0.85)
+        or 0.55
+    render.SuppressEngineLighting(true)
+    render.ResetModelLighting(fill, fill, fill)
+    self:DrawModel()
+    render.SuppressEngineLighting(false)
+end
+function NativePiece:Use(activator)
+    if SERVER and N.ToggleSwitch then N.ToggleSwitch(activator, self) end
+end
+scripted_ents.Register(NativePiece, "mex_native_track_piece")
+local function V(t) return Vector(tonumber(t[1]) or 0, tonumber(t[2]) or 0, tonumber(t[3]) or 0) end
+local function P(v) return {v.x, v.y, v.z} end
+local function Direction(yaw) return Angle(0, yaw, 0):Forward() end
+local function Right(yaw) local f = Direction(yaw) return Vector(f.y, -f.x, 0) end
+local function ModelAngles(yaw) return Angle(0, yaw - 90, 0) end
+local modelCache = {}
+local function ValidModel(model)
+    if not isstring(model) or not string.StartWith(model, ROOT) then return false end
+    local cached = modelCache[model]
+    if cached and cached.expiry > CurTime() then return cached.valid end
+    local valid = util.IsValidModel(model)
+    modelCache[model] = {valid = valid, expiry = CurTime() + 30}
+    return valid
+end
+local function Settings(settings)
+    local kind = tostring(settings.tunnel or "round")
+    if not KIT[kind] then kind = "round" end
+    local lane = tonumber(settings.tracks) == 2 and "double" or "single"
+    return kind, lane
+end
+local function Placement(start, yaw, model, length, kind, turn, radius, sweep)
+    local ang = ModelAngles(yaw)
+    local origin = start + Vector(0, 0, MODEL_LIFT)
+    if kind == "double" then
+        -- Calibrated original double-tunnel X center is -132 SU.
+        origin = origin + ang:Forward() * 132
+    end
+    return {
+        model = model, pos = P(origin), ang = {ang.p, ang.y, ang.r},
+        start = P(start), yaw = yaw, length = length,
+        lane = kind, turn = turn or 0, radius = radius or 0, sweep = sweep or 0,
+    }
+end
+
 -- Measured directly from the *running-rail mesh* (railroad_001b)
 -- in the original PhoenixBlack/Metrostroi MDL/VVD files. The "turn1"
 -- models are TRANSITION curves, not constant-radius circular pieces.
@@ -125,83 +202,6 @@ local function StockCurveWorldPart(start, yaw, model, turn, radius, lane)
         calibrated = true,
     }, finish, yaw + (left and sweep or -sweep)
 end
-N.Junctions = N.Junctions or {}
-
--- A native scripted static prop uses the original MDL for BOTH rendering
--- and its compiled .phy. PhysicsInitStatic supports static-prop models that
--- prop_physics may reject; no custom convex hulls are synthesized.
-local NativePiece = {
-    Type = "anim", Base = "base_anim",
-    PrintName = "MEX Original Metrostroi Module",
-    Spawnable = false, AdminOnly = true, RenderGroup = RENDERGROUP_OPAQUE,
-}
-function NativePiece:Initialize()
-    if CLIENT then return end
-    self:SetMoveType(MOVETYPE_NONE)
-    self:SetSolid(SOLID_VPHYSICS)
-    local ok = self:PhysicsInitStatic(SOLID_VPHYSICS)
-    if not ok then
-        ErrorNoHalt("[MEX Native Track] Original model has no usable .phy: " ..
-            self:GetModel() .. "\\n")
-    end
-    self:SetUseType(SIMPLE_USE)
-    self:DrawShadow(false)
-end
-function NativePiece:Draw()
-    -- Stock Source tunnel/railroad models usually received baked map lighting
-    -- as static props. When spawned as scripted entities their light sample can
-    -- be inside grass/BSP, turning the long outside rail nearly black.
-    -- Give ONLY these original MDLs neutral vertex-light fill, never replace
-    -- the original materials or recolor their textures.
-    local brightness = GetConVar("mex_native_outdoor_brightness")
-    local outdoors = self:GetNW2Bool("MEXNativeOutdoor",
-        self:GetNW2Bool("MEXNativeSurface", false))
-    local fill = outdoors
-        and (brightness and math.Clamp(brightness:GetFloat(), 0.35, 1.5) or 0.85)
-        or 0.55
-    render.SuppressEngineLighting(true)
-    render.ResetModelLighting(fill, fill, fill)
-    self:DrawModel()
-    render.SuppressEngineLighting(false)
-end
-function NativePiece:Use(activator)
-    if SERVER and N.ToggleSwitch then N.ToggleSwitch(activator, self) end
-end
-scripted_ents.Register(NativePiece, "mex_native_track_piece")
-local function V(t) return Vector(tonumber(t[1]) or 0, tonumber(t[2]) or 0, tonumber(t[3]) or 0) end
-local function P(v) return {v.x, v.y, v.z} end
-local function Direction(yaw) return Angle(0, yaw, 0):Forward() end
-local function Right(yaw) local f = Direction(yaw) return Vector(f.y, -f.x, 0) end
-local function ModelAngles(yaw) return Angle(0, yaw - 90, 0) end
-local modelCache = {}
-local function ValidModel(model)
-    if not isstring(model) or not string.StartWith(model, ROOT) then return false end
-    local cached = modelCache[model]
-    if cached and cached.expiry > CurTime() then return cached.valid end
-    local valid = util.IsValidModel(model)
-    modelCache[model] = {valid = valid, expiry = CurTime() + 30}
-    return valid
-end
-local function Settings(settings)
-    local kind = tostring(settings.tunnel or "round")
-    if not KIT[kind] then kind = "round" end
-    local lane = tonumber(settings.tracks) == 2 and "double" or "single"
-    return kind, lane
-end
-local function Placement(start, yaw, model, length, kind, turn, radius, sweep)
-    local ang = ModelAngles(yaw)
-    local origin = start + Vector(0, 0, MODEL_LIFT)
-    if kind == "double" then
-        -- Calibrated original double-tunnel X center is -132 SU.
-        origin = origin + ang:Forward() * 132
-    end
-    return {
-        model = model, pos = P(origin), ang = {ang.p, ang.y, ang.r},
-        start = P(start), yaw = yaw, length = length,
-        lane = kind, turn = turn or 0, radius = radius or 0, sweep = sweep or 0,
-    }
-end
-
 -- Generate a strict sequence of original-size stock modules. There is no
 -- arbitrary deformation, scaling, procedural tunnel or geometry fallback.
 function N.Candidate(start, yaw, aimed, settings)
