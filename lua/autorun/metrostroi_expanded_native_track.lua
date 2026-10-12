@@ -76,7 +76,9 @@ function NativePiece:Draw()
     -- Give ONLY these original MDLs neutral vertex-light fill, never replace
     -- the original materials or recolor their textures.
     local brightness = GetConVar("mex_native_outdoor_brightness")
-    local fill = self:GetNW2Bool("MEXNativeSurface", false)
+    local outdoors = self:GetNW2Bool("MEXNativeOutdoor",
+        self:GetNW2Bool("MEXNativeSurface", false))
+    local fill = outdoors
         and (brightness and math.Clamp(brightness:GetFloat(), 0.35, 1.5) or 0.85)
         or 0.55
     render.SuppressEngineLighting(true)
@@ -780,8 +782,20 @@ local function SpawnRoute(route, ghost)
         phys:EnableMotion(false)
         phys:Sleep()
         ent:SetNW2Bool("MEXNativeModule", true)
-        ent:SetNW2Bool("MEXNativeSurface",
-            string.find(string.lower(part.model), "/railroad", 1, true) ~= nil)
+        local surfaceModel = string.find(
+            string.lower(part.model), "/railroad", 1, true) ~= nil
+        ent:SetNW2Bool("MEXNativeSurface", surfaceModel)
+        -- A tunnel MDL placed above ground on flatgrass is also an OUTDOOR
+        -- prop. Its Source light probe can fall below the map and go black.
+        -- Detect a clear line to sky once on spawn, not during Draw().
+        local daylightOrigin = ent:GetPos() + Vector(0, 0, 40)
+        local daylightTrace = util.TraceLine({
+            start = daylightOrigin,
+            endpos = daylightOrigin + Vector(0, 0, 8192),
+            mask = MASK_SOLID_BRUSHONLY or MASK_SOLID,
+        })
+        ent:SetNW2Bool("MEXNativeOutdoor",
+            surfaceModel or not daylightTrace.Hit or daylightTrace.HitSky)
         ent:SetNW2Int("MEXNativeRoute", route.id or 0)
         ent:SetNW2Int("MEXNativeIndex", #new + 1)
     local ports = N.ModulePorts(part)
