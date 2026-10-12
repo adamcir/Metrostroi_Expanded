@@ -35,11 +35,12 @@ Open **Q → Tools → Metrostroi Expanded → Track Builder**.
 
 Green markers indicate available starts, orange markers indicate free ends.
 These include both ends of **original curved track sections**. Node markers
-are rendered at the **running rail surface**, not the terrain or model pivot;
-actual connection geometry retains its separate world-space baseline, so
-successive sections cannot step upward by 10 SU per click. A double-track model
-exposes all four rail-end ports, two per end, and snaps the tunnel centerline
-for double-track continuation. Internal joined ports are hidden.
+are rendered over the actual **running rail endpoints**, not at a fictional
+circular-arc control point. The world-space construction baseline is stored
+independently of the +10 SU visual marker height, preventing steps after
+clicking a connector. Double-track curves expose two rail connectors per end,
+based on their OWN unique model pivot, not a copied straight-track pivot.
+Internal joined ports are hidden.
 
 ### Original stock model catalog
 
@@ -65,15 +66,29 @@ tunnel layout, the preview shows an error rather than a misleading straight
 module. Use `mex_native_curve_assets` or the matching Track Builder button
 to list actual model availability.
 
-Curves use the original turn1 prefab's nominal sweep (30°, 22.5° or 11.25°,
-depending on radius). To turn left the same prefab is reversed in direction,
-not stretched or mirrored.
+**Important:** The original `turn1` MDLs are *transition* pieces, not
+perfect constant-radius circular arcs. Their real track end positions and
+exit tangents were extracted from running-rail vertices in the original
+PhoenixBlack/Metrostroi compiled `.mdl/.vvd` files. For example, the
+single-track `tunnel3072_turn1.mdl` ends at approximately **local
+(-297.195, 1623.610)** and exits at **24.494°**, NOT at the endpoint of
+a 30° radius-3072 circle. The 4096 and 8192 pieces have different
+noncircular endpoints; the double/rectangular models have their own rail
+positions. MEX now aligns the *authored rail ports* and tracks the measured
+centerline rather than guessing from the radius in the filename.
 
-**Important:** The exact model pivot, turn1 geometry, wheel contact and
-double-track centers must be validated against the mounted model version
-*inside Garry's Mod*. This implementation has not been playtested here.
-The source code uses historic Metrostroi model calibration, including
-+5 SU model lift and 264 SU double-track separation.
+Authoring orientation: the stock `turn1` prefab curves to the **left**
+of local +Y. MEX keeps that orientation for left bends; right bends traverse
+the same original model **in reverse**, using its physical end as the
+world-space starting connector. No geometry is mirrored or rescaled.
+
+**Important:** Source model port values were measured from historical
+original Metrostroi mesh data. Workshop/Metrostroi revisions may use
+different geometry; compare the final rail ends and wheel contacts against
+the actual models mounted in Garry's Mod. This implementation has not been
+playtested inside GMod here. The model lift stays +5 SU; double track
+center spacing is 264 SU but the authored pivot differs between straight
+and curved prefabs.
 
 ### Save, restore and Metrostroi network
 
@@ -86,6 +101,13 @@ including two independent lanes for double-track pieces, and merges
 contiguous native end nodes. It also writes these paths to the existing
 Metrostroi data workflow and requests a network rebuild on finish.
 Map cleanup and map restart restore committed original modules.
+Saved pre-v2 routes are migrated on map load to measured original-model
+rail endpoints; subsequent originally connected modules are realigned.
+A recovery copy is stored at
+`data/metrostroi_expanded/native_tracks_<map>_before_native_ports_v2.json`.
+To re-align already loaded old routes without restarting, admins can run
+`mex_native_realign_routes`. That command also preserves a separate
+`_before_manual_realign.json` backup.
 
 The older MEX route file is preserved for compatibility but the Track
 Builder UI creates **native modules only**. No original assets are modified.
