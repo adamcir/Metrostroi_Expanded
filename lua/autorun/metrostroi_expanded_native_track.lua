@@ -988,8 +988,7 @@ if CLIENT then
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
             or (anchor and anchor.yaw or ply:EyeAngles().y)
         if not active and anchor then
-            settings.start_grade = anchor.start and -(anchor.pitch or 0)
-                or anchor.pitch
+            settings.start_grade = anchor.pitch or 0
         end
         local aimedNative = IsValid(tr.Entity)
             and tr.Entity:GetNW2Bool("MEXNativeModule", false)
@@ -1616,8 +1615,7 @@ function N.Add(ply, aim, settings)
         end
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
-        local grade = connector and (connector.start and
-            -(connector.pitch or 0) or (connector.pitch or 0))
+        local grade = connector and (connector.pitch or 0)
             or math.Clamp(tonumber(settings.grade) or 0, -20, 20)
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
             startPitch = grade, pos = pos, yaw = yaw, pitch = grade,
@@ -1910,7 +1908,8 @@ local function RecalibrateRoute(route)
             if fresh then
                 local rebuilt, finish, finalYaw = GenericOriginalPart(
                     start, yaw, part.model, {
-                        native_reverse = part.reverse and 1 or 0
+                        native_reverse = part.reverse and 1 or 0,
+                        start_grade = part.pitch or 0,
                     })
                 if rebuilt then
                     route.parts[index] = rebuilt
