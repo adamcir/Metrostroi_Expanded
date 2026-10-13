@@ -251,6 +251,21 @@ if CLIENT then
         attributes:SetWrap(true)
         attributes:SetText("Original Metrostroi / Track Pack assets only.")
 
+        -- Advanced port choice appears ONLY for actual junction model
+        -- selections; ordinary track users do not see irrelevant controls.
+        local junctionPort = vgui.Create("DComboBox", details)
+        junctionPort:Dock(TOP)
+        junctionPort:SetTall(27)
+        junctionPort:DockMargin(0, 0, 0, 5)
+        junctionPort:AddChoice("Main route (port 2)", "2")
+        junctionPort:AddChoice("Diverging route (port 3)", "3")
+        junctionPort:AddChoice("Crossing exit (port 4)", "4")
+        junctionPort:ChooseOptionID(1)
+        junctionPort:SetVisible(false)
+        junctionPort.OnSelect = function(_, _, _, port)
+            RunConsoleCommand("mex_track_builder_native_branch", tostring(port or "2"))
+        end
+
         local hint = vgui.Create("DLabel", details)
         hint:Dock(TOP)
         hint:SetTall(60)
@@ -288,6 +303,8 @@ if CLIENT then
             attributes:SetText((info.source or "Original") .. "   •   "
                 .. (info.double and "DOUBLE TRACK" or
                     string.upper(info.kind or "track")))
+            junctionPort:SetVisible(info.kind == "junction")
+            details:InvalidateLayout(true)
             hint:SetText(info.double and
                 "Double-track: two real rail paths and four connectors. Drag to rotate; wheel to zoom."
                 or "Actual model geometry. Drag to rotate; wheel to zoom. Grade is set when starting a free route.")
