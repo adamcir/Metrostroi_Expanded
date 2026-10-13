@@ -370,42 +370,72 @@ local function GenericProfile(model)
     end
     return measured, err
 end
+local function GradeBetween(first, second)
+    local z = second.z - first.z
+    local planar = math.sqrt((second.x - first.x)^2 +
+        (second.y - first.y)^2)
+    return math.deg(math.atan2(z, math.max(0.001, planar)))
+end
+local function HeadingBetween(first, second)
+    return math.deg(math.atan2(second.y - first.y,
+        second.x - first.x))
+end
+local function WorldRailPoint(position, angle, point)
+    return position + RotateLocal(
+        Vector(point[1], point[2], point[3]), angle)
+end
 local function GenericOriginalPart(start, yaw, model, settings)
     model = string.lower(tostring(model))
     local profile, err = GenericProfile(model)
     if not profile then return nil, err end
-    local delta = profile.deltaYaw or 0
-    local curved = profile.curved
-    -- One universal direction switch replaces the old Curve Left /
-    -- Curve Right and radius presets. Reversal never mirrors or distorts
-    -- the original meshes; it simply selects the opposite authored port.
+    if not istable(profile.points) or #profile.points < 2
+        or not istable(profile.entry) or not istable(profile.finish) then
+        return nil, "Original MDL does not have validated rail-end geometry."
+    end
+    local points = profile.points
     local reverse = tonumber(settings.native_reverse) == 1
     local beginPort = reverse and profile.finish or profile.entry
     local endPort = reverse and profile.entry or profile.finish
-    local localHeading = reverse and (profile.exitYaw + 180) or profile.entryYaw
-    local rotation = yaw - localHeading
-    local ang = Angle(0, rotation, 0)
-    local railPosition = RenderPort(start)
-    local modelPosition = railPosition - RotateLocal(
-        Vector(beginPort[1], beginPort[2], beginPort[3]), ang)
-    local railEnd = modelPosition + RotateLocal(
-        Vector(endPort[1], endPort[2], endPort[3]), ang)
+    local initialNext = reverse and points[#points - 1] or points[2]
+    local heading = reverse and (profile.exitYaw + 180)
+        or profile.entryYaw
+    -- Grade is an elevation angle, positive when rails rise along travel.
+    -- Roll the entire ORIGINAL MDL about the world-sideways axis. Neither
+    -- its geometry nor its two pairs of rails are bent or generated.
+    local beginVector = Vector(beginPort[1], beginPort[2], beginPort[3])
+    local nextVector = Vector(initialNext[1], initialNext[2], initialNext[3])
+    local localGrade = GradeBetween(beginVector, nextVector)
+    local targetGrade = math.Clamp(tonumber(settings.start_grade)
+        or tonumber(settings.grade) or 0, -20, 20)
+    local angle = Angle(0, yaw - heading, 0)
+    angle:RotateAroundAxis(Right(yaw), targetGrade - localGrade)
+    local origin = RenderPort(start) - RotateLocal(beginVector, angle)
+    local railEnd = WorldRailPoint(origin, angle, endPort)
     local finish = railEnd - RAIL_MARKER_OFFSET
-    local finalYaw = yaw + (reverse and -delta or delta)
+    local finalIndex = reverse and 2 or (#points - 1)
+    local lastBefore = WorldRailPoint(origin, angle, points[finalIndex])
+    local finalYaw = HeadingBetween(lastBefore, railEnd)
+    local finalGrade = GradeBetween(lastBefore, railEnd)
     local part = {
-        model = model, pos = P(modelPosition),
-        ang = {ang.p, ang.y, ang.r},
+        model = model, pos = P(origin),
+        ang = {angle.p, angle.y, angle.r},
         start = P(start), finish = P(finish),
         yaw = yaw, endYaw = finalYaw,
-        length = profile.length, lane = "single",
-        turn = curved and ((reverse and -delta or delta) > 0 and -1 or 1) or 0,
-        sweep = math.abs(delta), radius = 0,
+        pitch = targetGrade, endPitch = finalGrade,
+        length = profile.length,
+        lane = profile.double and "double" or "single",
+        turn = profile.curved and
+            (math.AngleDifference(finalYaw, yaw) > 0 and -1 or 1) or 0,
+        sweep = math.abs(math.AngleDifference(finalYaw, yaw)),
+        radius = 0,
         nativeModel = true, reverse = reverse,
-        nativePoints = profile.points,
+        nativePoints = points,
+        nativeLanePoints = profile.lanePoints,
         calibrated = true,
     }
-    return part, finish, finalYaw
+    return part, finish, finalYaw, finalGrade
 end
+
 -- Generate a strict sequence of original-size stock modules. There is no
 -- arbitrary deformation, scaling, procedural tunnel or geometry fallback.
 -- Only a model selected from the actual installed catalog can be placed.
@@ -482,11 +512,11 @@ function N.Candidate(start, yaw, aimed, settings)
     if info.kind == "junction" then
         return nil, "Original turnout/crossing needs measured 3- or 4-port junction registration."
     end
-    local part, finish, exitYaw = GenericOriginalPart(start, yaw, selected,
-        settings)
+    local part, finish, exitYaw, exitGrade = GenericOriginalPart(
+        start, yaw, selected, settings)
     if not part then return nil, finish end
     result.parts[1] = part
-    result.pos, result.yaw = finish, exitYaw
+    result.pos, result.yaw, result.pitch = finish, exitYaw, exitGrade
     return result
 end
 
