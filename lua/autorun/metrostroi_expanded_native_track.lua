@@ -901,7 +901,6 @@ if CLIENT then
             candidate, errorText = N.Candidate(origin, yaw, aim, settings)
         end
         N.PreviewError = candidate and nil or errorText
-        N.PreviewCurveRadius = nil
         if candidate and #candidate.parts > 0 then
             for i, part in ipairs(candidate.parts) do
                 if i <= 64 then DrawGhost(part, i, false) end
@@ -941,11 +940,7 @@ if CLIENT then
                     end
                 end
             end
-            if settings.mode == "curve_left" or settings.mode == "curve_right" then
-                N.PreviewCurveRadius = candidate.parts[1].radius
-            else
-                N.PreviewCurveRadius = nil
-            end
+
         end
         render.SetColorMaterial()
         local eye, aimDir = ply:GetShootPos(), ply:GetAimVector()
@@ -1025,14 +1020,6 @@ if CLIENT then
             Color(255, 160, 100), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
             1, Color(0, 0, 0, 220)
         )
-    end)
-    hook.Add("HUDPaint", "MEXNativeTrackCurveRadiusInfo", function()
-        if not Tool() or not N.PreviewCurveRadius then return end
-        draw.SimpleTextOutlined("Original curve radius: " ..
-            tostring(N.PreviewCurveRadius) .. " SU",
-            "DermaDefaultBold", ScrW() * 0.5, ScrH() * 0.68,
-            Color(235, 235, 235), TEXT_ALIGN_CENTER, TEXT_ALIGN_CENTER,
-            1, Color(0, 0, 0, 220))
     end)
     hook.Add("ShutDown", "MEXNativeGhostCleanup", function()
         for _, ghost in pairs(ghosts) do if IsValid(ghost) then ghost:Remove() end end
