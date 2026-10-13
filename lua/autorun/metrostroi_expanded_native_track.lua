@@ -362,7 +362,23 @@ local function GenericProfile(model)
         end
         return nil, "Waiting for server rail-end calibration."
     end
-    return N.AnalyzeNativeModel(model)
+    local measured, err = N.AnalyzeNativeModel(model)
+    local original = STOCK_CURVE_PORTS[model]
+    if measured and original
+        and measured.method ~= "registered original rail centerline" then
+        local expectedX = original.entryX or 0
+        local expectedY = original.entryY or 0
+        -- Original straight-line sleeper/third-rail meshes must never be
+        -- mistaken for the running railheads of a 1600-SU turn1 transition.
+        if measured.axis ~= 2
+            or math.abs(measured.entry[1] - expectedX) > 24
+            or math.abs(measured.entry[2] - expectedY) > 24
+            or math.abs(measured.finish[1] - original.x) > 24
+            or math.abs(measured.finish[2] - original.y) > 24 then
+            return nil, "Measured MDL railheads disagree with calibrated Metrostroi curve."
+        end
+    end
+    return measured, err
 end
 local function GenericOriginalPart(start, yaw, model, settings)
     model = string.lower(tostring(model))
