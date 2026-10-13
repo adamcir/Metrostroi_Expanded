@@ -846,7 +846,10 @@ if CLIENT then
         local endpoints = CollectVisibleEndpoints()
         for _, node in ipairs(endpoints) do
             local distanceAlong = (node.pos - eye):Dot(aimDir)
-            if distanceAlong > 0 and distanceAlong < trDistance + 32 then
+            -- A long curved section may block the trace against its OWN
+            -- collision wall before the cursor reaches the endpoint.
+            -- Snap markers follow the view ray, not the earlier wall hit.
+            if distanceAlong > 0 and distanceAlong < 8192 then
                 local miss = node.pos:DistToSqr(eye + aimDir * distanceAlong)
                 if miss < nearestRayMiss then
                     highlighted, nearestRayMiss = node, miss
@@ -1107,8 +1110,7 @@ function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
             if d < bestDist then best, bestDist = node, d end
             if isvector(eye) and isvector(aimDir) then
                 local along = (node.pos - eye):Dot(aimDir)
-                if along >= 0 and along <= 8192
-                    and (not traceDistance or along <= traceDistance + 32) then
+                if along >= 0 and along <= 8192 then
                     local miss = node.pos:DistToSqr(eye + aimDir * along)
                     if miss < rayDist then rayBest, rayDist = node, miss end
                 end
