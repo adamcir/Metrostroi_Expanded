@@ -175,6 +175,9 @@ local STOCK_CURVE_PORTS = {
 -- models. No geometry is generated: vertices are inspected only to locate
 -- the existing authored track end faces.
 local curveMeshCache = {}
+-- The server owns the exact curved-rail port measurements. A client may
+-- load a different LOD/material set; never independently move its ghost.
+N.ServerCurveProfiles = N.ServerCurveProfiles or {}
 local function DetectCurveRailMesh(model, fallback)
     if not util.GetModelMeshes then return nil end
     local ok, meshes = pcall(util.GetModelMeshes, model, 0)
@@ -253,6 +256,11 @@ local function StockCurveProfile(model)
     model = string.lower(tostring(model or ""))
     local fallback = STOCK_CURVE_PORTS[model]
     if not fallback then return nil end
+    if CLIENT then
+        -- Until the first server synchronization arrives the immutable
+        -- stock table is preferred to a locally guessed mesh measurement.
+        return N.ServerCurveProfiles[model] or fallback
+    end
     if curveMeshCache[model] == nil then
         curveMeshCache[model] = DetectCurveRailMesh(model, fallback) or false
     end
@@ -900,6 +908,19 @@ if CLIENT then
             "[MEX Track Builder] " .. installed ..
             " original curve profiles installed. See client console for exact filenames.")
     end)
+    net.Receive("MEXNativeCurveProfiles", function()
+        local profiles = util.JSONToTable(net.ReadString() or "") or {}
+        if not istable(profiles) then return end
+        local validated = {}
+        for model, profile in pairs(profiles) do
+            if STOCK_CURVE_PORTS[model] and istable(profile)
+                and tonumber(profile.x) and tonumber(profile.y)
+                and tonumber(profile.sweep) then
+                validated[model] = profile
+            end
+        end
+        N.ServerCurveProfiles = validated
+    end)
     net.Receive("MEXNativeJunctionProfiles", function()
         local decoded = util.JSONToTable(net.ReadString() or "") or {}
         if istable(decoded) then N.Junctions = decoded end
@@ -908,6 +929,7 @@ if CLIENT then
 end
 
 util.AddNetworkString("MEXNativeJunctionProfiles")
+util.AddNetworkString("MEXNativeCurveProfiles")
 N.Active = N.Active or {}
 N.Routes = N.Routes or {}
 N.Props = N.Props or {}
@@ -917,6 +939,17 @@ local JUNCTION_FILE = "metrostroi_expanded/native_junctions.json"
 local function SendProfiles(ply)
     net.Start("MEXNativeJunctionProfiles")
     net.WriteString(util.TableToJSON(N.Junctions) or "{}")
+    if IsValid(ply) then net.Send(ply) else net.Broadcast() end
+end
+local function SendCurveProfiles(ply)
+    local profiles = {}
+    for model in pairs(STOCK_CURVE_PORTS) do
+        if ValidModel(model) then
+            profiles[model] = StockCurveProfile(model)
+        end
+    end
+    net.Start("MEXNativeCurveProfiles")
+    net.WriteString(util.TableToJSON(profiles) or "{}")
     if IsValid(ply) then net.Send(ply) else net.Broadcast() end
 end
 local function Save()
@@ -1619,7 +1652,12 @@ hook.Add("CanTool", "MEXNativeProtectModules", function(_, trace, mode)
         and mode ~= "mex_track_builder" then return false end
 end)
 hook.Add("PlayerInitialSpawn", "MEXNativeTrackSendProfiles", function(ply)
-    timer.Simple(2, function() if IsValid(ply) then SendProfiles(ply) end end)
+    timer.Simple(2, function()
+        if IsValid(ply) then
+            SendProfiles(ply)
+            SendCurveProfiles(ply)
+        end
+    end)
 end)
 function N.ToggleSwitch(ply, ent)
     if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then return end
