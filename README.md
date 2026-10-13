@@ -20,6 +20,15 @@ and unfinished pieces stay ghosted.
 Free start/end connectors are shown; double-track modules expose
 independent rail endpoint nodes and two Metrostroi network paths.
 
+The builder also scans the mounted **Metrostroi and Track Pack** MDL
+directories (including Workshop content). Select any detected original rail
+model in **Exact installed original model**; the engine measures both physical
+rail-end faces, heading, and the actual straight/transition/curved centerline.
+The measured cyan guide is an editor-only visualization, **not a generated
+rail model**. Unsupported, non-track, multi-lane or unmeasurable MDLs are
+safely rejected instead of assigned imaginary snap coordinates.
+Use `mex_native_rescan_models` after mounting a new Track Pack.
+
 The tool has explicit **Turnout** and **Rail crossing** types. They use
 real junction models with a calibrated 3- or 4-port connector registry,
 not overlapped straight models. Because Track Pack junction asset names
