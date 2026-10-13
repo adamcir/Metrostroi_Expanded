@@ -1918,6 +1918,9 @@ end)
 
 hook.Add("InitPostEntity", "MEXNativeTrackRestore", function()
     file.CreateDir("metrostroi_expanded")
+    -- Native Track Pack models must be known BEFORE old routes are restored;
+    -- otherwise ValidModel would reject saved MDLs outside stock folders.
+    if not next(N.ModelCatalog or {}) then N.ScanModelCatalog() end
     local profiles = util.JSONToTable(file.Read(JUNCTION_FILE, "DATA") or "{}") or {}
     for _, profile in pairs(profiles) do
         if ValidProfile(profile) then N.Junctions[profile.id] = profile end
