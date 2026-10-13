@@ -452,8 +452,23 @@ function N.Candidate(start, yaw, aimed, settings)
         local used, current = 0, start
         for _, length in ipairs(lengths) do
             while rounded - used >= length and #result.parts < 128 do
-                result.parts[#result.parts + 1] = Placement(current, yaw, ROOT .. kit[length], length, lane)
-                current = current + Direction(yaw) * length
+                local model = ROOT .. kit[length]
+                local part, newEnd
+                if lane == "single" and N.ModelCatalog[model] then
+                    local profile, reason = GenericProfile(model)
+                    if profile and not profile.curved then
+                        part, newEnd = GenericOriginalPart(
+                            current, yaw, model, {mode="straight"})
+                    elseif CLIENT and reason == "Waiting for server rail-end calibration." then
+                        return nil, reason
+                    end
+                end
+                if not part then
+                    part = Placement(current, yaw, model, length, lane)
+                    newEnd = current + Direction(yaw) * length
+                end
+                result.parts[#result.parts + 1] = part
+                current = newEnd
                 used = used + length
             end
         end
