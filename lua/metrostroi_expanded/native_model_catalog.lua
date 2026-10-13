@@ -22,31 +22,34 @@ local DEFAULT_ROOTS = {
     "models/kalininskaya",
     "models/mn_r",
 }
-local function TrackCandidate(filename)
-    local s = string.lower(filename)
-    return s:find("track", 1, true) ~= nil
-        or s:find("rail", 1, true) ~= nil
-        or s:find("tunnel", 1, true) ~= nil
+-- The catalog includes ALL original MDLs in mounted Metrostroi / Track
+-- Pack folders, not only models whose filenames contain "rail" or "turn".
+local function IsPackDirectory(name)
+    local s = string.lower(tostring(name))
+    return s:find("metrostroi", 1, true) ~= nil
+        or s:find("trackpack", 1, true) ~= nil
+        or s:find("track_pack", 1, true) ~= nil
         or s:find("metrotrack", 1, true) ~= nil
-        or s:find("depo", 1, true) ~= nil
-        or s:find("strel", 1, true) ~= nil
-        or s:find("turn", 1, true) ~= nil
-        or s:find("curve", 1, true) ~= nil
-        or s:find("povorot", 1, true) ~= nil
-        or s:find("cross", 1, true) ~= nil
-        or s:find("syezd", 1, true) ~= nil
+        or s:find("metro_track", 1, true) ~= nil
+        or s:find("railway", 1, true) ~= nil
+        or s:find("tracks", 1, true) ~= nil
+        or s:find("nekrasovskaya", 1, true) ~= nil
+        or s:find("kalininskaya", 1, true) ~= nil
+        or s:find("mn_r", 1, true) ~= nil
 end
 local function Kind(path)
     local s = string.lower(path)
     if s:find("switch", 1, true) or s:find("strel", 1, true)
-        or s:find("cross", 1, true) or s:find("syezd", 1, true) then
-        return "junction"
-    end
+        or s:find("cross", 1, true) or s:find("syezd", 1, true)
+        or s:find("junction", 1, true) then return "junction" end
     if s:find("turn", 1, true) or s:find("curve", 1, true)
-        or s:find("povorot", 1, true) then
+        or s:find("povorot", 1, true) or s:find("radius", 1, true) then
         return "curve"
     end
-    return "straight"
+    if s:find("tunnel", 1, true) or s:find("rail", 1, true)
+        or s:find("track", 1, true) or s:find("depo", 1, true)
+        or s:find("puti", 1, true) then return "straight" end
+    return "other"
 end
 function N.ScanModelCatalog()
     if CLIENT then return N.ModelCatalog end
@@ -67,11 +70,13 @@ function N.ScanModelCatalog()
     -- GMA/Workshop and non-Workshop Metrostroi/TrackPack content.
     local _, topDirs = file.Find("models/*", "GAME")
     for _, dirname in ipairs(topDirs or {}) do
-        if TrackCandidate(dirname) then roots[#roots + 1] = "models/" .. dirname end
+        if IsPackDirectory(dirname) then
+            roots[#roots + 1] = "models/" .. dirname
+        end
     end
     for _, root in ipairs(roots) do pending[#pending + 1] = {root, 0} end
     local processed, discovered = 0, 0
-    while #pending > 0 and processed < 1400 and discovered < 12000 do
+    while #pending > 0 and processed < 10000 and discovered < 50000 do
         local item = table.remove(pending)
         local path, depth = item[1], item[2]
         local key = string.lower(path)
@@ -84,33 +89,31 @@ function N.ScanModelCatalog()
                     and not name:find("_anim", 1, true)
                     and not name:find("_shared", 1, true) then
                     local mdl = string.lower(path .. "/" .. name)
-                    local railFolder = path:find("/tracks", 1, true)
-                        or path:find("/tunnels", 1, true)
-                        or path:find("/mn_r", 1, true)
-                    local forced = false
-                    for root in pairs(forcedRoots) do
-                        if string.StartWith(string.lower(path), root) then
-                            forced = true
-                            break
-                        end
-                    end
-                    if TrackCandidate(name) or railFolder or forced
-                        or path:find("trackpack", 1, true)
-                        or path:find("track_pack", 1, true) then
-                        if not found[mdl] then discovered = discovered + 1 end
-                        found[mdl] = {model = mdl, kind = Kind(mdl),
-                            source = (mdl:find("trackpack", 1, true)
-                                or mdl:find("track_pack", 1, true))
-                                and "Track Pack" or "Metrostroi"}
-                    end
+                    -- The roots themselves were restricted to installed
+                    -- Metrostroi/Track Pack directories. Every mounted MDL
+                    -- below them is discoverable, including trains, signals,
+                    -- stations, accessories and models with numeric names.
+                    if not found[mdl] then discovered = discovered + 1 end
+                    local source = (mdl:find("trackpack", 1, true)
+                        or mdl:find("track_pack", 1, true))
+                        and "Track Pack" or "Metrostroi"
+                    found[mdl] = {
+                        model = mdl, kind = Kind(mdl), source = source,
+                        name = name:gsub("%.mdl$", ""),
+                    }
                 end
             end
-            if depth < 7 then
+            if depth < 12 then
                 for _, dir in ipairs(dirs or {}) do
                     pending[#pending + 1] = {path .. "/" .. dir, depth + 1}
                 end
             end
         end
+    end
+    if #pending > 0 then
+        print("[MEX Native Track] Model scan reached safety limit (" ..
+            processed .. " folders, " .. discovered ..
+            " models). Narrow custom catalog roots if necessary.")
     end
     N.ModelCatalog = found
     return found
