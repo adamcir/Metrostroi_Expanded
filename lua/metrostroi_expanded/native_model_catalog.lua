@@ -56,6 +56,8 @@ local function Kind(path)
     if name:find("ramp", 1, true) or name:find("slope", 1, true)
         or name:find("uphill", 1, true) or name:find("incline", 1, true)
         or name:find("grade", 1, true)
+        or name:find("_up", 1, true)
+        or name:find("_down", 1, true)
         or name:find("podem", 1, true) then return "slope" end
     if name:find("tunnel", 1, true) or name:find("railroad", 1, true)
         or name:find("straight", 1, true) or name:find("track", 1, true)
@@ -69,11 +71,11 @@ local function IsTrackModel(path)
     -- strips and loose props in a track segment builder. They belong in
     -- GMod's normal spawn list, not in a rail construction catalog.
     for _, unwanted in ipairs({
-        "plank", "nopower", "powerbox", "lamp", "light", "signal",
+        "plank", "powerbox", "lamp", "light", "signal",
         "platform", "bench", "sign", "passenger", "door", "cab",
         "bogey", "button", "lever", "cable", "motor", "sleeper",
         "fence", "prop_", "_prop", "texture", "interior",
-        "railroad_part", "_piece", "railroadshort",
+        "railroad_part", "_piece",
     }) do
         if name:find(unwanted, 1, true) then return false end
     end
