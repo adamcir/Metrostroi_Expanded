@@ -5,30 +5,40 @@ files only**. The old tunnel-type, track-length and curve-radius prefab
 selectors have been removed. There is no auto-substitution, invented
 track geometry, scaled stock model, or bundled third-party asset.
 
-## Open the catalog
+## Streamlined original railway model catalog
 
-**Q → Tools → Metrostroi Expanded → Track Builder → OPEN ORIGINAL MODEL CATALOG**
+**Q → Tools → Metrostroi Expanded → Track Builder → OPEN TRACK MODEL CATALOG**
 
-The catalog scans and includes the **complete installed MDL inventory**
-under Metrostroi / Track Pack model folders, not merely filenames that
-contain "rail" or "track". This includes tracks, tunnels, bends, switches,
-signals, platforms, trains and accessory models when those assets are
-mounted in GMod.
+The catalog contains original **railway segment** models from mounted
+Metrostroi/Track Pack content, not unrelated trains, signs, scenery, signal
+models, or individual sleepers. The MDLs are used in-place, without copied
+assets or procedurally generated rail replacements.
 
-The visual catalog contains:
-- Original model **thumbnail grid** (30 MDLs per page), pagination, live
-  search by model path/name, and type/source filters.
-- Click an icon to inspect its actual **3D model preview**, full path,
-  original source and category. Double-click or **USE SELECTED MODEL**
-  to close the browser.
-- The selected MDL stays in **Selected original model** when reopening the
-  tool. There is no preselected model or automatic prefab family.
-- **Reverse model direction** uses the opposite authored rail endpoint
-  without mirroring, deforming or stretching the original MDL.
-- For an explicitly surveyed turnout/crossing, **Junction output port**
-  picks a valid registered branch; no unsurveyed switch geometry is guessed.
-- **Show measured rail centerline overlay** shows a cyan editor-only path
-  extracted from the original running rails (not a rail model).
+The browser has search and railway type/source filters, a continuous
+**scrolling grid (no Prev/Next buttons)**, and a large working 3-D preview.
+Scroll the large preview to zoom and drag to rotate the genuine MDL. The
+original GMod `DModelPanel` paint method handles its own camera/render
+state rather than calling model rendering without a viewport. Only visible
+thumbnail models are instantiated so scrolling a large pack stays responsive.
+
+Type filtering offers straight, curved, **double-track**, uphill/downhill
+and junction models. Real double-track MDLs require two separately measured
+running-rail centerlines and all four rail-end ports. An uncertain
+double-track module cannot fall back to an invented rail separation.
+
+### Uphill and downhill construction
+
+The tool offers **Track grade (+up / -down), degrees** (default 0).
+For a new free route, it tilts the **original** railway model and compiled
+physics in 3-D; it does not bend mesh vertices or generate wedges.
+When connecting to existing track, its actual end grade is inherited.
+Authentic ramp/gradient MDLs keep their measured ascending/descending
+Z profile and endpoint tangents.
+
+A flat model joined to a steeply tilted piece may form an abrupt vertical
+kink. Use original graded transition sections for realistic and driveable
+slope changes. Wheel/physics fitting of pitched models still needs
+in-game validation.
 
 ## Construction controls
 
@@ -85,7 +95,8 @@ instead of drawing a fake replacement.
 
 For selected actual two-ended track models, MEX reads the installed MDL's
 render-rail mesh when supported and locates pairs of running railheads
-approximately 85.8 SU apart. It samples the original track centerline and
+approximately 85.8 SU apart. Explicit double-track model profiles detect
+four original railhead strips and store two individual lane paths. It samples the original track centerline and
 records both *separate* end position, tangent and curvature. That means
 straight, eased transition, and curved models get different actual ports.
 
