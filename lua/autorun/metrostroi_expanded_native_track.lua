@@ -378,6 +378,27 @@ local function GenericProfile(model)
             return nil, "Measured MDL railheads disagree with calibrated Metrostroi curve."
         end
     end
+    if not measured and original then
+        -- A few stock Metrostroi MDLs do not expose readable railhead
+        -- submeshes on dedicated servers. Their measured historical
+        -- per-model seam coordinates are retained as a compatibility
+        -- profile, NOT as a new-construction model/radius preset.
+        local pts = {{original.entryX or 0, original.entryY or 0, 0}}
+        for i = 2, #(original.track or {}) do
+            pts[#pts + 1] = {original.track[i], (i - 1) * 128, 0}
+        end
+        pts[#pts + 1] = {original.x, original.y, 0}
+        return {
+            model = model,
+            entry = pts[1], finish = pts[#pts],
+            points = pts,
+            entryYaw = 90, exitYaw = 90 + original.sweep,
+            deltaYaw = original.sweep, curved = true,
+            length = math.sqrt(original.x * original.x +
+                original.y * original.y),
+            method = "model-specific historical measured rail ports",
+        }
+    end
     return measured, err
 end
 local function GenericOriginalPart(start, yaw, model, settings)
@@ -1047,6 +1068,10 @@ if CLIENT then
     hook.Add("ShutDown", "MEXNativeGhostCleanup", function()
         for _, ghost in pairs(ghosts) do if IsValid(ghost) then ghost:Remove() end end
     end)
+    function N.RequestCatalogRescan()
+        net.Start("MEXNativeCatalogRescan")
+        net.SendToServer()
+    end
     concommand.Add("mex_native_curve_assets", function()
         local installed = 0
         print("[MEX Native Track] Original curved model availability:")
@@ -1137,6 +1162,7 @@ util.AddNetworkString("MEXNativeCurveProfiles")
 util.AddNetworkString("MEXNativeCatalogChunk")
 util.AddNetworkString("MEXNativeRequestProfile")
 util.AddNetworkString("MEXNativeSingleProfile")
+util.AddNetworkString("MEXNativeCatalogRescan")
 N.Active = N.Active or {}
 N.Routes = N.Routes or {}
 N.Props = N.Props or {}
@@ -1201,6 +1227,15 @@ net.Receive("MEXNativeRequestProfile", function(_, ply)
         model = model, profile = profile, error = err,
     }) or "{}")
     net.Send(ply)
+end)
+net.Receive("MEXNativeCatalogRescan", function(_, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    if (ply.MEXNativeCatalogNext or 0) > CurTime() then return end
+    ply.MEXNativeCatalogNext = CurTime() + 10
+    N.ModelCatalog = {}
+    N.MeshProfiles = {}
+    N.ScanModelCatalog()
+    SendMountedCatalog(ply)
 end)
 concommand.Add("mex_native_rescan_models", function(ply)
     if IsValid(ply) and not ply:IsAdmin() then return end
