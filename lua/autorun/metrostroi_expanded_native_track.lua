@@ -1843,8 +1843,19 @@ end
 concommand.Add("mex_native_realign_routes", function(ply)
     if IsValid(ply) and not ply:IsAdmin() then return end
     local raw = file.Read(FILE, "DATA") or "{}"
-    local backup = string.gsub(FILE, "%.json$", "_before_manual_realign.json")
-    if not file.Exists(backup, "DATA") then file.Write(backup, raw) end
+    -- Keep a distinct backup for every manual repair. A single old backup
+    -- filename could silently point to an outdated version of the map.
+    local stamp = os.date("%Y%m%d_%H%M%S")
+    local backup = string.gsub(FILE, "%.json$",
+        "_before_manual_realign_" .. stamp .. ".json")
+    local suffix = 1
+    while file.Exists(backup, "DATA") do
+        backup = string.gsub(FILE, "%.json$",
+            "_before_manual_realign_" .. stamp .. "_" .. suffix .. ".json")
+        suffix = suffix + 1
+    end
+    file.Write(backup, raw)
+    print("[MEX Native Track] Backup saved: data/" .. backup)
     local count = 0
     for id, current in ipairs(N.Routes) do
         local candidate = table.Copy(current)
@@ -1868,7 +1879,7 @@ concommand.Add("mex_native_realign_routes", function(ply)
         end
     end
     print("[MEX Native Track] Realigned " .. count ..
-        " saved routes using measured rail seam vertices.")
+        " saved routes using validated original-MDL straight/curve endpoints.")
     if IsValid(ply) then
         ply:ChatPrint("[MEX Native Track] Realigned " .. count ..
             " routes; original save backup retained.")
