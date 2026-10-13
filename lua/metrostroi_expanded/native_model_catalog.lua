@@ -389,6 +389,142 @@ local function ModelRailProfile(model, allVertices, axis, materialScore)
     }
 end
 
+-- Double-track prefabs contain TWO independent pairs of running rails.
+-- Measure each lane's railhead seam and centerline instead of inventing a
+-- fixed +/-132 SU offset. Keep the two lanes separated for Metrostroi rerail.
+local function DualRailPairs(vertices, axis, station, tolerance)
+    local bins = {}
+    for _, p in ipairs(vertices) do
+        if math.abs(p[axis] - station) <= tolerance then
+            local cross = p[3 - axis]
+            local key = math.floor(cross / 5 + 0.5)
+            local bin = bins[key] or {n = 0, cross = 0, z = 0}
+            bin.n, bin.cross, bin.z = bin.n + 1,
+                bin.cross + cross, bin.z + p[3]
+            bins[key] = bin
+        end
+    end
+    local strips = {}
+    for _, bin in pairs(bins) do
+        strips[#strips + 1] = {
+            cross = bin.cross / bin.n,
+            z = bin.z / bin.n,
+            n = bin.n,
+        }
+    end
+    local pairs = {}
+    for i = 1, #strips do
+        for j = i + 1, #strips do
+            local a, b = strips[i], strips[j]
+            local gauge = math.abs(a.cross - b.cross)
+            if gauge >= 70 and gauge <= 101
+                and math.abs(a.z - b.z) < 12 then
+                pairs[#pairs + 1] = {
+                    center = (a.cross + b.cross) * 0.5,
+                    z = (a.z + b.z) * 0.5,
+                    score = a.n + b.n - math.abs(gauge - 85.8),
+                    ia = i, ib = j,
+                }
+            end
+        end
+    end
+    local best, score = nil, -math.huge
+    for i = 1, #pairs do
+        for j = i + 1, #pairs do
+            local a, b = pairs[i], pairs[j]
+            local spacing = math.abs(a.center - b.center)
+            if a.ia ~= b.ia and a.ia ~= b.ib
+                and a.ib ~= b.ia and a.ib ~= b.ib
+                and spacing >= 160 and spacing <= 640
+                and math.abs(a.z - b.z) < 24 then
+                local rating = a.score + b.score
+                    - math.abs(spacing - 264) * 0.01
+                if rating > score then
+                    score = rating
+                    if a.center < b.center then best = {a, b}
+                    else best = {b, a} end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function DoubleModelProfile(model, vertices, axis)
+    if #vertices < 16 or #vertices > 110000 then return nil end
+    local minAlong, maxAlong = math.huge, -math.huge
+    local stations = {}
+    for _, p in ipairs(vertices) do
+        minAlong, maxAlong = math.min(minAlong, p[axis]),
+            math.max(maxAlong, p[axis])
+        stations[math.floor(p[axis] / 2 + 0.5)] = true
+    end
+    local span = maxAlong - minAlong
+    if span < 48 or span > 16384 then return nil end
+    local ordered = {}
+    for k in pairs(stations) do ordered[#ordered + 1] = k * 2 end
+    table.sort(ordered)
+    if #ordered < 2 then return nil end
+    local stride = math.max(1, math.ceil(#ordered / 75))
+    local selected = {}
+    for i = 1, #ordered, stride do selected[#selected + 1] = ordered[i] end
+    if selected[#selected] ~= ordered[#ordered] then
+        selected[#selected + 1] = ordered[#ordered]
+    end
+    local lanePoints = {{}, {}}
+    local centers = {}
+    for _, at in ipairs(selected) do
+        local pairs
+        for _, tol in ipairs({2.5, 7, 14}) do
+            pairs = DualRailPairs(vertices, axis, at, tol)
+            if pairs then break end
+        end
+        if pairs then
+            local mid = {0, 0, 0}
+            for j = 1, 2 do
+                local p = axis == 2
+                    and {pairs[j].center, at, pairs[j].z}
+                    or {at, pairs[j].center, pairs[j].z}
+                lanePoints[j][#lanePoints[j] + 1] = p
+                for k = 1, 3 do mid[k] = mid[k] + p[k] * 0.5 end
+            end
+            centers[#centers + 1] = mid
+        end
+    end
+    if #centers < 2 or #lanePoints[1] ~= #lanePoints[2] then return nil end
+    local margin = math.max(8, math.min(24, span * 0.035))
+    if math.abs(centers[1][axis] - minAlong) > margin
+        or math.abs(centers[#centers][axis] - maxAlong) > margin then
+        return nil
+    end
+    local a, b = centers[1], centers[#centers]
+    local entryYaw = PlanarYaw(a, centers[math.min(3, #centers)])
+    local exitYaw = PlanarYaw(centers[math.max(1, #centers - 2)], b)
+    local delta = math.AngleDifference(exitYaw, entryYaw)
+    local length = 0
+    for i = 2, #centers do length = length + Dist2(centers[i - 1], centers[i]) end
+    local dx, dy = b[1] - a[1], b[2] - a[2]
+    local chord = math.max(1, math.sqrt(dx * dx + dy * dy))
+    local offset = 0
+    for _, p in ipairs(centers) do
+        offset = math.max(offset,
+            math.abs((p[1] - a[1]) * dy - (p[2] - a[2]) * dx) / chord)
+    end
+    local profile = {
+        model = model,
+        double = true, lanes = 2, lanePoints = lanePoints,
+        entry = a, finish = b, points = centers,
+        entryYaw = entryYaw, exitYaw = exitYaw, deltaYaw = delta,
+        curved = math.abs(delta) > 0.8 or offset > 12,
+        lateralDeviation = offset, axis = axis, length = length,
+        method = "measured double-track running railheads",
+        confidence = #centers * 6 + 40,
+    }
+    local valid = ValidateRailProfile(profile)
+    if not valid then return nil end
+    return profile
+end
+
 local function ExtractRailProfile(model)
     if not util.GetModelMeshes then return nil, "mesh API unavailable" end
     local ok, meshes = pcall(util.GetModelMeshes, model, 0)
@@ -428,6 +564,37 @@ local function ExtractRailProfile(model)
                 end
             end
         end
+    end
+    -- Never treat a genuine two-lane tunnel as one line down the
+    -- middle. Detect four actual running rails on explicitly double MDLs.
+    local mdlName = string.lower(string.GetFileFromFilename(model))
+    local wantsDouble = mdlName:find("double", 1, true)
+        or mdlName:find("2track", 1, true)
+        or mdlName:find("2way", 1, true)
+    if wantsDouble then
+        local bestDual, dualScore
+        local testPools = {pools[3], pools[2], pools[1]}
+        local allRails = {}
+        for strength = 3, 1, -1 do
+            for _, p in ipairs(pools[strength]) do
+                if #allRails >= 110000 then break end
+                allRails[#allRails + 1] = p
+            end
+        end
+        testPools[#testPools + 1] = allRails
+        for _, vertices in ipairs(testPools) do
+            for _, axis in ipairs({2, 1}) do
+                local profile = DoubleModelProfile(model, vertices, axis)
+                if profile and (not dualScore
+                    or profile.confidence > dualScore) then
+                    bestDual, dualScore = profile, profile.confidence
+                end
+            end
+        end
+        if not bestDual then
+            return nil, "Double-track MDL requires both real railhead pairs; no guessed track spacing is permitted."
+        end
+        return bestDual
     end
     if not best then
         -- Some Track Packs assign a different but still rail-related
