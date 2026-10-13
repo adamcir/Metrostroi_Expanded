@@ -622,7 +622,25 @@ function N.GetAimedModule(ply, traced)
     return saved
 end
 
-function N.PortFromAimedEntity(trace, tracks)
+-- A curved MDL has a huge collision hull. Hitting its MIDDLE must not
+-- snap to a faraway end or to a joint that is already occupied. Only the
+-- physical rail-end nodes can be used to start a new segment.
+function N.PortOccupied(owner, marker)
+    for _, candidate in ipairs(ents.FindByClass("mex_native_track_piece")) do
+        if IsValid(candidate) and candidate ~= owner
+            and candidate:GetNW2Bool("MEXNativeModule", false) then
+            for i = 1, candidate:GetNW2Int("MEXNativePorts", 0) do
+                local other = candidate:GetNW2Vector("MEXNativePort" .. i, vector_origin)
+                if other ~= vector_origin and other:DistToSqr(marker) < 12 * 12 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
     local ent = trace and trace.Entity
     if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
         return nil
@@ -630,30 +648,41 @@ function N.PortFromAimedEntity(trace, tracks)
     local wanted = tonumber(tracks) == 2 and 2 or 1
     local num = ent:GetNW2Int("MEXNativePorts", 0)
     local double = num == 4 and ent:GetNW2String("MEXNativeJunctionID", "") == ""
-    local count = double and 2 or 1
-    if count ~= wanted then return nil end
-    local best, d = nil, math.huge
+    if (double and 2 or 1) ~= wanted then return nil end
+    local best, score = nil, math.huge
     for i = 1, num do
         local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
-        local center = ent:GetNW2Vector("MEXNativePortCenter" .. i,
-            point - RAIL_MARKER_OFFSET)
-        if point ~= vector_origin then
-            local delta = trace.HitPos:DistToSqr(point)
-            if delta < d then
-                d = delta
-                best = {
-                    pos = point,
-                    center = center,
-                    yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
-                    lanes = count,
-                    ent = ent,
-                    index = i,
-                }
+        if point ~= vector_origin and not N.PortOccupied(ent, point) then
+            local hitDist = isvector(trace.HitPos) and trace.HitPos:DistToSqr(point)
+                or math.huge
+            local miss = math.huge
+            if isvector(eye) and isvector(aimDir) then
+                local along = (point - eye):Dot(aimDir)
+                if along > 0 and along < 8192 then
+                    miss = point:DistToSqr(eye + aimDir * along)
+                end
+            end
+            -- No "closest end of any track you clicked" behavior: on a
+            -- 1664-SU turn that chooses an endpoint hundreds of units away.
+            if hitDist < 90 * 90 or miss < 28 * 28 then
+                local d = math.min(hitDist, miss)
+                if d < score then
+                    score = d
+                    best = {
+                        pos = point,
+                        center = ent:GetNW2Vector("MEXNativePortCenter" .. i,
+                            point - RAIL_MARKER_OFFSET),
+                        yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
+                        lanes = wanted,
+                        ent = ent, index = i,
+                    }
+                end
             end
         end
     end
     return best
 end
+
 
 if CLIENT then
     local ghosts = {}
@@ -733,8 +762,8 @@ if CLIENT then
             junction = tool:GetClientInfo("native_junction"),
             branch = tool:GetClientNumber("native_branch", 2),
         }
-        local anchor = not active and N.PortFromAimedEntity(tr, settings.tracks)
-            or nil
+        local anchor = not active and N.PortFromAimedEntity(tr, settings.tracks,
+            ply:GetShootPos(), ply:GetAimVector()) or nil
         local origin = active and ply:GetNW2Vector("MEXNativeEnd", aim)
             or (anchor and anchor.center or aim)
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
@@ -1240,7 +1269,8 @@ function N.Add(ply, aim, settings)
         local tr = ply:GetEyeTrace()
         local rayLength = tr and tr.Hit and not tr.HitSky
             and ply:GetShootPos():Distance(tr.HitPos) or nil
-        local connector = N.PortFromAimedEntity(tr, settings.tracks)
+        local connector = N.PortFromAimedEntity(tr, settings.tracks,
+            ply:GetShootPos(), ply:GetAimVector())
             or N.FindPort(aim, 72, settings.tracks,
                 ply:GetShootPos(), ply:GetAimVector(), rayLength)
         local yaw = connector and connector.yaw or ply:EyeAngles().y
