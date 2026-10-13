@@ -386,16 +386,10 @@ local function GenericOriginalPart(start, yaw, model, settings)
     if not profile then return nil, err end
     local delta = profile.deltaYaw or 0
     local curved = profile.curved
-    local mode = tostring(settings.mode or "straight")
-    local reverse = false
-    if curved then
-        -- A "turn1" can be traversed in either direction; never mirror the
-        -- contact rail or stretch a model to fit a fake circle.
-        if mode == "curve_right" then reverse = delta > 0
-        elseif mode == "curve_left" then reverse = delta < 0 end
-    elseif mode == "curve_left" or mode == "curve_right" then
-        return nil, "Selected original model is straight, not a curved rail segment."
-    end
+    -- One universal direction switch replaces the old Curve Left /
+    -- Curve Right and radius presets. Reversal never mirrors or distorts
+    -- the original meshes; it simply selects the opposite authored port.
+    local reverse = tonumber(settings.native_reverse) == 1
     local beginPort = reverse and profile.finish or profile.entry
     local endPort = reverse and profile.entry or profile.finish
     local localHeading = reverse and (profile.exitYaw + 180) or profile.entryYaw
@@ -424,159 +418,86 @@ local function GenericOriginalPart(start, yaw, model, settings)
 end
 -- Generate a strict sequence of original-size stock modules. There is no
 -- arbitrary deformation, scaling, procedural tunnel or geometry fallback.
+-- Only a model selected from the actual installed catalog can be placed.
+-- Legacy prefab radius/family lists remain readable for old saves, but
+-- are NEVER consulted by new construction.
 function N.Candidate(start, yaw, aimed, settings)
     settings = settings or {}
-    local tunnel, lane = Settings(settings)
-    local mode = tostring(settings.mode or "straight")
     local result = {parts = {}, pos = start, yaw = yaw}
-    local selected = tostring(settings.native_model or "")
-    if selected ~= "" then
-        -- Track Pack junctions must keep their original branching geometry:
-        -- no two-port guessed ends for a switch/diamond crossing.
-        local info = N.ModelCatalog[string.lower(selected)]
-        if not info then
-            return nil, "Selected original model is not mounted. Rescan Metrostroi/Track Pack assets."
-        end
-        if info.kind == "junction" then
-            return nil, "Original turnout/crossing requires a calibrated multi-port junction profile."
-        end
-        if tonumber(settings.tracks) == 2 then
-            return nil, "Double-track custom prefabs require separate verified rail-lane port profiles."
-        end
-        local part, finish, finalYaw = GenericOriginalPart(start, yaw, selected, settings)
-        if not part then return nil, finish end
-        result.parts[1] = part
-        result.pos, result.yaw = finish, finalYaw
-        return result
+    local selected = string.lower(string.Trim(tostring(settings.native_model or "")))
+    if selected == "" then
+        return nil, "Select an original MDL from the Model Catalog first."
     end
-    if mode == "straight" then
-        local kit = KIT[tunnel] and KIT[tunnel][lane]
-        if not kit then return nil, "No original straight modules for this tunnel/track layout." end
-        local distance = (aimed - start):Dot(Direction(yaw))
-        local sideways = (aimed - start - Direction(yaw) * distance):Length()
-        if distance < 32 then return nil, "Point forward along the track to extend it." end
-        if sideways > 120 then return nil, "Original straight modules cannot bend. Select a curve module." end
-        local lengths = {}
-        for length, model in pairs(kit) do
-            if ValidModel(ROOT .. model) then lengths[#lengths + 1] = length end
+    local info = N.ModelCatalog[selected]
+    if not info then
+        return nil, "Original MDL not installed in the mounted model catalog: " .. selected
+    end
+    if not ValidModel(selected) then
+        return nil, "Original model is unavailable: " .. selected
+    end
+
+    -- Registered real junctions can also be selected directly from the
+    -- catalog. Their topology comes from measured multi-port profiles,
+    -- never fabricated by overlapping two regular rails.
+    local profile
+    for id, junction in pairs(N.Junctions) do
+        if junction.model == selected
+            or (junction.variants and
+                (junction.variants["2"] == selected or
+                    junction.variants["3"] == selected)) then
+            profile = junction
+            break
         end
-        table.sort(lengths, function(a,b) return a > b end)
-        if #lengths == 0 then return nil, "No matching original Metrostroi tunnel models are installed." end
-        local minimum = lengths[#lengths]
-        local rounded = math.floor(distance / minimum + 0.5) * minimum
-        if rounded > 16384 or rounded < minimum then return nil, "Route length is outside available module sizes." end
-        local used, current = 0, start
-        for _, length in ipairs(lengths) do
-            while rounded - used >= length and #result.parts < 128 do
-                local model = ROOT .. kit[length]
-                local part, newEnd
-                if lane == "single" and N.ModelCatalog[model] then
-                    local profile, reason = GenericProfile(model)
-                    if profile and not profile.curved then
-                        part, newEnd = GenericOriginalPart(
-                            current, yaw, model, {mode="straight"})
-                    elseif CLIENT and reason == "Waiting for server rail-end calibration." then
-                        return nil, reason
-                    end
-                end
-                if not part then
-                    part = Placement(current, yaw, model, length, lane)
-                    newEnd = current + Direction(yaw) * length
-                end
-                result.parts[#result.parts + 1] = part
-                current = newEnd
-                used = used + length
+    end
+    if profile then
+        if tonumber(settings.native_reverse) == 1 then
+            return nil, "Reversing a junction requires separately surveyed port directions."
+        end
+        local branch = math.Clamp(math.floor(tonumber(settings.branch) or 2),
+            2, #profile.ports)
+        local validExit = false
+        for _, link in ipairs(profile.paths) do
+            if (link[1] == 1 and link[2] == branch)
+                or (link[2] == 1 and link[1] == branch) then
+                validExit = true
+                break
             end
         end
-        if used ~= rounded then return nil, "The selected distance cannot be assembled from installed original models." end
-        result.pos = current
-        return result
-    end
-    if mode == "curve_left" or mode == "curve_right" then
-        local requestedRadius = tonumber(settings.radius) or 4096
-        local profiles = TURNS[tunnel] and TURNS[tunnel][lane]
-        if not profiles then
-            return nil, "No original curved tunnel is catalogued for this layout."
+        if not validExit then
+            return nil, "Selected original junction has no rail connection to output port " .. branch
         end
-        local radius, spec
-        local bestDifference = math.huge
-        for nominal, available in pairs(profiles) do
-            if ValidModel(ROOT .. available.file) then
-                local diff = math.abs(nominal - requestedRadius)
-                if diff < bestDifference then
-                    radius, spec, bestDifference = nominal, available, diff
-                end
-            end
+        if profile.kind == "switch" and branch ~= 2 and not profile.variants then
+            return nil, "This original turnout needs calibrated main/diverging PHY models."
         end
-        if not spec then
-            return nil, "No authentic turn1 MDL is mounted for this tunnel layout. Install the Metrostroi track models."
+        local model = profile.variants
+            and profile.variants[tostring(branch)] or profile.model
+        if model ~= selected then
+            return nil, "Choose the original junction MDL matching selected output port."
         end
-        -- The optional size fallback always uses a REAL installed prefab.
-        -- Geometry, endpoint connectors, and network paths all use its TRUE
-        -- nominal radius, never the uninstalled radius requested by the tool.
-        local sign = mode == "curve_right" and 1 or -1
-        local model = ROOT .. spec.file
-        local part, finish, exitYaw
-        if lane == "single" and N.ModelCatalog[model] then
-            -- The actual railhead mesh beats historical hand-measured curve
-            -- constants. It eliminates the seam visible between consecutive
-            -- native Metrostroi turn1 models, including their sidewalls.
-            local measured, why = GenericProfile(model)
-            if measured then
-                part, finish, exitYaw = GenericOriginalPart(
-                    start, yaw, model, settings)
-            elseif CLIENT and why == "Waiting for server rail-end calibration." then
-                return nil, why
-            end
-        end
-        if not part then
-            part, finish, exitYaw = StockCurveWorldPart(
-                start, yaw, model, sign, radius, lane)
-        end
-        if not part then
-            return nil, "This original curve has no verified rail-end coordinates."
-        end
-        result.parts[1] = part
-        result.pos, result.yaw = finish, exitYaw
-        return result
-    end
-    if mode == "switch" or mode == "crossing" then
-        local spec = N.Junctions[tostring(settings.junction or "")]
-        if not spec or spec.kind ~= mode then
-            return nil, "No calibrated original junction profile is selected. Register its real model and ports first."
-        end
-        local selected = spec.variants and spec.variants[tostring(tonumber(settings.branch) or 2)] or spec.model
-        if spec.kind == "switch" and not spec.variants
-            and tonumber(settings.branch or 2) ~= 2 then
-            return nil, "This original switch has a fixed main route. Install and register matching main/diverging .phy model variants to enable port 3."
-        end
-        if not ValidModel(selected) then return nil, "The selected original junction model is not installed." end
         local ang = ModelAngles(yaw)
-        local reference = V(spec.ports[1])
+        local reference = V(profile.ports[1])
         reference:Rotate(ang)
-        local origin = start - reference + Vector(0, 0, 5)
-        local output = math.Clamp(math.floor(tonumber(settings.branch) or 2), 2, #spec.ports)
-        local linked = false
-        for _, link in ipairs(spec.paths) do
-            if (link[1] == 1 and link[2] == output)
-                or (link[2] == 1 and link[1] == output) then linked = true end
-        end
-        if not linked then
-            return nil, "The chosen exit is not connected to the junction input. Select a physically connected output port."
-        end
-        local port = V(spec.ports[output])
+        local origin = start - reference + Vector(0, 0, MODEL_LIFT)
+        local port = V(profile.ports[branch])
         port:Rotate(ang)
-        local portPos = origin + port - Vector(0, 0, 5)
-        local yawOut = yaw + (tonumber(spec.ports[output][4]) or 0)
+        result.pos = origin + port - Vector(0, 0, MODEL_LIFT)
+        result.yaw = yaw + (tonumber(profile.ports[branch][4]) or 0)
         result.parts[1] = {
-            model = selected, pos = P(origin), ang = {ang.p, ang.y, ang.r},
-            start = P(start), yaw = yaw, length = 0, lane = lane,
-            junction = spec.id, branch = output,
+            model = model, pos = P(origin), ang = {ang.p, ang.y, ang.r},
+            start = P(start), yaw = yaw, length = 0,
+            lane = "single", junction = profile.id, branch = branch,
         }
-        result.pos, result.yaw = portPos, yawOut
         return result
     end
-    return nil, "Unknown module mode."
+    if info.kind == "junction" then
+        return nil, "Original turnout/crossing needs measured 3- or 4-port junction registration."
+    end
+    local part, finish, exitYaw = GenericOriginalPart(start, yaw, selected,
+        settings)
+    if not part then return nil, finish end
+    result.parts[1] = part
+    result.pos, result.yaw = finish, exitYaw
+    return result
 end
 
 local function PortKey(pos)
@@ -965,13 +886,9 @@ if CLIENT then
             or (ply:GetShootPos() + ply:GetAimVector() * 800)
         local active = ply:GetNW2Bool("MEXNativeActive", false)
         local settings = {
-            mode = tool:GetClientInfo("native_mode"),
-            tunnel = tool:GetClientInfo("native_tunnel"),
-            tracks = tool:GetClientNumber("native_tracks", 1),
-            radius = tool:GetClientNumber("native_radius", 4096),
-            junction = tool:GetClientInfo("native_junction"),
-            branch = tool:GetClientNumber("native_branch", 2),
             native_model = tool:GetClientInfo("native_model"),
+            native_reverse = tool:GetClientNumber("native_reverse", 0),
+            branch = tool:GetClientNumber("native_branch", 2),
         }
         local anchor = nil
         if not active then
@@ -1038,25 +955,6 @@ if CLIENT then
                 N.PreviewCurveRadius = candidate.parts[1].radius
             else
                 N.PreviewCurveRadius = nil
-            end
-        else
-            -- Never draw an unrelated STRAIGHT MDL when a curved tunnel is
-            -- requested but not installed: its apparent endpoints would be
-            -- wrong and the next click could never actually place it.
-            -- In straight mode show a valid original sample at the cursor.
-            if settings.mode == "straight" and not invalidMidRail then
-                local tunnel, lane = Settings(settings)
-                local kit = KIT[tunnel] and KIT[tunnel][lane]
-                local name, realLength
-                for _, len in ipairs({64, 256, 1024, 4096}) do
-                    if kit and kit[len] and ValidModel(ROOT .. kit[len]) then
-                        name, realLength = ROOT .. kit[len], len
-                        break
-                    end
-                end
-                if name then
-                    DrawGhost(Placement(origin, yaw, name, realLength, lane), 1, false)
-                end
             end
         end
         render.SetColorMaterial()
@@ -1619,6 +1517,15 @@ end
 function N.Add(ply, aim, settings)
     if not IsValid(ply) or not ply:IsAdmin() or not isvector(aim) then return false end
     settings = settings or {}
+    local selected = string.lower(string.Trim(tostring(settings.native_model or "")))
+    if selected == "" then
+        Notify(ply, "Open Model Catalog and choose an installed Metrostroi or Track Pack MDL.")
+        return false
+    end
+    if not N.ModelCatalog[selected] then
+        Notify(ply, "Selected model is not mounted. Rescan your original model catalog.")
+        return false
+    end
     local state = N.Active[ply]
     if not state then
         local tr = ply:GetEyeTrace()
