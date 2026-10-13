@@ -6,7 +6,7 @@ local N = MEXNativeTrack
 N.ModelCatalog = N.ModelCatalog or {}
 -- Reset old negative/failed calibration cache on Lua refresh, since older
 -- fixed-step sampling rejected straight original MDLs with only end vertices.
-local ANALYZER_VERSION = 4
+local ANALYZER_VERSION = 5
 if N.MeshProfileCacheVersion ~= ANALYZER_VERSION then
     N.MeshProfiles = {}
     N.MeshProfileCacheVersion = ANALYZER_VERSION
@@ -369,7 +369,8 @@ local function ModelRailProfile(model, allVertices, axis, materialScore)
             (point[1] - first[1]) * dy -
             (point[2] - first[2]) * dx) / chord)
     end
-    if math.abs(first[3] - last[3]) > 24 then return nil end
+    -- Original graded/slope sections legitimately rise by more than 24 SU.
+    -- Preserve their authored vertical rail path and its actual end grade.
     local gaugeMean = 0
     for _, g in ipairs(gauges) do gaugeMean = gaugeMean + g end
     gaugeMean = gaugeMean / #gauges
