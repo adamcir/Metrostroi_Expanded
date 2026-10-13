@@ -99,8 +99,8 @@ function N.ScanModelCatalog()
                         or path:find("track_pack", 1, true) then
                         if not found[mdl] then discovered = discovered + 1 end
                         found[mdl] = {model = mdl, kind = Kind(mdl),
-                            source = mdl:find("trackpack", 1, true)
-                                or mdl:find("track_pack", 1, true)
+                            source = (mdl:find("trackpack", 1, true)
+                                or mdl:find("track_pack", 1, true))
                                 and "Track Pack" or "Metrostroi"}
                     end
                 end
