@@ -478,7 +478,13 @@ function N.AnalyzeNativeModel(model)
     end
     local override = N.NativeOverrides[model]
     if ValidOverride(override) then
-        return OverrideProfile(model, override.points)
+        local profile = OverrideProfile(model, override.points)
+        local valid, reason = ValidateRailProfile(profile)
+        if not valid then
+            return nil, "Registered original rail ports are inconsistent: " ..
+                tostring(reason)
+        end
+        return profile
     end
     local cached=N.MeshProfiles[model]
     if cached then return cached.profile,cached.error end
