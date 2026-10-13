@@ -133,6 +133,74 @@ To re-align already loaded old routes without restarting, admins can run
 The older MEX route file is preserved for compatibility but the Track
 Builder UI creates **native modules only**. No original assets are modified.
 
+## Installed Metrostroi / Track Pack original model catalog
+
+The **Exact installed original model** dropdown lists real `.mdl` assets
+discovered in mounted `GAME` paths: stock Metrostroi tunnels/tracks and
+Track Pack, Metro Track Pack and other third-party folders. No model binary,
+texture or rail mesh is shipped, copied or synthesized by MEX.
+
+Use **Rescan mounted Metrostroi + Track Pack models** after mounting content:
+
+```text
+mex_native_rescan_models
+```
+
+The server synchronizes the catalog and the **individually measured**
+centerline and connector headings to the client. The first grey preview of
+a newly selected model may briefly display **Waiting for server rail-end
+calibration**. The preview and eventual solid model use identical measured
+values instead of calculating distinct client/server approximations.
+
+For a normal two-ended track segment, MEX reads the original render mesh
+and locates pairs of running rails approximately 85.8 Source units apart.
+It scans centerline slices to find actual **beginning and end rail-head
+faces**. The entry and exit headings are measured separately: a constant
+radius, eased `turn1`, S-curve or straight model each has independent ports.
+The sampled cyan editor line shows the measured centerline; the overlay can
+be toggled with **Show measured rail centerline overlay**. Cyan editor
+lines are not track meshes and have no collisions.
+
+**Not every discovered MDL is a traversable track.** Models without two
+recognizable running railhead faces, with no original usable .phy, or with
+branching geometry are rejected rather than given invented endpoints.
+Custom double-track prefabs need separately verified dual-lane profiles,
+and original turnout/crossing pieces need registered multi-port geometry.
+
+Inspect one specific installed model on the **server** with:
+
+```text
+mex_native_model_info models/metrostroi/tracks/tunnel3072_turn1.mdl
+```
+
+The output gives actual local start/end XYZ positions, their separate
+tangent headings, length, and straight/curve classification.
+
+For uncommon third-party content stored outside the automatically known
+folders, an admin can explicitly add its original model directory:
+
+```text
+mex_native_catalog_root models/your_trackpack_folder
+```
+
+For original Track Pack models whose rail mesh materials cannot be
+identified safely, a superadmin can enter *measured model-local*
+centerline coordinates rather than guessing a radius:
+
+```text
+mex_native_register_model_path models/your_trackpack_folder/example.mdl "0,0,5;0,64,5;-4,128,5;-13,192,5"
+```
+
+Use more waypoints for a curved model; include both actual authored rail
+end faces. Overrides persist in
+`data/metrostroi_expanded/native_model_ports.json`.
+
+For the fixed original stock `turn1` models the editor also retains
+verified per-model historical port calibration when reading the railhead
+material fails. **Existing saved tracks are not silently moved.**
+To reconstruct outdated saved stock curves, use the separate
+`mex_native_realign_routes` command, which saves a backup first.
+
 ## Switches and diamond crossings
 
 A switch or a crossing is **not** made by overlapping two regular track
