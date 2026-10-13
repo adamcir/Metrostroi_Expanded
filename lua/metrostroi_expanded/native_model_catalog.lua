@@ -70,8 +70,8 @@ function N.ScanModelCatalog()
         if TrackCandidate(dirname) then roots[#roots + 1] = "models/" .. dirname end
     end
     for _, root in ipairs(roots) do pending[#pending + 1] = {root, 0} end
-    local processed = 0
-    while #pending > 0 and processed < 1400 and table.Count(found) < 12000 do
+    local processed, discovered = 0, 0
+    while #pending > 0 and processed < 1400 and discovered < 12000 do
         local item = table.remove(pending)
         local path, depth = item[1], item[2]
         local key = string.lower(path)
@@ -97,9 +97,11 @@ function N.ScanModelCatalog()
                     if TrackCandidate(name) or railFolder or forced
                         or path:find("trackpack", 1, true)
                         or path:find("track_pack", 1, true) then
+                        if not found[mdl] then discovered = discovered + 1 end
                         found[mdl] = {model = mdl, kind = Kind(mdl),
-                            source = mdl:find("metrostroi", 1, true)
-                                and "Metrostroi" or "Track Pack"}
+                            source = mdl:find("trackpack", 1, true)
+                                or mdl:find("track_pack", 1, true)
+                                and "Track Pack" or "Metrostroi"}
                     end
                 end
             end
@@ -262,15 +264,22 @@ local function ValidOverride(override)
 end
 local function OverrideProfile(model, points)
     local first, last = points[1], points[#points]
-    local length = 0
+    local length,maxBend = 0,0
     for i = 2, #points do length = length + Dist2(points[i-1], points[i]) end
     local entryYaw = PlanarYaw(first, points[2])
     local exitYaw = PlanarYaw(points[#points-1], last)
     local delta = math.AngleDifference(exitYaw, entryYaw)
+    local dx,dy = last[1]-first[1],last[2]-first[2]
+    local lengthXY = math.max(1,math.sqrt(dx*dx+dy*dy))
+    for _,p in ipairs(points) do
+        maxBend = math.max(maxBend,
+            math.abs((p[1]-first[1])*dy - (p[2]-first[2])*dx)/lengthXY)
+    end
     return {
         model = model, points = points, entry = first, finish = last,
         entryYaw = entryYaw, exitYaw = exitYaw, deltaYaw = delta,
-        curved = math.abs(delta) > 0.8, length = length,
+        curved = math.abs(delta) > 0.8 or maxBend > 12,
+        lateralDeviation = maxBend, length = length,
         method = "registered original rail centerline",
     }
 end
