@@ -233,15 +233,37 @@ if CLIENT then
             for i = (page - 1) * pageSize + 1,
                 math.min(page * pageSize, #matched) do
                 local info = matched[i]
-                local icon = icons:Add("SpawnIcon")
+                local tile = icons:Add("DPanel")
+                tile:SetSize(124, 135)
+                tile:SetTooltip(info.model)
+                tile.Paint = function(_, w, h)
+                    local active = selectedModel == info.model
+                    draw.RoundedBox(4, 0, 0, w, h,
+                        active and Color(58, 91, 68)
+                            or Color(42, 46, 54))
+                    if active then
+                        surface.SetDrawColor(115, 232, 138, 255)
+                        surface.DrawOutlinedRect(0, 0, w, h, 2)
+                    end
+                end
+                local icon = vgui.Create("SpawnIcon", tile)
+                icon:SetPos(12, 4)
                 icon:SetSize(100, 100)
                 icon:SetModel(info.model)
                 icon:SetTooltip(info.model)
-                icon.DoClick = function()
+                local label = vgui.Create("DButton", tile)
+                label:SetPos(4, 105)
+                label:SetSize(116, 27)
+                label:SetFont("DermaDefault")
+                label:SetText(TitleFor(info))
+                label:SetTooltip(info.model)
+                local function SelectItem()
                     ApplySelection(info.model)
                 end
+                icon.DoClick = SelectItem
+                label.DoClick = SelectItem
                 icon.DoDoubleClick = function()
-                    ApplySelection(info.model)
+                    SelectItem()
                     frame:Close()
                 end
             end
