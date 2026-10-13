@@ -46,7 +46,10 @@ local function IsPackDirectory(name)
         or s:find("mn_r", 1, true) ~= nil
 end
 local function Kind(path)
-    local s = string.lower(path)
+    -- Never classify by the PARENT FOLDER. The old implementation marked
+    -- every numerically named curve inside "models/metrostroi_tracks" as
+    -- straight, because the directory itself contained "tracks".
+    local s = string.lower(string.GetFileFromFilename(path or ""))
     if s:find("switch", 1, true) or s:find("strel", 1, true)
         or s:find("cross", 1, true) or s:find("syezd", 1, true)
         or s:find("junction", 1, true) then return "junction" end
@@ -54,9 +57,13 @@ local function Kind(path)
         or s:find("povorot", 1, true) or s:find("radius", 1, true) then
         return "curve"
     end
-    if s:find("tunnel", 1, true) or s:find("rail", 1, true)
-        or s:find("track", 1, true) or s:find("depo", 1, true)
-        or s:find("puti", 1, true) then return "straight" end
+    if s:find("tunnel", 1, true) or s:find("railroad", 1, true)
+        or s:find("straight", 1, true) or s:find("track", 1, true)
+        or s:find("depo", 1, true) or s:find("puti", 1, true) then
+        return "straight"
+    end
+    -- Numeric / unknown Track Pack names must be classified by actual
+    -- measured geometry, NOT mislabeled by a parent directory.
     return "other"
 end
 function N.ScanModelCatalog()
