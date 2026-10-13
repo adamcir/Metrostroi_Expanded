@@ -102,7 +102,9 @@ local function Right(yaw) local f = Direction(yaw) return Vector(f.y, -f.x, 0) e
 local function ModelAngles(yaw) return Angle(0, yaw - 90, 0) end
 local modelCache = {}
 local function ValidModel(model)
-    if not isstring(model) or not string.StartWith(model, ROOT) then return false end
+    if not isstring(model) or
+        (not string.StartWith(string.lower(model), ROOT) and
+            not N.ModelCatalog[string.lower(model)]) then return false end
     local cached = modelCache[model]
     if cached and cached.expiry > CurTime() then return cached.valid end
     local valid = util.IsValidModel(model)
@@ -920,6 +922,7 @@ if CLIENT then
             radius = tool:GetClientNumber("native_radius", 4096),
             junction = tool:GetClientInfo("native_junction"),
             branch = tool:GetClientNumber("native_branch", 2),
+            native_model = tool:GetClientInfo("native_model"),
         }
         local anchor = nil
         if not active then
