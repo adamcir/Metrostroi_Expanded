@@ -42,15 +42,20 @@ clicking a connector. Double-track curves expose two rail connectors per end,
 based on their OWN unique model pivot, not a copied straight-track pivot.
 Internal joined ports are hidden.
 
-**Precision fixes:** clicking anywhere on a saved original rail module now
-selects its nearest actual saved end port, not the wall/track hit position.
-The client ghost uses that exact same model port before clicking, preventing
-the preview and the built model from jumping to different places. Curved
-module ports are recalibrated from the installed Metrostroi model's actual
-railhead vertex meshes when accessible. Measurements are cached; verified
-original stock rail-end coordinates remain as fallback for versions where
-the railhead mesh cannot be extracted. Saved older curved sections are
-recalibrated on map load **without moving the visible models**.
+**Precision fixes:** a saved original rail module can only be connected
+at its **actual free rail-end port**. Clicking the middle of a 1664-SU curve
+never selects a remote endpoint and no longer starts a fake new section
+from the tunnel wall. A colored crossbar shows the complete gauge at the
+physical end face. Joined ends (including slightly offset older saved
+pieces) are hidden and cannot be selected a second time.
+
+Curved profiles are measured/calibrated on the **server** and synchronized
+to the client, ensuring that grey preview and authoritative placed model
+calculate the same exact endpoint and tangent. Vertex measurements that
+diverge substantially from the verified original rail end faces are refused;
+the baseline stock profile is used instead. Old saves keep their models
+unless explicitly realigned with `mex_native_realign_routes` (a safety
+backup is created first).
 
 Use `mex_native_curve_assets` to view each installed original curved
 model's port coordinates and whether the result is **MESH-MEASURED** or
