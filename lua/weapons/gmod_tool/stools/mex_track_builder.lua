@@ -72,11 +72,26 @@ if CLIENT then
         frame:SetSizable(true)
         frame:Center()
         frame:MakePopup()
+        frame.Paint = function(_, w, h)
+            draw.RoundedBox(7, 0, 0, w, h, Color(24, 29, 35, 250))
+            surface.SetDrawColor(75, 95, 98, 230)
+            surface.DrawOutlinedRect(0, 0, w, h, 1)
+        end
+        if IsValid(frame.lblTitle) then
+            frame.lblTitle:SetTextColor(Color(240, 245, 248))
+        end
+        local function DarkPanel(panel, r, g, b)
+            panel.Paint = function(_, w, h)
+                surface.SetDrawColor(r, g, b, 255)
+                surface.DrawRect(0, 0, w, h)
+            end
+        end
 
         local header = vgui.Create("DPanel", frame)
         header:Dock(TOP)
         header:SetTall(70)
         header:DockPadding(8, 7, 8, 7)
+        DarkPanel(header, 37, 45, 53)
         local search = vgui.Create("DTextEntry", header)
         search:Dock(TOP)
         search:SetTall(28)
@@ -119,10 +134,12 @@ if CLIENT then
         footer:Dock(BOTTOM)
         footer:SetTall(38)
         footer:DockPadding(7, 5, 7, 5)
+        DarkPanel(footer, 37, 45, 53)
         local choose = vgui.Create("DButton", footer)
         choose:Dock(RIGHT)
         choose:SetWide(156)
         choose:SetText("USE SELECTED MODEL")
+        choose:SetTextColor(Color(20, 25, 28))
         local pageForward = vgui.Create("DButton", footer)
         pageForward:Dock(LEFT)
         pageForward:SetWide(68)
@@ -141,27 +158,42 @@ if CLIENT then
         preview:Dock(RIGHT)
         preview:SetWide(300)
         preview:DockMargin(7, 7, 8, 7)
-        preview:DockPadding(7, 7, 7, 7)
+        preview:DockPadding(10, 10, 10, 10)
+        DarkPanel(preview, 35, 42, 50)
         local modelPreview = vgui.Create("DModelPanel", preview)
         modelPreview:Dock(TOP)
         modelPreview:SetTall(240)
-        modelPreview:SetFOV(38)
+        modelPreview:SetFOV(48)
+        modelPreview:SetAmbientLight(Color(190, 190, 190))
+        modelPreview:SetDirectionalLight(BOX_TOP, Color(215, 215, 215))
         modelPreview.LayoutEntity = function() end
+        modelPreview.Paint = function(self, w, h)
+            draw.RoundedBox(3, 0, 0, w, h, Color(23, 28, 35))
+            self:DrawModel()
+        end
+        modelPreview.OnMouseWheeled = function(self, delta)
+            local look = self:GetLookAt() or Vector(0, 0, 0)
+            local cam = self:GetCamPos()
+            local offset = cam - look
+            if offset:LengthSqr() < 0.01 then return end
+            local multiplier = delta > 0 and 0.8 or 1.25
+            self:SetCamPos(look + offset * multiplier)
+        end
         local nameText = vgui.Create("DLabel", preview)
         nameText:Dock(TOP)
-        nameText:SetTall(46)
+        nameText:SetTall(45)
         nameText:SetWrap(true)
         nameText:SetContentAlignment(7)
         nameText:SetTextColor(Color(240, 240, 240))
         local pathText = vgui.Create("DLabel", preview)
         pathText:Dock(TOP)
-        pathText:SetTall(86)
+        pathText:SetTall(75)
         pathText:SetWrap(true)
         pathText:SetContentAlignment(7)
         pathText:SetTextColor(Color(190, 215, 240))
         local categoryText = vgui.Create("DLabel", preview)
         categoryText:Dock(TOP)
-        categoryText:SetTall(60)
+        categoryText:SetTall(42)
         categoryText:SetWrap(true)
         categoryText:SetContentAlignment(7)
         categoryText:SetTextColor(Color(230, 220, 180))
@@ -169,15 +201,26 @@ if CLIENT then
         noteText:Dock(FILL)
         noteText:SetWrap(true)
         noteText:SetContentAlignment(7)
-        noteText:SetTextColor(Color(210, 210, 210))
+        noteText:SetTextColor(Color(215, 226, 232))
+        local hintText = vgui.Create("DLabel", preview)
+        hintText:Dock(BOTTOM)
+        hintText:SetTall(42)
+        hintText:SetWrap(true)
+        hintText:SetTextColor(Color(124, 210, 178))
+        hintText:SetText("Mouse wheel on preview: zoom in / out")
 
         local scroll = vgui.Create("DScrollPanel", frame)
         scroll:Dock(FILL)
         scroll:DockMargin(8, 7, 0, 7)
+        scroll.Paint = function(_, w, h)
+            surface.SetDrawColor(27, 33, 40, 255)
+            surface.DrawRect(0, 0, w, h)
+        end
         local icons = vgui.Create("DIconLayout", scroll)
         icons:Dock(TOP)
         icons:SetSpaceX(8)
         icons:SetSpaceY(8)
+        icons:DockMargin(8, 8, 8, 8)
 
         local page = 1
         local pageSize = 30
@@ -207,9 +250,11 @@ if CLIENT then
                 local mn, mx = ent:GetRenderBounds()
                 local size = mx - mn
                 local maxDim = math.max(size.x, size.y, size.z, 1)
-                modelPreview:SetLookAt((mn + mx) * 0.5)
-                modelPreview:SetCamPos(Vector(maxDim * 1.5,
-                    -maxDim * 1.5, maxDim * 0.9))
+                local center = (mn + mx) * 0.5
+                local distance = math.max(96, math.min(maxDim * 1.1, 460))
+                modelPreview:SetLookAt(center)
+                modelPreview:SetCamPos(center + Vector(
+                    distance, -distance, distance * 0.6))
             end
         end
 
@@ -256,6 +301,10 @@ if CLIENT then
                 label:SetSize(116, 27)
                 label:SetFont("DermaDefault")
                 label:SetText(TitleFor(info))
+                label:SetTextColor(Color(245, 248, 250))
+                label.Paint = function(_, w, h)
+                    draw.RoundedBox(3, 0, 0, w, h, Color(54, 67, 76))
+                end
                 label:SetTooltip(info.model)
                 local function SelectItem()
                     ApplySelection(info.model)
@@ -269,6 +318,8 @@ if CLIENT then
             end
             icons:InvalidateLayout(true)
             icons:SizeToChildren(false, true)
+            local vertical = scroll:GetVBar()
+            if IsValid(vertical) then vertical:SetScroll(0) end
             pageBack:SetEnabled(page > 1)
             pageForward:SetEnabled(page < maxPage)
             pageText:SetText(string.format("%d models  |  Page %d / %d",
