@@ -12,6 +12,7 @@ TOOL.ClientConVar = {
     native_model = "",
     native_reverse = "0",
     native_branch = "2",
+    native_grade = "0",
 }
 
 if CLIENT then
@@ -32,6 +33,7 @@ function TOOL:LeftClick(trace)
         native_model = self:GetClientInfo("native_model"),
         native_reverse = self:GetClientNumber("native_reverse", 0),
         branch = self:GetClientNumber("native_branch", 2),
+        grade = self:GetClientNumber("native_grade", 0),
     })
 end
 
@@ -52,9 +54,40 @@ end
 
 if CLIENT then
     local currentBrowser
-    local function TitleFor(info)
-        local name = info.name or string.GetFileFromFilename(info.model or "")
-        return name ~= "" and name or "Original model"
+
+    local BG = Color(28, 34, 41)
+    local PANE = Color(39, 47, 56)
+    local SELECTED = Color(61, 106, 84)
+    local WHITE = Color(238, 244, 246)
+    local MUTED = Color(162, 187, 198)
+
+    local function TrackName(info)
+        return info.name or string.StripExtension(
+            string.GetFileFromFilename(info.model or ""))
+    end
+
+    local function SetupModelView(view, model, focused)
+        view:SetModel(model)
+        if not IsValid(view.Entity) then return end
+        local mn, mx = view.Entity:GetRenderBounds()
+        local center = (mn + mx) * 0.5
+        local extent = mx - mn
+        local longest = math.max(extent.x, extent.y, extent.z, 1)
+        -- Long tunnel models often look like a tiny dot if the camera
+        -- frames their full 4096-SU hull. Zoom the detail preview toward
+        -- the real rail model, keeping scroll-wheel zoom available.
+        local distance = focused
+            and math.Clamp(longest * 0.65, 115, 650)
+            or math.Clamp(longest * 0.9, 110, 390)
+        view:SetLookAt(center)
+        view:SetCamPos(center + Vector(distance, -distance, distance * 0.67))
+        view:SetFOV(focused and 47 or 51)
+        view:SetAmbientLight(Color(205, 215, 225))
+        view:SetDirectionalLight(BOX_TOP, Color(230, 230, 230))
+        view:SetDirectionalLight(BOX_FRONT, Color(155, 155, 155))
+        view.LayoutEntity = function() end
+        -- Do not replace DModelPanel:Paint or call DrawModel directly:
+        -- its native Paint establishes the 3-D camera, viewport and lighting.
     end
 
     local function OpenModelCatalog()
@@ -63,67 +96,68 @@ if CLIENT then
             currentBrowser:MoveToFront()
             return
         end
+
         local frame = vgui.Create("DFrame")
         currentBrowser = frame
-        frame:SetTitle("Metrostroi Expanded | Original Model Catalog")
-        frame:SetSize(math.min(ScrW() - 50, 1030), math.min(ScrH() - 60, 745))
-        frame:SetMinWidth(550)
-        frame:SetMinHeight(430)
+        frame:SetTitle("Metrostroi Expanded  /  Track Model Catalog")
+        frame:SetSize(math.min(ScrW() - 45, 1060), math.min(ScrH() - 45, 755))
+        frame:SetMinWidth(640)
+        frame:SetMinHeight(475)
         frame:SetSizable(true)
         frame:Center()
         frame:MakePopup()
         frame.Paint = function(_, w, h)
-            draw.RoundedBox(7, 0, 0, w, h, Color(24, 29, 35, 250))
-            surface.SetDrawColor(75, 95, 98, 230)
+            draw.RoundedBox(4, 0, 0, w, h, BG)
+            surface.SetDrawColor(76, 100, 108)
             surface.DrawOutlinedRect(0, 0, w, h, 1)
-        end
-        if IsValid(frame.lblTitle) then
-            frame.lblTitle:SetTextColor(Color(240, 245, 248))
-        end
-        local function DarkPanel(panel, r, g, b)
-            panel.Paint = function(_, w, h)
-                surface.SetDrawColor(r, g, b, 255)
-                surface.DrawRect(0, 0, w, h)
-            end
         end
 
         local header = vgui.Create("DPanel", frame)
         header:Dock(TOP)
-        header:SetTall(70)
-        header:DockPadding(8, 7, 8, 7)
-        DarkPanel(header, 37, 45, 53)
+        header:SetTall(74)
+        header:DockPadding(9, 8, 9, 7)
+        header.Paint = function(_, w, h)
+            surface.SetDrawColor(PANE)
+            surface.DrawRect(0, 0, w, h)
+        end
+
         local search = vgui.Create("DTextEntry", header)
         search:Dock(TOP)
-        search:SetTall(28)
-        search:SetPlaceholderText("Search original model names and paths...")
-        local filters = vgui.Create("DPanel", header)
-        filters:Dock(TOP)
-        filters:SetTall(28)
-        filters:DockMargin(0, 6, 0, 0)
-        filters:SetPaintBackground(false)
-        local categories = vgui.Create("DComboBox", filters)
-        categories:Dock(LEFT)
-        categories:SetWide(175)
-        for _, item in ipairs({
-            {"All models", "all"}, {"Straight tracks / tunnels", "straight"},
-            {"Curved tracks", "curve"}, {"Junctions / crossings", "junction"},
-            {"Other models", "other"},
-        }) do
-            categories:AddChoice(item[1], item[2])
-        end
-        categories:ChooseOptionID(1)
-        local sources = vgui.Create("DComboBox", filters)
-        sources:Dock(LEFT)
-        sources:SetWide(155)
-        sources:DockMargin(6, 0, 0, 0)
-        sources:AddChoice("All installed packs", "all")
-        sources:AddChoice("Metrostroi", "Metrostroi")
-        sources:AddChoice("Track Pack", "Track Pack")
-        sources:ChooseOptionID(1)
-        local rescan = vgui.Create("DButton", filters)
+        search:SetTall(27)
+        search:SetPlaceholderText("Search original tracks and tunnels...")
+        local filterBar = vgui.Create("DPanel", header)
+        filterBar:Dock(TOP)
+        filterBar:SetTall(29)
+        filterBar:DockMargin(0, 5, 0, 0)
+        filterBar:SetPaintBackground(false)
+
+        local kindFilter = vgui.Create("DComboBox", filterBar)
+        kindFilter:Dock(LEFT)
+        kindFilter:SetWide(180)
+        local filters = {
+            {"All track pieces", "all"},
+            {"Straight", "straight"},
+            {"Curves", "curve"},
+            {"Double track", "double"},
+            {"Uphill / downhill", "slope"},
+            {"Turnouts / crossings", "junction"},
+        }
+        for _, f in ipairs(filters) do kindFilter:AddChoice(f[1], f[2]) end
+        kindFilter:ChooseOptionID(1)
+
+        local sourceFilter = vgui.Create("DComboBox", filterBar)
+        sourceFilter:Dock(LEFT)
+        sourceFilter:SetWide(140)
+        sourceFilter:DockMargin(7, 0, 0, 0)
+        sourceFilter:AddChoice("All sources", "all")
+        sourceFilter:AddChoice("Metrostroi", "Metrostroi")
+        sourceFilter:AddChoice("Track Pack", "Track Pack")
+        sourceFilter:ChooseOptionID(1)
+
+        local rescan = vgui.Create("DButton", filterBar)
         rescan:Dock(RIGHT)
-        rescan:SetWide(136)
-        rescan:SetText("Rescan mounted MDLs")
+        rescan:SetWide(118)
+        rescan:SetText("Refresh models")
         rescan.DoClick = function()
             if MEXNativeTrack and MEXNativeTrack.RequestCatalogRescan then
                 MEXNativeTrack.RequestCatalogRescan()
@@ -132,223 +166,234 @@ if CLIENT then
 
         local footer = vgui.Create("DPanel", frame)
         footer:Dock(BOTTOM)
-        footer:SetTall(38)
-        footer:DockPadding(7, 5, 7, 5)
-        DarkPanel(footer, 37, 45, 53)
-        local choose = vgui.Create("DButton", footer)
-        choose:Dock(RIGHT)
-        choose:SetWide(156)
-        choose:SetText("USE SELECTED MODEL")
-        choose:SetTextColor(Color(20, 25, 28))
-        local pageForward = vgui.Create("DButton", footer)
-        pageForward:Dock(LEFT)
-        pageForward:SetWide(68)
-        pageForward:SetText("Next >")
-        local pageBack = vgui.Create("DButton", footer)
-        pageBack:Dock(LEFT)
-        pageBack:SetWide(68)
-        pageBack:SetText("< Prev")
-        pageBack:DockMargin(0, 0, 5, 0)
-        local pageText = vgui.Create("DLabel", footer)
-        pageText:Dock(FILL)
-        pageText:SetContentAlignment(5)
-        pageText:SetTextColor(Color(225, 225, 225))
+        footer:SetTall(42)
+        footer:DockPadding(10, 6, 10, 6)
+        footer.Paint = function(_, w, h)
+            surface.SetDrawColor(PANE)
+            surface.DrawRect(0, 0, w, h)
+        end
+        local useModel = vgui.Create("DButton", footer)
+        useModel:Dock(RIGHT)
+        useModel:SetWide(150)
+        useModel:SetText("USE THIS MODEL")
+        local countText = vgui.Create("DLabel", footer)
+        countText:Dock(FILL)
+        countText:SetTextColor(WHITE)
+        countText:SetContentAlignment(4)
 
-        local preview = vgui.Create("DPanel", frame)
-        preview:Dock(RIGHT)
-        preview:SetWide(300)
-        preview:DockMargin(7, 7, 8, 7)
-        preview:DockPadding(10, 10, 10, 10)
-        DarkPanel(preview, 35, 42, 50)
-        local modelPreview = vgui.Create("DModelPanel", preview)
-        modelPreview:Dock(TOP)
-        modelPreview:SetTall(240)
-        modelPreview:SetFOV(48)
-        modelPreview:SetAmbientLight(Color(190, 190, 190))
-        modelPreview:SetDirectionalLight(BOX_TOP, Color(215, 215, 215))
-        modelPreview.LayoutEntity = function() end
-        modelPreview.Paint = function(self, w, h)
-            draw.RoundedBox(3, 0, 0, w, h, Color(23, 28, 35))
-            self:DrawModel()
+        local details = vgui.Create("DPanel", frame)
+        details:Dock(RIGHT)
+        details:SetWide(300)
+        details:DockMargin(7, 8, 10, 8)
+        details:DockPadding(9, 9, 9, 9)
+        details.Paint = function(_, w, h)
+            surface.SetDrawColor(PANE)
+            surface.DrawRect(0, 0, w, h)
         end
-        modelPreview.OnMouseWheeled = function(self, delta)
-            local look = self:GetLookAt() or Vector(0, 0, 0)
-            local cam = self:GetCamPos()
-            local offset = cam - look
-            if offset:LengthSqr() < 0.01 then return end
-            local multiplier = delta > 0 and 0.8 or 1.25
-            self:SetCamPos(look + offset * multiplier)
+
+        local name = vgui.Create("DLabel", details)
+        name:Dock(TOP)
+        name:SetTall(34)
+        name:SetFont("DermaLarge")
+        name:SetTextColor(WHITE)
+        name:SetText("Choose a track model")
+
+        local viewportBackground = vgui.Create("DPanel", details)
+        viewportBackground:Dock(TOP)
+        viewportBackground:SetTall(275)
+        viewportBackground:DockMargin(0, 4, 0, 7)
+        viewportBackground.Paint = function(_, w, h)
+            surface.SetDrawColor(18, 23, 29)
+            surface.DrawRect(0, 0, w, h)
         end
-        local nameText = vgui.Create("DLabel", preview)
-        nameText:Dock(TOP)
-        nameText:SetTall(45)
-        nameText:SetWrap(true)
-        nameText:SetContentAlignment(7)
-        nameText:SetTextColor(Color(240, 240, 240))
-        local pathText = vgui.Create("DLabel", preview)
-        pathText:Dock(TOP)
-        pathText:SetTall(75)
-        pathText:SetWrap(true)
-        pathText:SetContentAlignment(7)
-        pathText:SetTextColor(Color(190, 215, 240))
-        local categoryText = vgui.Create("DLabel", preview)
-        categoryText:Dock(TOP)
-        categoryText:SetTall(42)
-        categoryText:SetWrap(true)
-        categoryText:SetContentAlignment(7)
-        categoryText:SetTextColor(Color(230, 220, 180))
-        local noteText = vgui.Create("DLabel", preview)
-        noteText:Dock(FILL)
-        noteText:SetWrap(true)
-        noteText:SetContentAlignment(7)
-        noteText:SetTextColor(Color(215, 226, 232))
-        local hintText = vgui.Create("DLabel", preview)
-        hintText:Dock(BOTTOM)
-        hintText:SetTall(42)
-        hintText:SetWrap(true)
-        hintText:SetTextColor(Color(124, 210, 178))
-        hintText:SetText("Mouse wheel on preview: zoom in / out")
+
+        local preview = vgui.Create("DModelPanel", viewportBackground)
+        preview:Dock(FILL)
+        preview:SetMouseInputEnabled(true)
+        local zoom = 1
+        local originCam = Vector(120, -120, 80)
+        preview.OnMouseWheeled = function(self, delta)
+            local center = self:GetLookAt() or vector_origin
+            zoom = math.Clamp(zoom * (delta > 0 and 0.83 or 1.20), 0.15, 8)
+            self:SetCamPos(center + originCam * zoom)
+            return true
+        end
+        preview.OnMousePressed = function(self, code)
+            if code == MOUSE_LEFT then
+                self.DraggingX = gui.MouseX()
+                self:MouseCapture(true)
+            end
+        end
+        preview.OnCursorMoved = function(self)
+            if not self.DraggingX or not IsValid(self.Entity) then return end
+            local now = gui.MouseX()
+            local oldAngles = self.Entity:GetAngles()
+            self.Entity:SetAngles(Angle(oldAngles.p, oldAngles.y +
+                (now - self.DraggingX) * 0.4, oldAngles.r))
+            self.DraggingX = now
+        end
+        preview.OnMouseReleased = function(self)
+            self.DraggingX = nil
+            self:MouseCapture(false)
+        end
+
+        local modelPath = vgui.Create("DLabel", details)
+        modelPath:Dock(TOP)
+        modelPath:SetTall(73)
+        modelPath:SetWrap(true)
+        modelPath:SetTextColor(MUTED)
+        modelPath:SetText("Select a model to see its real 3-D geometry.")
+
+        local attributes = vgui.Create("DLabel", details)
+        attributes:Dock(TOP)
+        attributes:SetTall(42)
+        attributes:SetTextColor(Color(142, 220, 181))
+        attributes:SetWrap(true)
+        attributes:SetText("Original Metrostroi / Track Pack assets only.")
+
+        local hint = vgui.Create("DLabel", details)
+        hint:Dock(TOP)
+        hint:SetTall(60)
+        hint:SetWrap(true)
+        hint:SetTextColor(WHITE)
+        hint:SetText("Drag the model to rotate. Scroll over the preview to zoom.")
 
         local scroll = vgui.Create("DScrollPanel", frame)
         scroll:Dock(FILL)
-        scroll:DockMargin(8, 7, 0, 7)
+        scroll:DockMargin(9, 8, 0, 8)
         scroll.Paint = function(_, w, h)
-            surface.SetDrawColor(27, 33, 40, 255)
+            surface.SetDrawColor(24, 29, 36)
             surface.DrawRect(0, 0, w, h)
         end
-        local icons = vgui.Create("DIconLayout", scroll)
-        icons:Dock(TOP)
-        icons:SetSpaceX(8)
-        icons:SetSpaceY(8)
-        icons:DockMargin(8, 8, 8, 8)
+        local grid = vgui.Create("DIconLayout", scroll)
+        grid:Dock(TOP)
+        grid:DockMargin(8, 8, 8, 8)
+        grid:SetSpaceX(7)
+        grid:SetSpaceY(7)
 
-        local page = 1
-        local pageSize = 30
-        local selected = GetConVar("mex_track_builder_native_model")
-        local selectedModel = selected and selected:GetString() or ""
-        local matched = {}
-        local currentCategory, currentSource = "all", "all"
+        local selectedConvar = GetConVar("mex_track_builder_native_model")
+        local selected = selectedConvar and selectedConvar:GetString() or ""
+        local matches = {}
+        local loaded = 0
+        local kind = "all"
+        local source = "all"
+        local BATCH = 24
 
-        local function ApplySelection(model)
-            if model == "" then return end
-            selectedModel = model
-            RunConsoleCommand("mex_track_builder_native_model", model)
-            local info = MEXNativeTrack and MEXNativeTrack.ModelCatalog[model] or nil
-            if not info then return end
-            nameText:SetText(TitleFor(info))
-            pathText:SetText(model)
-            categoryText:SetText((info.source or "Original model") ..
-                "   /   " .. string.upper(info.kind or "other"))
-            noteText:SetText(info.kind == "junction"
-                and "Junctions require real, calibrated switch/crossing ports. Unknown rail branches are never guessed."
-                or info.kind == "other"
-                and "This original model appears in the catalog, but Track Builder cannot treat a non-track prop as rails."
-                or "Track-end and curve geometry are measured from the original MDL. Unreadable rail geometry is rejected without a synthetic replacement.")
-            modelPreview:SetModel(model)
-            if IsValid(modelPreview.Entity) then
-                local ent = modelPreview.Entity
-                local mn, mx = ent:GetRenderBounds()
-                local size = mx - mn
-                local maxDim = math.max(size.x, size.y, size.z, 1)
-                local center = (mn + mx) * 0.5
-                local distance = math.max(96, math.min(maxDim * 1.1, 460))
-                modelPreview:SetLookAt(center)
-                modelPreview:SetCamPos(center + Vector(
-                    distance, -distance, distance * 0.6))
+        local function SelectModel(info)
+            if not IsValid(frame) then return end
+            selected = info.model
+            RunConsoleCommand("mex_track_builder_native_model", selected)
+            name:SetText(info.name or "Original track")
+            modelPath:SetText(info.model)
+            attributes:SetText((info.source or "Original") .. "   •   "
+                .. (info.double and "DOUBLE TRACK" or
+                    string.upper(info.kind or "track")))
+            hint:SetText(info.double and
+                "Double-track: two real rail paths and four connectors. Drag to rotate; wheel to zoom."
+                or "Actual model geometry. Drag to rotate; wheel to zoom. Grade is set when starting a free route.")
+            SetupModelView(preview, selected, true)
+            local center = preview:GetLookAt() or vector_origin
+            originCam = preview:GetCamPos() - center
+            zoom = 1
+            for _, tile in ipairs(grid:GetChildren()) do
+                if IsValid(tile) then tile.Selected = tile.ModelPath == selected end
             end
+        end
+
+        local function AppendBatch()
+            if not IsValid(frame) or loaded >= #matches then return end
+            local upper = math.min(#matches, loaded + BATCH)
+            for i = loaded + 1, upper do
+                local info = matches[i]
+                local tile = grid:Add("DPanel")
+                tile:SetSize(126, 142)
+                tile.ModelPath = info.model
+                tile.Selected = info.model == selected
+                tile.Paint = function(self, w, h)
+                    draw.RoundedBox(3, 0, 0, w, h, self.Selected
+                        and SELECTED or Color(48, 56, 65))
+                    if self.Selected then
+                        surface.SetDrawColor(120, 230, 165)
+                        surface.DrawOutlinedRect(0, 0, w, h, 2)
+                    end
+                end
+                -- Own camera per thumbnail: SpawnIcon zoomed most long rails
+                -- so far away that the model was only a handful of pixels.
+                local thumbnail = vgui.Create("DModelPanel", tile)
+                thumbnail:SetPos(3, 3)
+                thumbnail:SetSize(120, 108)
+                SetupModelView(thumbnail, info.model, false)
+                thumbnail:SetTooltip(info.model)
+                thumbnail.OnMousePressed = function() SelectModel(info) end
+                local label = vgui.Create("DButton", tile)
+                label:SetPos(3, 113)
+                label:SetSize(120, 26)
+                label:SetFont("DermaDefault")
+                label:SetText(TrackName(info))
+                label:SetTooltip(info.model)
+                label:SetTextColor(WHITE)
+                label.Paint = function(_, w, h)
+                    surface.SetDrawColor(34, 42, 51)
+                    surface.DrawRect(0, 0, w, h)
+                end
+                label.DoClick = function() SelectModel(info) end
+            end
+            loaded = upper
+            grid:InvalidateLayout(true)
+            grid:SizeToChildren(false, true)
+            countText:SetText(string.format(
+                "%d matching original railway models   •   %d loaded",
+                #matches, loaded))
         end
 
         local function Refresh()
             if not IsValid(frame) then return end
-            matched = {}
+            matches = {}
             local catalog = MEXNativeTrack and MEXNativeTrack.ModelCatalog or {}
-            local term = string.Trim(string.lower(search:GetValue() or ""))
-            for path, info in pairs(catalog) do
-                local kind = info.kind or "other"
-                if (currentCategory == "all" or kind == currentCategory)
-                    and (currentSource == "all" or info.source == currentSource)
-                    and (term == "" or string.find(string.lower(path), term, 1, true)) then
-                    matched[#matched + 1] = info
+            local query = string.Trim(string.lower(search:GetValue() or ""))
+            for _, info in pairs(catalog) do
+                local matchesKind = kind == "all"
+                    or (kind == "double" and info.double)
+                    or (kind == "slope" and info.kind == "slope")
+                    or (kind ~= "double" and kind ~= "slope"
+                        and info.kind == kind)
+                if matchesKind and (source == "all" or info.source == source)
+                    and (query == "" or info.model:find(query, 1, true)) then
+                    matches[#matches + 1] = info
                 end
             end
-            table.sort(matched, function(a, b) return a.model < b.model end)
-            local maxPage = math.max(1, math.ceil(#matched / pageSize))
-            page = math.Clamp(page, 1, maxPage)
-            icons:Clear()
-            for i = (page - 1) * pageSize + 1,
-                math.min(page * pageSize, #matched) do
-                local info = matched[i]
-                local tile = icons:Add("DPanel")
-                tile:SetSize(124, 135)
-                tile:SetTooltip(info.model)
-                tile.Paint = function(_, w, h)
-                    local active = selectedModel == info.model
-                    draw.RoundedBox(4, 0, 0, w, h,
-                        active and Color(58, 91, 68)
-                            or Color(42, 46, 54))
-                    if active then
-                        surface.SetDrawColor(115, 232, 138, 255)
-                        surface.DrawOutlinedRect(0, 0, w, h, 2)
-                    end
-                end
-                local icon = vgui.Create("SpawnIcon", tile)
-                icon:SetPos(12, 4)
-                icon:SetSize(100, 100)
-                icon:SetModel(info.model)
-                icon:SetTooltip(info.model)
-                local label = vgui.Create("DButton", tile)
-                label:SetPos(4, 105)
-                label:SetSize(116, 27)
-                label:SetFont("DermaDefault")
-                label:SetText(TitleFor(info))
-                label:SetTextColor(Color(245, 248, 250))
-                label.Paint = function(_, w, h)
-                    draw.RoundedBox(3, 0, 0, w, h, Color(54, 67, 76))
-                end
-                label:SetTooltip(info.model)
-                local function SelectItem()
-                    ApplySelection(info.model)
-                end
-                icon.DoClick = SelectItem
-                label.DoClick = SelectItem
-                icon.DoDoubleClick = function()
-                    SelectItem()
-                    frame:Close()
-                end
-            end
-            icons:InvalidateLayout(true)
-            icons:SizeToChildren(false, true)
-            local vertical = scroll:GetVBar()
-            if IsValid(vertical) then vertical:SetScroll(0) end
-            pageBack:SetEnabled(page > 1)
-            pageForward:SetEnabled(page < maxPage)
-            pageText:SetText(string.format("%d models  |  Page %d / %d",
-                #matched, page, maxPage))
-            if #matched == 0 then
-                pageText:SetText("No matching MDLs. Rescan or check installed Track Pack.")
+            table.sort(matches, function(a, b) return a.model < b.model end)
+            loaded = 0
+            grid:Clear()
+            local bar = scroll:GetVBar()
+            if IsValid(bar) then bar:SetScroll(0) end
+            AppendBatch()
+            if #matches == 0 then
+                countText:SetText("No railway segments match these filters.")
             end
         end
 
-        search.OnValueChange = function()
-            page = 1
+        search.OnValueChange = Refresh
+        kindFilter.OnSelect = function(_, _, _, value)
+            kind = value or "all"
             Refresh()
         end
-        categories.OnSelect = function(_, _, _, data)
-            currentCategory = data or "all"
-            page = 1
+        sourceFilter.OnSelect = function(_, _, _, value)
+            source = value or "all"
             Refresh()
         end
-        sources.OnSelect = function(_, _, _, data)
-            currentSource = data or "all"
-            page = 1
-            Refresh()
+        useModel.DoClick = function()
+            if selected ~= "" then frame:Close() end
         end
-        pageBack.DoClick = function() page = math.max(1, page - 1); Refresh() end
-        pageForward.DoClick = function() page = page + 1; Refresh() end
-        choose.DoClick = function()
-            if selectedModel ~= "" then
-                RunConsoleCommand("mex_track_builder_native_model", selectedModel)
-                frame:Close()
+        frame.Think = function()
+            if loaded == #matches then return end
+            if (frame.NextBatchAt or 0) > CurTime() then return end
+            local bar = scroll:GetVBar()
+            if not IsValid(bar) then return end
+            if bar:GetScroll() + scroll:GetTall()
+                > grid:GetTall() - 230 then
+                frame.NextBatchAt = CurTime() + 0.15
+                AppendBatch()
             end
         end
         frame.OnClose = function()
@@ -359,15 +404,8 @@ if CLIENT then
         end
         if MEXNativeTrack then MEXNativeTrack.RefreshCatalogUI = Refresh end
         Refresh()
-        if selectedModel ~= "" and MEXNativeTrack
-            and MEXNativeTrack.ModelCatalog[selectedModel] then
-            ApplySelection(selectedModel)
-        else
-            nameText:SetText("Select an original MDL")
-            pathText:SetText("Browse all mounted Metrostroi and Track Pack models.")
-            categoryText:SetText("No automatic model presets.")
-            noteText:SetText("Click any icon to inspect its real model. Click again to choose a different piece.")
-        end
+        local info = MEXNativeTrack and MEXNativeTrack.ModelCatalog[selected]
+        if info then SelectModel(info) end
         if not MEXNativeTrack or not next(MEXNativeTrack.ModelCatalog or {}) then
             if MEXNativeTrack and MEXNativeTrack.RequestCatalogRescan then
                 MEXNativeTrack.RequestCatalogRescan()
@@ -377,38 +415,21 @@ if CLIENT then
 
     function TOOL.BuildCPanel(panel)
         panel:AddControl("Header", {
-            Text = "Metrostroi Expanded - Model Catalog",
-            Description = "Only original installed MDL models. No preset tunnel types, radii or generated replacement tracks.",
+            Text = "Metrostroi Expanded | Track Builder",
+            Description = "Only original mounted Metrostroi / Track Pack railway models.",
         })
-        local pick = panel:Button("OPEN ORIGINAL MODEL CATALOG")
-        pick.DoClick = OpenModelCatalog
-        local activePath = panel:TextEntry("Selected original model",
-            "mex_track_builder_native_model")
-        activePath:SetPlaceholderText("Choose a model from the catalog...")
-        panel:CheckBox("Reverse model direction (use other rail end)",
-            "mex_track_builder_native_reverse")
-        local junction = panel:ComboBox("Junction output port (registered models)",
-            "mex_track_builder_native_branch")
-        junction:AddChoice("Port 2 - main", "2")
-        junction:AddChoice("Port 3 - diverging", "3")
-        junction:AddChoice("Port 4 - crossing", "4")
-        panel:Help("LMB: set start, then place selected MDL.")
-        panel:Help("RMB: save | R: remove aimed model | Shift+R: undo last.")
-        panel:Help("Green / orange crossbars = actual rail-end connectors.")
-        panel:CheckBox("Show measured rail centerline overlay",
+        local open = panel:Button("OPEN TRACK MODEL CATALOG")
+        open.DoClick = OpenModelCatalog
+        panel:TextEntry("Selected model", "mex_track_builder_native_model")
+        panel:CheckBox("Reverse rail direction", "mex_track_builder_native_reverse")
+        panel:NumSlider("Track grade (+up / -down), degrees",
+            "mex_track_builder_native_grade", -12, 12, 1)
+        panel:Help("Grade is applied to a new free route; when snapping to an existing rail end, the end's actual grade is inherited.")
+        panel:Help("Double-track MDLs use both real rail paths automatically.")
+        panel:Help("LMB: start/place   RMB: finish   R: remove   Shift+R: undo")
+        panel:CheckBox("Show measured rail path",
             "mex_native_show_measured_path")
-        panel:NumSlider("Outdoor original-model brightness",
-            "mex_native_outdoor_brightness", 0.35, 1.5, 2)
-        panel:Button("Finish route", "mex_native_finish")
-        panel:Button("Undo last module", "mex_native_undo")
-        panel:Button("Remove aimed module", "mex_native_remove_aimed")
-        panel:Button("Cancel construction", "mex_native_cancel")
-        local refresh = panel:Button("Rescan model catalog")
-        refresh.DoClick = function()
-            if MEXNativeTrack and MEXNativeTrack.RequestCatalogRescan then
-                MEXNativeTrack.RequestCatalogRescan()
-            end
-        end
-        panel:Help("Unknown Track Pack rail meshes need measured original ports. Use mex_native_model_info models/...mdl to inspect.")
+        panel:Button("Finish", "mex_native_finish")
+        panel:Button("Cancel", "mex_native_cancel")
     end
 end
