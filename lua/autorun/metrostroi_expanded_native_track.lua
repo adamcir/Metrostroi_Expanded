@@ -237,14 +237,22 @@ local function DetectCurveRailMesh(model, fallback)
     -- End caps must be represented. Otherwise intermediate strips would be
     -- mistaken for connector faces and shift the next section into a gap.
     if first.y - lowY > 24 or highY - last.y > 24 then return nil end
-    if math.abs(first.x - (fallback.entryX or 0)) > 96
-        or math.abs(last.x - fallback.x) > 96
-        or math.abs(last.y - fallback.y) > 96 then return nil end
+    -- Guard against measuring the outside third rail, sleeve, or any
+    -- mismatched Workshop material. A 30-90 SU "successful" measurement
+    -- is WORSE than the calibrated stock rail-head ports: it is exactly
+    -- the gap visible between two original curved sections.
+    if math.abs(first.x - (fallback.entryX or 0)) > 16
+        or math.abs(first.y - (fallback.entryY or 0)) > 16
+        or math.abs(last.x - fallback.x) > 16
+        or math.abs(last.y - fallback.y) > 16 then return nil end
     local preceding = valid[#valid - 1]
     local dx = last.x - preceding.x
     local dy = last.y - preceding.y
     local angle = math.deg(math.atan2(-dx, dy))
-    if angle < 0 or angle > 45 then angle = fallback.sweep end
+    if angle < 0 or angle > 45
+        or math.abs(angle - fallback.sweep) > 3 then
+        angle = fallback.sweep
+    end
     return {
         entryX = first.x, entryY = first.y,
         x = last.x, y = last.y, sweep = angle,
