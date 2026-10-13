@@ -48,6 +48,11 @@ local TURNS = {
     },
 }
 N.Junctions = N.Junctions or {}
+-- Scans mounted Metrostroi and Track Pack MDLs, and measures the real rail
+-- centerline of each user-selected model (never substitutes custom meshes).
+include("metrostroi_expanded/native_model_catalog.lua")
+N.ServerNativeProfiles = N.ServerNativeProfiles or {}
+N.CatalogErrors = N.CatalogErrors or {}
 
 -- A native scripted static prop uses the original MDL for BOTH rendering
 -- and its compiled .phy. PhysicsInitStatic supports static-prop models that
@@ -312,7 +317,7 @@ end
 -- authoritative: update ONLY the start/end rail ports using the visible
 -- mesh, without moving/rotating an existing saved original model.
 function N.RecalibrateCurvePart(part)
-    if not istable(part) or part.junction
+    if not istable(part) or part.junction or part.nativeModel
         or not part.turn or part.turn == 0 then return false end
     local profile = StockCurveProfile(part.model)
     if not profile or not istable(part.pos) or not istable(part.ang) then
@@ -336,6 +341,66 @@ function N.RecalibrateCurvePart(part)
     return true
 end
 
+-- Any original mounted Metrostroi/Track Pack piece can be selected by its
+-- full MDL name. Unlike fixed stock profiles, its endpoints and curvature
+-- are derived from the pair of real running rails on that exact model.
+local function GenericProfile(model)
+    model = string.lower(tostring(model or ""))
+    if CLIENT then
+        local data = N.ServerNativeProfiles[model]
+        if data then return data end
+        if N.CatalogErrors[model] then return nil, N.CatalogErrors[model] end
+        if not N.NextNativeProfileRequest or CurTime() >= N.NextNativeProfileRequest then
+            N.NextNativeProfileRequest = CurTime() + 2.5
+            net.Start("MEXNativeRequestProfile")
+            net.WriteString(model)
+            net.SendToServer()
+        end
+        return nil, "Waiting for server rail-end calibration."
+    end
+    return N.AnalyzeNativeModel(model)
+end
+local function GenericOriginalPart(start, yaw, model, settings)
+    local profile, err = GenericProfile(model)
+    if not profile then return nil, err end
+    local delta = profile.deltaYaw or 0
+    local curved = profile.curved
+    local mode = tostring(settings.mode or "straight")
+    local reverse = false
+    if curved then
+        -- A "turn1" can be traversed in either direction; never mirror the
+        -- contact rail or stretch a model to fit a fake circle.
+        if mode == "curve_right" then reverse = delta > 0
+        elseif mode == "curve_left" then reverse = delta < 0 end
+    elseif mode == "curve_left" or mode == "curve_right" then
+        return nil, "Selected original model is straight, not a curved rail segment."
+    end
+    local beginPort = reverse and profile.finish or profile.entry
+    local endPort = reverse and profile.entry or profile.finish
+    local localHeading = reverse and (profile.exitYaw + 180) or profile.entryYaw
+    local rotation = yaw - localHeading
+    local ang = Angle(0, rotation, 0)
+    local railPosition = RenderPort(start)
+    local modelPosition = railPosition - RotateLocal(
+        Vector(beginPort[1], beginPort[2], beginPort[3]), ang)
+    local railEnd = modelPosition + RotateLocal(
+        Vector(endPort[1], endPort[2], endPort[3]), ang)
+    local finish = railEnd - RAIL_MARKER_OFFSET
+    local finalYaw = yaw + (reverse and -delta or delta)
+    local part = {
+        model = model, pos = P(modelPosition),
+        ang = {ang.p, ang.y, ang.r},
+        start = P(start), finish = P(finish),
+        yaw = yaw, endYaw = finalYaw,
+        length = profile.length, lane = "single",
+        turn = curved and (finalYaw > yaw and -1 or 1) or 0,
+        sweep = math.abs(delta), radius = 0,
+        nativeModel = true, reverse = reverse,
+        nativePoints = profile.points,
+        calibrated = true,
+    }
+    return part, finish, finalYaw
+end
 -- Generate a strict sequence of original-size stock modules. There is no
 -- arbitrary deformation, scaling, procedural tunnel or geometry fallback.
 function N.Candidate(start, yaw, aimed, settings)
@@ -343,6 +408,26 @@ function N.Candidate(start, yaw, aimed, settings)
     local tunnel, lane = Settings(settings)
     local mode = tostring(settings.mode or "straight")
     local result = {parts = {}, pos = start, yaw = yaw}
+    local selected = tostring(settings.native_model or "")
+    if selected ~= "" then
+        -- Track Pack junctions must keep their original branching geometry:
+        -- no two-port guessed ends for a switch/diamond crossing.
+        local info = N.ModelCatalog[string.lower(selected)]
+        if not info then
+            return nil, "Selected original model is not mounted. Rescan Metrostroi/Track Pack assets."
+        end
+        if info.kind == "junction" then
+            return nil, "Original turnout/crossing requires a calibrated multi-port junction profile."
+        end
+        if tonumber(settings.tracks) == 2 then
+            return nil, "Double-track custom prefabs require separate verified rail-lane port profiles."
+        end
+        local part, finish, finalYaw = GenericOriginalPart(start, yaw, selected, settings)
+        if not part then return nil, finish end
+        result.parts[1] = part
+        result.pos, result.yaw = finish, finalYaw
+        return result
+    end
     if mode == "straight" then
         local kit = KIT[tunnel] and KIT[tunnel][lane]
         if not kit then return nil, "No original straight modules for this tunnel/track layout." end
@@ -450,7 +535,8 @@ function N.ModulePorts(part)
     if not part.junction then
         local a, b = V(part.start), part.finish and V(part.finish)
             or (V(part.start) + Direction(part.yaw) * part.length)
-        local endYaw = part.yaw - (part.turn or 0) * (part.sweep or 0)
+        local endYaw = part.endYaw or
+            (part.yaw - (part.turn or 0) * (part.sweep or 0))
         local lanes = part.lane == "double" and 2 or 1
         if lanes == 1 then
             return {
@@ -495,6 +581,27 @@ end
 function N.ModulePaths(part)
     if not part.junction then
         local nodes = {}
+        if part.nativeModel and istable(part.nativePoints)
+            and #part.nativePoints >= 2 then
+            local angle = Angle(part.ang[1], part.ang[2], part.ang[3])
+            local original = V(part.pos)
+            local points = part.nativePoints
+            if part.reverse then
+                for j = #points, 1, -1 do
+                    local item = points[j]
+                    nodes[#nodes + 1] = original + RotateLocal(
+                        Vector(item[1], item[2], item[3]), angle)
+                        - RAIL_MARKER_OFFSET
+                end
+            else
+                for _, item in ipairs(points) do
+                    nodes[#nodes + 1] = original + RotateLocal(
+                        Vector(item[1], item[2], item[3]), angle)
+                        - RAIL_MARKER_OFFSET
+                end
+            end
+            return {nodes}
+        end
         if not part.turn or part.turn == 0 then
             local steps = math.max(1, math.ceil(part.length / 64))
             for i = 0, steps do
@@ -1614,7 +1721,8 @@ local function RecalibrateRoute(route)
         local start = originallyJoined and newEnd or V(part.start)
         local yaw = originallyJoined and newYaw or part.yaw
         local profile = StockCurveProfile(part.model)
-        if profile and (part.turn == 1 or part.turn == -1) then
+        if not part.nativeModel and profile
+            and (part.turn == 1 or part.turn == -1) then
             local calibrated, finish, finalYaw =
                 StockCurveWorldPart(start, yaw, part.model, part.turn,
                     part.radius or 4096, part.lane or "single")
@@ -1626,6 +1734,9 @@ local function RecalibrateRoute(route)
                 newEnd, newYaw = finish, finalYaw
                 changed = true
             end
+        elseif part.nativeModel then
+            newEnd = part.finish and V(part.finish) or previousEnd
+            newYaw = part.endYaw or part.yaw
         elseif not part.junction and (part.turn or 0) == 0 then
             if originallyJoined then
                 local recalibrated = Placement(start, yaw,
