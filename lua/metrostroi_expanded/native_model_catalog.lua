@@ -46,26 +46,47 @@ local function IsPackDirectory(name)
         or s:find("mn_r", 1, true) ~= nil
 end
 local function Kind(path)
-    -- Never classify by the PARENT FOLDER. The old implementation marked
-    -- every numerically named curve inside "models/metrostroi_tracks" as
-    -- straight, because the directory itself contained "tracks".
-    local s = string.lower(string.GetFileFromFilename(path or ""))
-    if s:find("switch", 1, true) or s:find("strel", 1, true)
-        or s:find("cross", 1, true) or s:find("syezd", 1, true)
-        or s:find("junction", 1, true) then return "junction" end
-    if s:find("turn", 1, true) or s:find("curve", 1, true)
-        or s:find("povorot", 1, true) or s:find("radius", 1, true) then
-        return "curve"
-    end
-    if s:find("tunnel", 1, true) or s:find("railroad", 1, true)
-        or s:find("straight", 1, true) or s:find("track", 1, true)
-        or s:find("depo", 1, true) or s:find("puti", 1, true) then
-        return "straight"
-    end
-    -- Numeric / unknown Track Pack names must be classified by actual
-    -- measured geometry, NOT mislabeled by a parent directory.
-    return "other"
+    local name = string.lower(string.GetFileFromFilename(path or ""))
+    if name:find("switch", 1, true) or name:find("strel", 1, true)
+        or name:find("cross", 1, true) or name:find("syezd", 1, true)
+        or name:find("junction", 1, true) then return "junction" end
+    if name:find("turn", 1, true) or name:find("curve", 1, true)
+        or name:find("povorot", 1, true)
+        or name:find("radius", 1, true) then return "curve" end
+    if name:find("ramp", 1, true) or name:find("slope", 1, true)
+        or name:find("uphill", 1, true) or name:find("incline", 1, true)
+        or name:find("grade", 1, true)
+        or name:find("podem", 1, true) then return "slope" end
+    if name:find("tunnel", 1, true) or name:find("railroad", 1, true)
+        or name:find("straight", 1, true) or name:find("track", 1, true)
+        or name:find("puti", 1, true) then return "straight" end
+    return "unknown"
 end
+
+local function IsTrackModel(path)
+    local name = string.lower(string.GetFileFromFilename(path or ""))
+    -- Do not show trains, signals, interiors, station decorations, sleeper
+    -- strips and loose props in a track segment builder. They belong in
+    -- GMod's normal spawn list, not in a rail construction catalog.
+    for _, unwanted in ipairs({
+        "plank", "nopower", "powerbox", "lamp", "light", "signal",
+        "platform", "bench", "sign", "passenger", "door", "cab",
+        "bogey", "button", "lever", "cable", "motor", "sleeper",
+        "fence", "prop_", "_prop", "texture", "interior",
+        "railroad_part", "_piece", "railroadshort",
+    }) do
+        if name:find(unwanted, 1, true) then return false end
+    end
+    if Kind(path) ~= "unknown" then return true end
+    -- Numeric names used by genuine Track Packs are still included when
+    -- stored in a dedicated track-segment folder; no need to guess them.
+    local directory = string.lower(string.GetPathFromFilename(path or ""))
+    return directory:find("/tracks/", 1, true) ~= nil
+        or directory:find("/railroads/", 1, true) ~= nil
+        or directory:find("/tunnels/", 1, true) ~= nil
+        or directory:find("/rails/", 1, true) ~= nil
+end
+
 function N.ScanModelCatalog()
     if CLIENT then return N.ModelCatalog end
     local found, roots, pending, visited = {}, {}, {}, {}
@@ -102,18 +123,22 @@ function N.ScanModelCatalog()
             for _, name in ipairs(models or {}) do
                 if string.EndsWith(string.lower(name), ".mdl") then
                     local mdl = string.lower(path .. "/" .. name)
-                    -- The roots themselves were restricted to installed
-                    -- Metrostroi/Track Pack directories. Every mounted MDL
-                    -- below them is discoverable, including trains, signals,
-                    -- stations, accessories and models with numeric names.
-                    if not found[mdl] then discovered = discovered + 1 end
-                    local source = (mdl:find("trackpack", 1, true)
-                        or mdl:find("track_pack", 1, true))
-                        and "Track Pack" or "Metrostroi"
-                    found[mdl] = {
-                        model = mdl, kind = Kind(mdl), source = source,
-                        name = name:gsub("%.mdl$", ""),
-                    }
+                    -- Only railway segment MDLs are meaningful in a
+                    -- builder. Hide unrelated Metrostroi objects entirely.
+                    if IsTrackModel(mdl) then
+                        if not found[mdl] then discovered = discovered + 1 end
+                        local source = (mdl:find("trackpack", 1, true)
+                            or mdl:find("track_pack", 1, true))
+                            and "Track Pack" or "Metrostroi"
+                        local lowerName = string.lower(name)
+                        found[mdl] = {
+                            model = mdl, kind = Kind(mdl), source = source,
+                            name = name:gsub("%.mdl$", ""),
+                            double = lowerName:find("double", 1, true) ~= nil
+                                or lowerName:find("2track", 1, true) ~= nil
+                                or lowerName:find("2way", 1, true) ~= nil,
+                        }
+                    end
                 end
             end
             if depth < 12 then
