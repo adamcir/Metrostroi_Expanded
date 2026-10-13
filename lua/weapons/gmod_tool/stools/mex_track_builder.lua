@@ -15,6 +15,7 @@ TOOL.ClientConVar = {
     native_radius = "4096",
     native_junction = "",
     native_branch = "2",
+    native_model = "",
 }
 
 if CLIENT then
@@ -40,6 +41,7 @@ function TOOL:LeftClick(trace)
             radius = self:GetClientNumber("native_radius", 4096),
             junction = self:GetClientInfo("native_junction"),
             branch = self:GetClientNumber("native_branch", 2),
+            native_model = self:GetClientInfo("native_model"),
         }) end
     return false
 
@@ -81,6 +83,33 @@ function TOOL.BuildCPanel(panel)
     panel:Help("Shift + R: undo the last unsaved module. The rest of the route stays.")
     panel:Help("Grey = pending model. Green = start node. Orange = end node.")
     panel:NumSlider("Outdoor rail model brightness", "mex_native_outdoor_brightness", 0.35, 1.5, 2)
+    panel:Help("Installed MDL catalog: choose any mounted Metrostroi or Track Pack rail model.")
+    panel:Help("Track profiles use REAL measured rails. Unknown meshes are rejected, not approximated.")
+    local catalog = panel:ComboBox("Exact installed original model", "mex_track_builder_native_model")
+    local function RefreshCatalog()
+        if not IsValid(catalog) then return end
+        catalog:Clear()
+        catalog:AddChoice("Automatic stock Metrostroi models", "")
+        local entries = {}
+        if MEXNativeTrack and MEXNativeTrack.ModelCatalog then
+            for name, info in pairs(MEXNativeTrack.ModelCatalog) do
+                entries[#entries + 1] = {name, info}
+            end
+        end
+        table.sort(entries, function(a,b) return a[1] < b[1] end)
+        for _, entry in ipairs(entries) do
+            local info = entry[2]
+            local label = "[" .. (info.kind or "?") .. "] " .. entry[1]
+            catalog:AddChoice(label, entry[1])
+        end
+    end
+    if MEXNativeTrack then MEXNativeTrack.RefreshCatalogUI = RefreshCatalog end
+    RefreshCatalog()
+    panel:TextEntry("Original model path (manual selection)",
+        "mex_track_builder_native_model")
+    panel:Button("Rescan mounted Metrostroi + Track Pack models",
+        "mex_native_rescan_models")
+    panel:Help("Third-party folders: server admin may add a scan root with mex_native_catalog_root models/<folder>.")
     local tunnel = panel:ComboBox("Original model family", "mex_track_builder_native_tunnel")
     tunnel:AddChoice("Round tunnel", "round")
     tunnel:AddChoice("Rectangular tunnel", "rectangular")
