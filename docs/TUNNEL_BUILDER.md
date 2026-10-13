@@ -89,6 +89,29 @@ approximately 85.8 SU apart. It samples the original track centerline and
 records both *separate* end position, tangent and curvature. That means
 straight, eased transition, and curved models get different actual ports.
 
+**Straight-track validation:** Metrostroi texture atlases often cover
+sleepers, a protective third rail and tunnel walls as well as the running
+rails. An overly permissive material scan could mistakenly interpret those
+surfaces as a curved centerline even when the selected original MDL was
+straight. The current analyzer verifies that a model classified as a
+straight has collinear end stations, nearly identical end tangents and
+no sharp local kinks (small tolerance for mesh precision). When valid,
+its path is the straight line between its *real measured rail end faces*.
+If the mesh is inconsistent, placement fails rather than fabricating
+a turn or corrupting later snap nodes.
+
+Previously saved sections are NOT silently moved. To repair previously
+placed sections affected by bad measurements, a server admin can use:
+
+```text
+mex_native_realign_routes
+```
+
+Each execution creates a **new timestamped backup** of the original
+per-map native-track JSON data before realigning models. If the newly
+measured rails cannot be validated, those sections are left untouched;
+inspect the particular selected MDL using `mex_native_model_info`.
+
 View a specific model's measurements from the server console:
 
 ```text
