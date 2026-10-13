@@ -1788,8 +1788,32 @@ local function RecalibrateRoute(route)
                 changed = true
             end
         elseif part.nativeModel then
-            newEnd = part.finish and V(part.finish) or previousEnd
-            newYaw = part.endYaw or part.yaw
+            -- Existing route pieces were previously allowed to acquire an
+            -- invented curve from noisy original-MDL mesh samples. Only a
+            -- manual realign request should reposition their visual models.
+            -- Rebuild from the now-validated TRUE entry/exit railheads and
+            -- carry every previously joined successor to the corrected end.
+            local fresh, reason = GenericProfile(part.model)
+            if fresh then
+                local rebuilt, finish, finalYaw = GenericOriginalPart(
+                    start, yaw, part.model, {
+                        native_reverse = part.reverse and 1 or 0
+                    })
+                if rebuilt then
+                    route.parts[index] = rebuilt
+                    part = rebuilt
+                    newEnd, newYaw = finish, finalYaw
+                    changed = true
+                end
+            else
+                -- Never convert an uncertain straight rail into a fake arc.
+                -- Leave its original pose untouched and report the failure
+                -- when the manual repair command inspects this route.
+                newEnd = part.finish and V(part.finish) or previousEnd
+                newYaw = part.endYaw or part.yaw
+                print("[MEX Native Track] Realign skipped " ..
+                    tostring(part.model) .. ": " .. tostring(reason))
+            end
         elseif not part.junction and (part.turn or 0) == 0 then
             if originallyJoined then
                 local recalibrated = Placement(start, yaw,
@@ -1814,6 +1838,8 @@ end
 
 -- A manual one-shot repair for worlds loaded before the update (for
 -- example GMod Lua auto-refresh without a full map restart).
+-- Explicit repair (with backup) for old routes laid using a noisy
+-- straight-rail scan. Existing saved geometry stays unchanged until invoked.
 concommand.Add("mex_native_realign_routes", function(ply)
     if IsValid(ply) and not ply:IsAdmin() then return end
     local raw = file.Read(FILE, "DATA") or "{}"
