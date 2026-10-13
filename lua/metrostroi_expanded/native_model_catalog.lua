@@ -5,6 +5,12 @@ MEXNativeTrack = MEXNativeTrack or {}
 local N = MEXNativeTrack
 N.ModelCatalog = N.ModelCatalog or {}
 N.MeshProfiles = N.MeshProfiles or {}
+N.NativeOverrides = N.NativeOverrides or {}
+local OVERRIDE_FILE = "metrostroi_expanded/native_model_ports.json"
+if SERVER then
+    N.NativeOverrides = util.JSONToTable(
+        file.Read(OVERRIDE_FILE, "DATA") or "{}") or {}
+end
 local DEFAULT_ROOTS = {
     "models/metrostroi",
     "models/metrostroi_tracks",
@@ -46,12 +52,15 @@ function N.ScanModelCatalog()
     if CLIENT then return N.ModelCatalog end
     local found, roots, pending, visited = {}, {}, {}, {}
     for _, root in ipairs(DEFAULT_ROOTS) do roots[#roots + 1] = root end
+    local forcedRoots = {}
     local rootFile = file.Read("metrostroi_expanded/native_catalog_roots.json", "DATA")
     local custom = util.JSONToTable(rootFile or "[]") or {}
     for _, root in ipairs(custom) do
         if isstring(root) and string.StartWith(root, "models/")
             and not root:find("%.%.", 1, true) then
-            roots[#roots + 1] = string.lower(root)
+            local customRoot = string.lower(root)
+            roots[#roots + 1] = customRoot
+            forcedRoots[customRoot] = true
         end
     end
     -- Only look at appropriately named GAME-mounted roots. This includes
@@ -78,7 +87,16 @@ function N.ScanModelCatalog()
                     local railFolder = path:find("/tracks", 1, true)
                         or path:find("/tunnels", 1, true)
                         or path:find("/mn_r", 1, true)
-                    if TrackCandidate(name) or railFolder then
+                    local forced = false
+                    for root in pairs(forcedRoots) do
+                        if string.StartWith(string.lower(path), root) then
+                            forced = true
+                            break
+                        end
+                    end
+                    if TrackCandidate(name) or railFolder or forced
+                        or path:find("trackpack", 1, true)
+                        or path:find("track_pack", 1, true) then
                         found[mdl] = {model = mdl, kind = Kind(mdl),
                             source = mdl:find("metrostroi", 1, true)
                                 and "Metrostroi" or "Track Pack"}
@@ -220,6 +238,34 @@ local function ExtractRailProfile(model)
         return nil,"grade-changing segment needs measured 3-D connector orientation" end
     return profile
 end
+local function ValidOverride(override)
+    if not istable(override) or not istable(override.points)
+        or #override.points < 2 or #override.points > 256 then
+        return false
+    end
+    for _, p in ipairs(override.points) do
+        if not istable(p) or #p ~= 3 then return false end
+        for i = 1, 3 do
+            local x = tonumber(p[i])
+            if not x or math.abs(x) > 262144 then return false end
+        end
+    end
+    return true
+end
+local function OverrideProfile(model, points)
+    local first, last = points[1], points[#points]
+    local length = 0
+    for i = 2, #points do length = length + Dist2(points[i-1], points[i]) end
+    local entryYaw = PlanarYaw(first, points[2])
+    local exitYaw = PlanarYaw(points[#points-1], last)
+    local delta = math.AngleDifference(exitYaw, entryYaw)
+    return {
+        model = model, points = points, entry = first, finish = last,
+        entryYaw = entryYaw, exitYaw = exitYaw, deltaYaw = delta,
+        curved = math.abs(delta) > 0.8, length = length,
+        method = "registered original rail centerline",
+    }
+end
 function N.AnalyzeNativeModel(model)
     if not isstring(model) or not string.StartWith(model,"models/")
         or not string.EndsWith(model,".mdl") then
@@ -229,6 +275,10 @@ function N.AnalyzeNativeModel(model)
     if not N.ModelCatalog[model] then
         return nil,"model is not in the scanned installed Metrostroi/Track Pack catalog"
     end
+    local override = N.NativeOverrides[model]
+    if ValidOverride(override) then
+        return OverrideProfile(model, override.points)
+    end
     local cached=N.MeshProfiles[model]
     if cached then return cached.profile,cached.error end
     if not util.IsValidModel(model) then
@@ -237,4 +287,60 @@ function N.AnalyzeNativeModel(model)
     local profile,err=ExtractRailProfile(model)
     N.MeshProfiles[model]={profile=profile,error=err}
     return profile,err
+end
+
+-- Calibration fallback for unusual Track Pack meshes without recognizable
+-- rail-head material names. A superadmin supplies REAL local track centerline
+-- measurements. Unknown junctions still require the multi-port registry.
+if SERVER then
+    concommand.Add("mex_native_register_model_path", function(ply, _, args)
+        if IsValid(ply) and not ply:IsSuperAdmin() then return end
+        local model = string.lower(tostring(args[1] or ""))
+        local series = tostring(args[2] or "")
+        if not N.ModelCatalog[model] then
+            print("[MEX Native Track] Model not in catalog; use mex_native_rescan_models.")
+            return
+        end
+        local points = {}
+        for group in string.gmatch(series, "[^;]+") do
+            local p = {}
+            for v in string.gmatch(group, "[^,]+") do
+                p[#p + 1] = tonumber(v)
+            end
+            points[#points + 1] = p
+        end
+        if not ValidOverride({points = points}) then
+            print("[MEX Native Track] Usage: mex_native_register_model_path models/<path>.mdl \"x,y,z;x,y,z;...;\" (at least 2 measured points)")
+            return
+        end
+        if #points == 2 and math.abs(math.AngleDifference(
+                PlanarYaw(points[1], points[2]), 0)) >= 0 then
+            -- Two-point profiles are valid only for a real straight section.
+            local name = model:lower()
+            if Kind(name) == "curve" then
+                print("[MEX Native Track] Curved models need 3+ measured points to define their real centerline.")
+                return
+            end
+        end
+        N.NativeOverrides[model] = {points = points}
+        N.MeshProfiles[model] = nil
+        file.CreateDir("metrostroi_expanded")
+        file.Write(OVERRIDE_FILE, util.TableToJSON(N.NativeOverrides, true) or "{}")
+        print("[MEX Native Track] Registered original rail-path profile for " .. model)
+    end)
+    concommand.Add("mex_native_model_info", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        local model = string.lower(tostring(args[1] or ""))
+        local profile, err = N.AnalyzeNativeModel(model)
+        if not profile then
+            print("[MEX Native Track] " .. model .. ": " .. tostring(err))
+            return
+        end
+        print(string.format("[MEX Native Track] %s | %s | %s | %.1f SU | turn %.2f degrees",
+            model, profile.method or "unknown", profile.curved and "CURVE" or "STRAIGHT",
+            profile.length, profile.deltaYaw))
+        print(string.format("  entry (%.3f,%.3f,%.3f) yaw %.2f | exit (%.3f,%.3f,%.3f) yaw %.2f",
+            profile.entry[1],profile.entry[2],profile.entry[3],profile.entryYaw,
+            profile.finish[1],profile.finish[2],profile.finish[3],profile.exitYaw))
+    end)
 end
