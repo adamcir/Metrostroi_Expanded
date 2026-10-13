@@ -83,6 +83,8 @@ function TOOL.BuildCPanel(panel)
     panel:Help("Shift + R: undo the last unsaved module. The rest of the route stays.")
     panel:Help("Grey = pending model. Green = start node. Orange = end node.")
     panel:NumSlider("Outdoor rail model brightness", "mex_native_outdoor_brightness", 0.35, 1.5, 2)
+    panel:CheckBox("Show measured rail centerline overlay",
+        "mex_native_show_measured_path")
     panel:Help("Installed MDL catalog: choose any mounted Metrostroi or Track Pack rail model.")
     panel:Help("Track profiles use REAL measured rails. Unknown meshes are rejected, not approximated.")
     local catalog = panel:ComboBox("Exact installed original model", "mex_track_builder_native_model")
