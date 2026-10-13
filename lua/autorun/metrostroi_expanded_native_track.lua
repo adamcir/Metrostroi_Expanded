@@ -530,12 +530,41 @@ function N.ModulePorts(part)
         local endYaw = part.endYaw or
             (part.yaw - (part.turn or 0) * (part.sweep or 0))
         local lanes = part.lane == "double" and 2 or 1
+        if part.nativeModel and lanes == 2 and istable(part.nativeLanePoints)
+            and #part.nativeLanePoints == 2 then
+            local ports = {}
+            local angle = Angle(part.ang[1], part.ang[2], part.ang[3])
+            local origin = V(part.pos)
+            for lane = 1, 2 do
+                local samples = part.nativeLanePoints[lane]
+                if istable(samples) and #samples >= 2 then
+                    local entry = part.reverse and samples[#samples] or samples[1]
+                    local exit = part.reverse and samples[1] or samples[#samples]
+                    ports[#ports + 1] = {
+                        pos = WorldRailPoint(origin, angle, entry),
+                        center = a, yaw = part.yaw + 180,
+                        pitch = -(part.pitch or 0), lanes = 2, start = true,
+                    }
+                    ports[#ports + 1] = {
+                        pos = WorldRailPoint(origin, angle, exit),
+                        center = b, yaw = endYaw,
+                        pitch = part.endPitch or 0, lanes = 2, start = false,
+                    }
+                end
+            end
+            -- Existing native API expects first two ports to be start and
+            -- next two to be end, one authentic measured rail per lane.
+            if #ports == 4 then
+                return {ports[1], ports[3], ports[2], ports[4]}
+            end
+            return {}
+        end
         if lanes == 1 then
             return {
                 {pos = RenderPort(a), center = a, yaw = part.yaw + 180,
-                    lanes = 1, start = true},
+                    pitch = -(part.pitch or 0), lanes = 1, start = true},
                 {pos = RenderPort(b), center = b, yaw = endYaw,
-                    lanes = 1, start = false}
+                    pitch = part.endPitch or 0, lanes = 1, start = false}
             }
         end
         local ports = {}
@@ -543,14 +572,16 @@ function N.ModulePorts(part)
             local offset = lane == 1 and -132 or 132
             ports[#ports + 1] = {
                 pos = RenderPort(a + Right(part.yaw) * offset),
-                center = a, yaw = part.yaw + 180, lanes = 2, start = true,
+                center = a, yaw = part.yaw + 180,
+                pitch = -(part.pitch or 0), lanes = 2, start = true,
             }
         end
         for lane = 1, 2 do
             local offset = lane == 1 and -132 or 132
             ports[#ports + 1] = {
                 pos = RenderPort(b + Right(endYaw) * offset),
-                center = b, yaw = endYaw, lanes = 2, start = false,
+                center = b, yaw = endYaw,
+                pitch = part.endPitch or 0, lanes = 2, start = false,
             }
         end
         return ports
@@ -591,6 +622,32 @@ function N.ModulePaths(part)
                         Vector(item[1], item[2], item[3]), angle)
                         - RAIL_MARKER_OFFSET
                 end
+            end
+            if part.lane == "double" then
+                if not istable(part.nativeLanePoints)
+                    or #part.nativeLanePoints ~= 2 then
+                    return {} -- Never invent a double-track centerline.
+                end
+                local lanes = {{}, {}}
+                local transform = function(p)
+                    return original + RotateLocal(
+                        Vector(p[1], p[2], p[3]), angle)
+                        - RAIL_MARKER_OFFSET
+                end
+                for lane = 1, 2 do
+                    local source = part.nativeLanePoints[lane]
+                    if not istable(source) or #source < 2 then return {} end
+                    if part.reverse then
+                        for k = #source, 1, -1 do
+                            lanes[lane][#lanes[lane] + 1] = transform(source[k])
+                        end
+                    else
+                        for _, p in ipairs(source) do
+                            lanes[lane][#lanes[lane] + 1] = transform(p)
+                        end
+                    end
+                end
+                return lanes
             end
             return {nodes}
         end
