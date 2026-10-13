@@ -224,14 +224,22 @@ local function ExtractRailProfile(model)
     local entryYaw=PlanarYaw(startA,points[math.min(#points,3)])
     local exitYaw=PlanarYaw(points[math.max(1,#points-2)],endA)
     local delta=math.AngleDifference(exitYaw,entryYaw)
-    local length=0
+    local length,maxBend=0,0
     for i=2,#points do length=length+Dist2(points[i-1],points[i]) end
+    local dx,dy=endA[1]-startA[1],endA[2]-startA[2]
+    local chord=math.max(1,math.sqrt(dx*dx+dy*dy))
+    for _,point in ipairs(points) do
+        local offset=math.abs((point[1]-startA[1])*dy -
+            (point[2]-startA[2])*dx)/chord
+        maxBend=math.max(maxBend,offset)
+    end
     local profile={
         model=model, points=points,
         entry=startA, finish=endA,
         entryYaw=entryYaw, exitYaw=exitYaw, deltaYaw=delta,
         length=length, axis=axis,
-        curved=math.abs(delta)>0.8,
+        curved=math.abs(delta)>0.8 or maxBend>12,
+        lateralDeviation=maxBend,
         method="running-rail mesh",
     }
     if math.abs(startA[3]-endA[3]) > 24 then
@@ -313,14 +321,10 @@ if SERVER then
             print("[MEX Native Track] Usage: mex_native_register_model_path models/<path>.mdl \"x,y,z;x,y,z;...;\" (at least 2 measured points)")
             return
         end
-        if #points == 2 and math.abs(math.AngleDifference(
-                PlanarYaw(points[1], points[2]), 0)) >= 0 then
-            -- Two-point profiles are valid only for a real straight section.
-            local name = model:lower()
-            if Kind(name) == "curve" then
-                print("[MEX Native Track] Curved models need 3+ measured points to define their real centerline.")
-                return
-            end
+        -- Two endpoints alone cannot describe a physical rail bend.
+        if #points == 2 and Kind(model) == "curve" then
+            print("[MEX Native Track] Curved models need 3+ measured centerline points.")
+            return
         end
         N.NativeOverrides[model] = {points = points}
         N.MeshProfiles[model] = nil
