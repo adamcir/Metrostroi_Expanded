@@ -895,6 +895,7 @@ if CLIENT then
                                 pos - RAIL_MARKER_OFFSET),
                             lanes = double and 2 or 1,
                             yaw = ent:GetNW2Float("MEXNativePortYaw" .. j, 0),
+                            pitch = ent:GetNW2Float("MEXNativePortPitch" .. j, 0),
                             start = ent:GetNW2Bool("MEXNativePortStart" .. j,
                                 double and j <= 2 or (not double and j == 1))
                         }
@@ -966,6 +967,9 @@ if CLIENT then
             native_model = tool:GetClientInfo("native_model"),
             native_reverse = tool:GetClientNumber("native_reverse", 0),
             branch = tool:GetClientNumber("native_branch", 2),
+            grade = tool:GetClientNumber("native_grade", 0),
+            start_grade = active
+                and ply:GetNW2Float("MEXNativePitch", 0) or nil,
         }
         local anchor = nil
         if not active then
@@ -978,6 +982,10 @@ if CLIENT then
             or (anchor and anchor.center or aim)
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
             or (anchor and anchor.yaw or ply:EyeAngles().y)
+        if not active and anchor then
+            settings.start_grade = anchor.start and -(anchor.pitch or 0)
+                or anchor.pitch
+        end
         local aimedNative = IsValid(tr.Entity)
             and tr.Entity:GetNW2Bool("MEXNativeModule", false)
         local invalidMidRail = not active and aimedNative and not anchor
@@ -1349,6 +1357,7 @@ local function SyncState(ply)
     ply:SetNW2Bool("MEXNativeActive", state ~= nil)
     ply:SetNW2Vector("MEXNativeEnd", state and state.pos or vector_origin)
     ply:SetNW2Float("MEXNativeYaw", state and state.yaw or 0)
+    ply:SetNW2Float("MEXNativePitch", state and state.pitch or 0)
 end
 local function CollectPorts()
     local nodes, count = {}, {}
@@ -1358,7 +1367,8 @@ local function CollectPorts()
                 local key = PortKey(port.pos)
                 count[key] = (count[key] or 0) + 1
                 nodes[#nodes + 1] = {pos = port.pos, center = port.center,
-                    yaw = port.yaw, lanes = port.lanes, key = key}
+                    yaw = port.yaw, pitch = port.pitch, lanes = port.lanes,
+                    key = key}
             end
         end
     end
