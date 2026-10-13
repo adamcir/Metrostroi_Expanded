@@ -135,120 +135,195 @@ local function Dist2(a, b)
     local x, y = a[1] - b[1], a[2] - b[2]
     return math.sqrt(x*x + y*y)
 end
-local function SliceCross(verts, axis, sample, span)
-    -- Select only the seam-plane railhead vertices, group two railheads
-    -- separated by Metrostroi's 85.8 SU center-to-center rail gauge.
+-- A compiled original MDL may have only TWO railhead vertex rows:
+-- one at each end of a 256/1024 SU straight! A fixed 25-slice sampler
+-- incorrectly rejected these perfectly valid models as "missing rails".
+-- Probe ACTUAL rail-vertex stations instead of imaginary uniform sections.
+local function SliceCross(vertices, axis, station, tolerance)
     local bins = {}
-    for _, p in ipairs(verts) do
-        if math.abs(p[axis] - sample) <= span then
-            local cross = p[3 - axis]
-            local bin = math.floor(cross / 3 + 0.5)
+    for _, p in ipairs(vertices) do
+        if math.abs(p[axis] - station) <= tolerance then
+            local across = p[3 - axis]
+            local bin = math.floor(across / 5 + 0.5)
             local cell = bins[bin]
-            if not cell then cell = {n=0,x=0,z=0}; bins[bin]=cell end
+            if not cell then
+                cell = {n = 0, across = 0, height = 0}
+                bins[bin] = cell
+            end
             cell.n = cell.n + 1
-            cell.x = cell.x + cross
-            cell.z = cell.z + p[3]
+            cell.across = cell.across + across
+            cell.height = cell.height + p[3]
         end
     end
     local peaks = {}
-    for k, value in pairs(bins) do
-        if value.n >= 2 then
-            peaks[#peaks+1] = {cross=value.x/value.n,
-                height=value.z/value.n, n=value.n}
+    for _, cell in pairs(bins) do
+        if cell.n >= 1 then
+            peaks[#peaks + 1] = {
+                across = cell.across / cell.n,
+                height = cell.height / cell.n,
+                count = cell.n,
+            }
         end
     end
-    if #peaks < 2 then return nil end
-    -- Higher frequency and closer to correct gauge beats an off-axis
-    -- contact rail (one more lateral rail on tunnel models).
     local best, bestScore = nil, -math.huge
-    for i=1,#peaks do
-        for j=i+1,#peaks do
-            local a,b = peaks[i],peaks[j]
-            local gauge = math.abs(a.cross-b.cross)
-            if gauge >= 79 and gauge <= 94 and math.abs(a.height-b.height) < 14 then
-                local score = a.n+b.n - math.abs(gauge-85.8)*7
-                if score>bestScore then
-                    bestScore=score
-                    best={ (a.cross+b.cross)/2, (a.height+b.height)/2 }
+    for i = 1, #peaks do
+        for j = i + 1, #peaks do
+            local a, b = peaks[i], peaks[j]
+            local gauge = math.abs(a.across - b.across)
+            local dz = math.abs(a.height - b.height)
+            -- Allow differences between model versions. The original
+            -- rail-spacing is measured, never *set* to an assumed gauge.
+            if gauge >= 65 and gauge <= 110 and dz <= 20 then
+                local score = a.count + b.count
+                    - math.abs(gauge - 85.8) * 0.5 - dz * 0.6
+                if score > bestScore then
+                    bestScore = score
+                    best = {
+                        across = (a.across + b.across) * 0.5,
+                        height = (a.height + b.height) * 0.5,
+                        gauge = gauge,
+                        score = score,
+                    }
                 end
             end
         end
     end
     return best
 end
+
+local function ModelRailProfile(model, allVertices, axis, materialScore)
+    if #allVertices < 8 or #allVertices > 110000 then return nil end
+    local low, high = math.huge, -math.huge
+    local stationBins = {}
+    for _, p in ipairs(allVertices) do
+        local along = p[axis]
+        low, high = math.min(low, along), math.max(high, along)
+        stationBins[math.floor(along / 2 + 0.5)] = true
+    end
+    local span = high - low
+    if span < 50 or span > 16384 then return nil end
+    local stations = {}
+    for bin in pairs(stationBins) do
+        stations[#stations + 1] = bin * 2
+    end
+    table.sort(stations)
+    if #stations < 2 then return nil end
+    -- Limit the work on huge complex original MDLs. Preserve the exact
+    -- first and last stations even if we downsample the interior.
+    local candidates = {}
+    local step = math.max(1, math.ceil(#stations / 90))
+    for i = 1, #stations, step do candidates[#candidates + 1] = stations[i] end
+    if candidates[#candidates] ~= stations[#stations] then
+        candidates[#candidates + 1] = stations[#stations]
+    end
+    local points, scores, gauges = {}, 0, {}
+    for _, station in ipairs(candidates) do
+        local match
+        for _, tolerance in ipairs({2.5, 6, 14}) do
+            match = SliceCross(allVertices, axis, station, tolerance)
+            if match then break end
+        end
+        if match then
+            points[#points + 1] = axis == 2
+                and {match.across, station, match.height}
+                or {station, match.across, match.height}
+            scores = scores + match.score
+            gauges[#gauges + 1] = match.gauge
+        end
+    end
+    -- Valid original straight rails often have no intermediate vertex
+    -- at all. Two verified end faces are therefore sufficient *only*
+    -- for an unambiguously straight original segment.
+    if #points < 2 then return nil end
+    if math.abs(points[1][axis] - low) > math.max(8, math.min(24, span * 0.035))
+        or math.abs(points[#points][axis] - high) >
+            math.max(8, math.min(24, span * 0.035)) then
+        return nil
+    end
+    if #points == 2 and (model:find("turn", 1, true)
+        or model:find("curve", 1, true)
+        or model:find("povorot", 1, true)) then
+        return nil -- A two-point guess cannot reconstruct a curved rail.
+    end
+
+    local first, last = points[1], points[#points]
+    local firstNext = points[math.min(3, #points)]
+    local lastPrev = points[math.max(1, #points - 2)]
+    local entryYaw = PlanarYaw(first, firstNext)
+    local exitYaw = PlanarYaw(lastPrev, last)
+    local delta = math.AngleDifference(exitYaw, entryYaw)
+    local length, maxBend = 0, 0
+    for i = 2, #points do length = length + Dist2(points[i-1], points[i]) end
+    local dx, dy = last[1] - first[1], last[2] - first[2]
+    local chord = math.max(1, math.sqrt(dx * dx + dy * dy))
+    for _, point in ipairs(points) do
+        maxBend = math.max(maxBend, math.abs(
+            (point[1] - first[1]) * dy -
+            (point[2] - first[2]) * dx) / chord)
+    end
+    if math.abs(first[3] - last[3]) > 24 then return nil end
+    local gaugeMean = 0
+    for _, g in ipairs(gauges) do gaugeMean = gaugeMean + g end
+    gaugeMean = gaugeMean / #gauges
+    return {
+        model = model,
+        points = points, entry = first, finish = last,
+        entryYaw = entryYaw, exitYaw = exitYaw, deltaYaw = delta,
+        length = length, axis = axis,
+        curved = math.abs(delta) > 0.8 or maxBend > 12,
+        lateralDeviation = maxBend, gauge = gaugeMean,
+        -- Trust several railhead stations more than two; favor original
+        -- material names but never insist that a straight has 5+ stations.
+        confidence = #points * 4 + materialScore * 20 + scores * 0.05,
+        method = #points == 2
+            and "measured original straight rail end faces"
+            or "measured original railhead mesh",
+    }
+end
+
 local function ExtractRailProfile(model)
     if not util.GetModelMeshes then return nil, "mesh API unavailable" end
     local ok, meshes = pcall(util.GetModelMeshes, model, 0)
-    if not ok or not istable(meshes) then return nil, "no readable render meshes" end
-    local selected, strength = {}, 0
-    for _, mesh in ipairs(meshes) do
-        local score = CandidateMaterial(mesh.material)
-        if score > 0 then
-            local verts = mesh.verticies or mesh.triangles or {}
-            if score >= strength and #verts >= 12 then
-                if score > strength then selected = {}; strength = score end
-                selected[#selected+1] = verts
+    if not ok or not istable(meshes) or #meshes == 0 then
+        return nil, "no readable original render mesh"
+    end
+
+    local pools = {[1] = {}, [2] = {}, [3] = {}}
+    local sizes = {[1] = 0, [2] = 0, [3] = 0}
+    for _, meshData in ipairs(meshes) do
+        local strength = CandidateMaterial(meshData.material)
+        if strength > 0 then
+            local verts = meshData.verticies or meshData.triangles or {}
+            for _, vert in ipairs(verts) do
+                local pos = Position(vert)
+                if isvector(pos) and sizes[strength] < 110000 then
+                    local p = {pos.x, pos.y, pos.z}
+                    pools[strength][#pools[strength] + 1] = p
+                    sizes[strength] = sizes[strength] + 1
+                end
             end
         end
     end
-    if #selected == 0 then return nil, "no recognizable running-rail material" end
-    local verts, x0,x1,y0,y1 = {}, math.huge,-math.huge,math.huge,-math.huge
-    for _, list in ipairs(selected) do
-        for _, vert in ipairs(list) do
-            local p=Position(vert)
-            if isvector(p) then
-                verts[#verts+1] = {p.x,p.y,p.z}
-                x0,x1=math.min(x0,p.x),math.max(x1,p.x)
-                y0,y1=math.min(y0,p.y),math.max(y1,p.y)
+    local best, bestScore = nil, -math.huge
+    -- Separate candidate materials are important: a model's sleepers
+    -- can use a generic "railroad" texture but the real rails another.
+    for strength = 3, 1, -1 do
+        if sizes[strength] >= 8 then
+            for _, axis in ipairs({2, 1}) do
+                local profile = ModelRailProfile(model,
+                    pools[strength], axis, strength)
+                if profile and profile.confidence > bestScore then
+                    best, bestScore = profile, profile.confidence
+                end
             end
         end
     end
-    if #verts > 200000 then return nil,"too many mesh vertices for safe calibration" end
-    local axis = (y1-y0 >= x1-x0) and 2 or 1
-    local low,high = axis==2 and y0 or x0,axis==2 and y1 or x1
-    if high-low < 64 or high-low > 16384 then
-        return nil,"not a single recognizable rail segment" end
-    local points = {}
-    -- Each coordinate is measured from the actual running railhead pair,
-    -- not a fake circular arc, the model OBB or the concrete tunnel rim.
-    for i=0,24 do
-        local at = low + (high-low)*i/24
-        local edge = i == 0 or i == 24
-        local pair = SliceCross(verts, axis, at, edge and 3 or 9)
-        if pair then
-            local point = axis==2 and {pair[1],at,pair[2]} or {at,pair[1],pair[2]}
-            points[#points+1] = point
-        end
+    if not best then
+        return nil, "could not detect both original running-rail ends (check model geometry or register measured rail ports)"
     end
-    if #points < 5 then return nil,"could not detect both running rails at the ends" end
-    if math.abs(points[1][axis]-low)>8 or math.abs(points[#points][axis]-high)>8 then
-        return nil,"end rail cross-sections missing" end
-    local startA,endA=points[1],points[#points]
-    local entryYaw=PlanarYaw(startA,points[math.min(#points,3)])
-    local exitYaw=PlanarYaw(points[math.max(1,#points-2)],endA)
-    local delta=math.AngleDifference(exitYaw,entryYaw)
-    local length,maxBend=0,0
-    for i=2,#points do length=length+Dist2(points[i-1],points[i]) end
-    local dx,dy=endA[1]-startA[1],endA[2]-startA[2]
-    local chord=math.max(1,math.sqrt(dx*dx+dy*dy))
-    for _,point in ipairs(points) do
-        local offset=math.abs((point[1]-startA[1])*dy -
-            (point[2]-startA[2])*dx)/chord
-        maxBend=math.max(maxBend,offset)
-    end
-    local profile={
-        model=model, points=points,
-        entry=startA, finish=endA,
-        entryYaw=entryYaw, exitYaw=exitYaw, deltaYaw=delta,
-        length=length, axis=axis,
-        curved=math.abs(delta)>0.8 or maxBend>12,
-        lateralDeviation=maxBend,
-        method="running-rail mesh",
-    }
-    if math.abs(startA[3]-endA[3]) > 24 then
-        return nil,"grade-changing segment needs measured 3-D connector orientation" end
-    return profile
+    return best
 end
+
 local function ValidOverride(override)
     if not istable(override) or not istable(override.points)
         or #override.points < 2 or #override.points > 256 then
