@@ -51,7 +51,9 @@ pieces) are hidden and cannot be selected a second time.
 
 Curved profiles are measured/calibrated on the **server** and synchronized
 to the client, ensuring that grey preview and authoritative placed model
-calculate the same exact endpoint and tangent. Vertex measurements that
+calculate the same exact endpoint and tangent. Even when the eye trace first
+hits the curved shell rather than a tiny floating connector, both realms
+use the same nearby free-end ray selection **before** LMB. Vertex measurements that
 diverge substantially from the verified original rail end faces are refused;
 the baseline stock profile is used instead. Old saves keep their models
 unless explicitly realigned with `mex_native_realign_routes` (a safety
