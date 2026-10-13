@@ -85,9 +85,7 @@ function N.ScanModelCatalog()
             processed = processed + 1
             local models, dirs = file.Find(path .. "/*", "GAME")
             for _, name in ipairs(models or {}) do
-                if string.EndsWith(string.lower(name), ".mdl")
-                    and not name:find("_anim", 1, true)
-                    and not name:find("_shared", 1, true) then
+                if string.EndsWith(string.lower(name), ".mdl") then
                     local mdl = string.lower(path .. "/" .. name)
                     -- The roots themselves were restricted to installed
                     -- Metrostroi/Track Pack directories. Every mounted MDL
