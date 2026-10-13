@@ -317,14 +317,30 @@ if CLIENT then
                         surface.DrawOutlinedRect(0, 0, w, h, 2)
                     end
                 end
-                -- Own camera per thumbnail: SpawnIcon zoomed most long rails
-                -- so far away that the model was only a handful of pixels.
-                local thumbnail = vgui.Create("DModelPanel", tile)
-                thumbnail:SetPos(3, 3)
-                thumbnail:SetSize(120, 108)
-                SetupModelView(thumbnail, info.model, false)
-                thumbnail:SetTooltip(info.model)
-                thumbnail.OnMousePressed = function() SelectModel(info) end
+                -- Create full 3-D thumbnails only when actually visible
+                -- in the scroll viewport, releasing offscreen ClientsideModels
+                -- to avoid accumulating thousands of expensive renders.
+                tile.Think = function(self)
+                    if (self.NextVisibilityTest or 0) > CurTime() then return end
+                    self.NextVisibilityTest = CurTime() + 0.23
+                    if not IsValid(scroll) then return end
+                    local _, y = self:LocalToScreen(0, 0)
+                    local _, viewportY = scroll:LocalToScreen(0, 0)
+                    local visible = y + self:GetTall() >= viewportY - 160
+                        and y < viewportY + scroll:GetTall() + 160
+                    if visible and not IsValid(self.Thumbnail) then
+                        local thumb = vgui.Create("DModelPanel", self)
+                        self.Thumbnail = thumb
+                        thumb:SetPos(3, 3)
+                        thumb:SetSize(120, 108)
+                        SetupModelView(thumb, info.model, false)
+                        thumb:SetTooltip(info.model)
+                        thumb.OnMousePressed = function() SelectModel(info) end
+                    elseif not visible and IsValid(self.Thumbnail) then
+                        self.Thumbnail:Remove()
+                        self.Thumbnail = nil
+                    end
+                end
                 local label = vgui.Create("DButton", tile)
                 label:SetPos(3, 113)
                 label:SetSize(120, 26)
