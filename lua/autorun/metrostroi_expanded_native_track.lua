@@ -9,6 +9,8 @@ local ROOT = "models/metrostroi/tracks/"
 if CLIENT then
     CreateClientConVar("mex_native_outdoor_brightness", "0.85", true, false,
         "Neutral model lighting for real Metrostroi surface railway prefabs", 0.35, 1.5)
+    CreateClientConVar("mex_native_show_measured_path", "1", true, false,
+        "Draw measured original MDL rail-centerline only when using Track Builder")
 end
 -- Track-placement points sit at the original MDL's baseline, whereas a
 -- visible/snap marker belongs at the running rail surface. Never feed that
@@ -363,6 +365,7 @@ local function GenericProfile(model)
     return N.AnalyzeNativeModel(model)
 end
 local function GenericOriginalPart(start, yaw, model, settings)
+    model = string.lower(tostring(model))
     local profile, err = GenericProfile(model)
     if not profile then return nil, err end
     local delta = profile.deltaYaw or 0
@@ -395,7 +398,7 @@ local function GenericOriginalPart(start, yaw, model, settings)
         start = P(start), finish = P(finish),
         yaw = yaw, endYaw = finalYaw,
         length = profile.length, lane = "single",
-        turn = curved and (finalYaw > yaw and -1 or 1) or 0,
+        turn = curved and ((reverse and -delta or delta) > 0 and -1 or 1) or 0,
         sweep = math.abs(delta), radius = 0,
         nativeModel = true, reverse = reverse,
         nativePoints = profile.points,
@@ -981,6 +984,23 @@ if CLIENT then
                 if port.start == false then
                     render.DrawWireframeSphere(port.pos, 9, 10, 10,
                         Color(255, 185, 70), true)
+                end
+            end
+            -- Cyan segments visualize the surveyed REAL MDL rail centerline.
+            -- This is editor-only overlay, not a generated replacement rail.
+            local showPath = GetConVar("mex_native_show_measured_path")
+            if showPath and showPath:GetBool() then
+                for _, part in ipairs(candidate.parts) do
+                    if part.nativeModel then
+                        local paths = N.ModulePaths(part)
+                        for _, path in ipairs(paths) do
+                            for j = 2, #path do
+                                render.DrawLine(RenderPort(path[j - 1]),
+                                    RenderPort(path[j]),
+                                    Color(35, 240, 245, 220), true)
+                            end
+                        end
+                    end
                 end
             end
             if settings.mode == "curve_left" or settings.mode == "curve_right" then
