@@ -1117,6 +1117,34 @@ if CLIENT then
             "[MEX Track Builder] " .. installed ..
             " original curve profiles installed. See client console for exact filenames.")
     end)
+    net.Receive("MEXNativeCatalogChunk", function()
+        local page, pages = net.ReadUInt(16), net.ReadUInt(16)
+        local items = util.JSONToTable(net.ReadString() or "{}") or {}
+        if page == 1 then
+            N.ModelCatalog = {}
+            N.ServerNativeProfiles = {}
+            N.CatalogErrors = {}
+        end
+        if not istable(items) then return end
+        for _, item in ipairs(items) do
+            if isstring(item.model) and isstring(item.kind)
+                and string.StartWith(item.model, "models/") then
+                N.ModelCatalog[item.model] = item
+            end
+        end
+        if page == pages and N.RefreshCatalogUI then N.RefreshCatalogUI() end
+    end)
+    net.Receive("MEXNativeSingleProfile", function()
+        local data = util.JSONToTable(net.ReadString() or "{}") or {}
+        local model = tostring(data.model or "")
+        if not string.StartWith(model, "models/") then return end
+        if istable(data.profile) and istable(data.profile.points) then
+            N.ServerNativeProfiles[model] = data.profile
+            N.CatalogErrors[model] = nil
+        else
+            N.CatalogErrors[model] = tostring(data.error or "Model is not a verifiable rail segment.")
+        end
+    end)
     net.Receive("MEXNativeCurveProfiles", function()
         local profiles = util.JSONToTable(net.ReadString() or "") or {}
         if not istable(profiles) then return end
@@ -1139,6 +1167,9 @@ end
 
 util.AddNetworkString("MEXNativeJunctionProfiles")
 util.AddNetworkString("MEXNativeCurveProfiles")
+util.AddNetworkString("MEXNativeCatalogChunk")
+util.AddNetworkString("MEXNativeRequestProfile")
+util.AddNetworkString("MEXNativeSingleProfile")
 N.Active = N.Active or {}
 N.Routes = N.Routes or {}
 N.Props = N.Props or {}
@@ -1161,6 +1192,73 @@ local function SendCurveProfiles(ply)
     net.WriteString(util.TableToJSON(profiles) or "{}")
     if IsValid(ply) then net.Send(ply) else net.Broadcast() end
 end
+local function SendMountedCatalog(ply)
+    local results = N.ModelCatalog
+    if not results or not next(results) then results = N.ScanModelCatalog() end
+    local list = {}
+    for _, data in pairs(results or {}) do list[#list + 1] = data end
+    table.sort(list, function(a,b) return a.model < b.model end)
+    local pageSize = 65
+    local pageCount = math.max(1, math.ceil(#list / pageSize))
+    for page = 1, pageCount do
+        local group = {}
+        for i = (page - 1) * pageSize + 1,
+                math.min(#list, page * pageSize) do
+            group[#group + 1] = list[i]
+        end
+        net.Start("MEXNativeCatalogChunk")
+        net.WriteUInt(page, 16)
+        net.WriteUInt(pageCount, 16)
+        net.WriteString(util.TableToJSON(group) or "[]")
+        if IsValid(ply) then net.Send(ply) else net.Broadcast() end
+    end
+end
+net.Receive("MEXNativeRequestProfile", function(_, ply)
+    if not IsValid(ply) or not ply:IsAdmin() then return end
+    if (ply.MEXNativeLastProfileRequest or 0) > CurTime() then return end
+    ply.MEXNativeLastProfileRequest = CurTime() + 0.5
+    local model = string.lower(net.ReadString() or "")
+    -- Only original installed model paths from the catalog can be analyzed.
+    if not N.ModelCatalog[model] then return end
+    local info = N.ModelCatalog[model]
+    local profile, err
+    if info.kind == "junction" then
+        err = "Original junctions need measured multi-port switch/crossing topology."
+    else
+        profile, err = N.AnalyzeNativeModel(model)
+    end
+    net.Start("MEXNativeSingleProfile")
+    net.WriteString(util.TableToJSON({
+        model = model, profile = profile, error = err,
+    }) or "{}")
+    net.Send(ply)
+end)
+concommand.Add("mex_native_rescan_models", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    N.ModelCatalog = {}
+    N.MeshProfiles = {}
+    local models = N.ScanModelCatalog()
+    SendMountedCatalog(ply)
+    print("[MEX Native Track] Discovered " .. table.Count(models) ..
+        " original mounted Metrostroi / Track Pack rail model candidates.")
+end)
+concommand.Add("mex_native_catalog_root", function(ply, _, args)
+    if IsValid(ply) and not ply:IsSuperAdmin() then return end
+    local root = string.lower(tostring(args[1] or ""))
+    if not string.StartWith(root, "models/") or root:find("%.%.", 1, true)
+        or root:find("[%*%%]") or #root > 150 then
+        print("[MEX Native Track] Usage: mex_native_catalog_root models/<your_TrackPack_folder>")
+        return
+    end
+    local filePath = "metrostroi_expanded/native_catalog_roots.json"
+    local roots = util.JSONToTable(file.Read(filePath, "DATA") or "[]") or {}
+    if not table.HasValue(roots, root) then roots[#roots+1] = root end
+    file.CreateDir("metrostroi_expanded")
+    file.Write(filePath, util.TableToJSON(roots,true) or "[]")
+    N.ModelCatalog = {}
+    SendMountedCatalog(ply)
+end)
+
 local function Save()
     file.CreateDir("metrostroi_expanded")
     file.Write(FILE, util.TableToJSON({version = 2, routes = N.Routes}, true) or "{}")
@@ -1878,10 +1976,11 @@ hook.Add("CanTool", "MEXNativeProtectModules", function(_, trace, mode)
         and mode ~= "mex_track_builder" then return false end
 end)
 hook.Add("PlayerInitialSpawn", "MEXNativeTrackSendProfiles", function(ply)
-    timer.Simple(2, function()
+    timer.Simple(3, function()
         if IsValid(ply) then
             SendProfiles(ply)
             SendCurveProfiles(ply)
+            SendMountedCatalog(ply)
         end
     end)
 end)
