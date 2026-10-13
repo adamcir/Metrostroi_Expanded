@@ -21,7 +21,7 @@ local function TrackCandidate(filename)
     return s:find("track", 1, true) ~= nil
         or s:find("rail", 1, true) ~= nil
         or s:find("tunnel", 1, true) ~= nil
-        or s:find("metro", 1, true) ~= nil
+        or s:find("metrotrack", 1, true) ~= nil
         or s:find("depo", 1, true) ~= nil
         or s:find("strel", 1, true) ~= nil
         or s:find("turn", 1, true) ~= nil
@@ -75,7 +75,10 @@ function N.ScanModelCatalog()
                     and not name:find("_anim", 1, true)
                     and not name:find("_shared", 1, true) then
                     local mdl = string.lower(path .. "/" .. name)
-                    if TrackCandidate(mdl) then
+                    local railFolder = path:find("/tracks", 1, true)
+                        or path:find("/tunnels", 1, true)
+                        or path:find("/mn_r", 1, true)
+                    if TrackCandidate(name) or railFolder then
                         found[mdl] = {model = mdl, kind = Kind(mdl),
                             source = mdl:find("metrostroi", 1, true)
                                 and "Metrostroi" or "Track Pack"}
@@ -189,7 +192,8 @@ local function ExtractRailProfile(model)
     -- not a fake circular arc, the model OBB or the concrete tunnel rim.
     for i=0,24 do
         local at = low + (high-low)*i/24
-        local pair = SliceCross(verts,axis,at,i==0 or i==24 and 3 or 9)
+        local edge = i == 0 or i == 24
+        local pair = SliceCross(verts, axis, at, edge and 3 or 9)
         if pair then
             local point = axis==2 and {pair[1],at,pair[2]} or {at,pair[1],pair[2]}
             points[#points+1] = point
