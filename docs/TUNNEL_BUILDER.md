@@ -1,296 +1,164 @@
-# Metrostroi Expanded — Original Track & Tunnel Builder
+# Metrostroi Expanded — Original Model Catalog & Track Builder
 
-The **Track Builder** now uses **real Metrostroi model assets**, not generated
-track/tunnel meshes or interpolated decorative substitutes. All Lua code, UI
-labels and console messages are English.
+The Track Builder uses **original, installed Metrostroi / Track Pack MDL
+files only**. The old tunnel-type, track-length and curve-radius prefab
+selectors have been removed. There is no auto-substitution, invented
+track geometry, scaled stock model, or bundled third-party asset.
 
-## Construction
+## Open the catalog
 
-Open **Q → Tools → Metrostroi Expanded → Track Builder**.
+**Q → Tools → Metrostroi Expanded → Track Builder → OPEN ORIGINAL MODEL CATALOG**
 
-1. Choose an original model family (round, rectangular, double/wide tunnel,
-   or surface track) and Single/Double.
-2. Choose a module: **Straight**, **Curve left**, **Curve right**,
-   **Turnout** or **Rail crossing**.
-3. **LMB** selects the first start point; aiming at a free orange/green connector
-   snaps exactly to the existing native track end. The selected end determines
-   the heading, not an arbitrary guessed spline.
-4. Move the cursor: a **grey semi-transparent original model** appears before
-   placement. For straight routes the builder greedily combines real nominal
-   lengths; it does not rescale stock models to fill an arbitrary gap.
-5. **LMB** adds the displayed piece(s). Previously selected unfinished pieces
-   remain ghosted, with collision disabled, until the route is finished.
-6. **RMB** commits the route. MEX creates networked original-model static
-   entities with the matching original **compiled .phy collision**.
-7. **R** removes **only the exact native module under the crosshair**,
-   whether a saved section or an unsaved grey module. The selected model
-   receives a red/orange highlight and contextual on-screen text.
-   Deleting a module in the middle preserves all other pieces and creates
-   two free connection endpoints at the gap.
-8. **Shift+R** undoes only the last **unsaved** module while building.
-   It never removes the last saved route or edits a different route.
-9. **Cancel** discards the unfinished grey preview without touching saved
-   rails. The advanced button **Delete entire aimed route** is separate
-   from the selective **R** delete action.
+The catalog scans and includes the **complete installed MDL inventory**
+under Metrostroi / Track Pack model folders, not merely filenames that
+contain "rail" or "track". This includes tracks, tunnels, bends, switches,
+signals, platforms, trains and accessory models when those assets are
+mounted in GMod.
 
-Green markers indicate available starts, orange markers indicate free ends.
-These include both ends of **original curved track sections**. Node markers
-are rendered over the actual **running rail endpoints**, not at a fictional
-circular-arc control point. The world-space construction baseline is stored
-independently of the +10 SU visual marker height, preventing steps after
-clicking a connector. Double-track curves expose two rail connectors per end,
-based on their OWN unique model pivot, not a copied straight-track pivot.
-Internal joined ports are hidden.
+The visual catalog contains:
+- Original model **thumbnail grid** (30 MDLs per page), pagination, live
+  search by model path/name, and type/source filters.
+- Click an icon to inspect its actual **3D model preview**, full path,
+  original source and category. Double-click or **USE SELECTED MODEL**
+  to close the browser.
+- The selected MDL stays in **Selected original model** when reopening the
+  tool. There is no preselected model or automatic prefab family.
+- **Reverse model direction** uses the opposite authored rail endpoint
+  without mirroring, deforming or stretching the original MDL.
+- For an explicitly surveyed turnout/crossing, **Junction output port**
+  picks a valid registered branch; no unsurveyed switch geometry is guessed.
+- **Show measured rail centerline overlay** shows a cyan editor-only path
+  extracted from the original running rails (not a rail model).
 
-**Precision fixes:** a saved original rail module can only be connected
-at its **actual free rail-end port**. Clicking the middle of a 1664-SU curve
-never selects a remote endpoint and no longer starts a fake new section
-from the tunnel wall. A colored crossbar shows the complete gauge at the
-physical end face. Joined ends (including slightly offset older saved
-pieces) are hidden and cannot be selected a second time.
+## Construction controls
 
-Curved profiles are measured/calibrated on the **server** and synchronized
-to the client, ensuring that grey preview and authoritative placed model
-calculate the same exact endpoint and tangent. Even when the eye trace first
-hits the curved shell rather than a tiny floating connector, both realms
-use the same nearby free-end ray selection **before** LMB. Vertex measurements that
-diverge substantially from the verified original rail end faces are refused;
-the baseline stock profile is used instead. Old saves keep their models
-unless explicitly realigned with `mex_native_realign_routes` (a safety
-backup is created first).
-
-Use `mex_native_curve_assets` to view each installed original curved
-model's port coordinates and whether the result is **MESH-MEASURED** or
-**STOCK-CALIBRATED**.
-
-### Original stock model catalog
-
-Models are referenced by path under `models/metrostroi/tracks/`.
-They are **not copied or redistributed by MEX**.
-
-| Type | Original nominal module models |
+| Input | Action |
 |---|---|
-| Surface | `railroad1024.mdl`, `railroad4096.mdl` |
-| Round single | `tunnel64.mdl`, `tunnel256.mdl`, `tunnel1024.mdl` |
-| Rectangular single | `tunnel64_rect.mdl`, `tunnel256_rect.mdl`, `tunnel1024_rect.mdl` |
-| Round/wide double | `tunnel1024_double.mdl` |
-| Round curves | `tunnel3072_turn1.mdl`, `tunnel4096_turn1.mdl`, `tunnel8192_turn1.mdl` |
-| Double round curves | `tunnel4096_double_turn1.mdl`, `tunnel8192_double_turn1.mdl` |
-| Rectangular curve | `tunnel3072_rect_turn1.mdl` |
+| LMB (first click) | Pick an available rail-end node, or start a new route |
+| LMB (next clicks) | Append exactly the currently selected original MDL |
+| RMB | Finish and save the currently built route |
+| R | Remove **only the module under the crosshair** |
+| Shift + R | Undo the last unsaved module |
+| Reverse model direction | Connect via the original model's other end |
 
-The available catalog depends on installed Metrostroi content. Missing
-original files cause an explicit construction error, **not** a fallback
-generated model. For a requested radius not mounted, the tool selects the
-**closest radius with a real installed original matching curved MDL** and
-displays the effective radius. If no real curved MDL exists for the selected
-tunnel layout, the preview shows an error rather than a misleading straight
-module. Use `mex_native_curve_assets` or the matching Track Builder button
-to list actual model availability.
+The original MDL preview is translucent grey. Actual free rail-end
+connectors appear in green/orange at the **running rail surface**. Their
+crossbars mark the gauge across the *real* end face. MEX hides internal
+joined connectors, rejects selection in the middle of a long curved
+module, and prevents choosing already occupied nodes.
 
-**Important:** The original `turn1` MDLs are *transition* pieces, not
-perfect constant-radius circular arcs. Their real track end positions and
-exit tangents were extracted from running-rail vertices in the original
-PhoenixBlack/Metrostroi compiled `.mdl/.vvd` files. For example, the
-single-track `tunnel3072_turn1.mdl` ends at approximately **local
-(-297.195, 1623.610)** and exits at **24.494°**, NOT at the endpoint of
-a 30° radius-3072 circle. The 4096 and 8192 pieces have different
-noncircular endpoints; the double/rectangular models have their own rail
-positions. MEX now aligns the *authored rail ports* and tracks the measured
-centerline rather than guessing from the radius in the filename.
+The client and server use the **same server-measured model profile**, so
+the grey preview and committed placement share exact end coordinates and
+entry/exit tangents. Each original curve can have a unique centerline
+rather than a shared artificial circular radius.
 
-Authoring orientation: the stock `turn1` prefab curves to the **left**
-of local +Y. MEX keeps that orientation for left bends; right bends traverse
-the same original model **in reverse**, using its physical end as the
-world-space starting connector. No geometry is mirrored or rescaled.
+## Source catalog discovery
 
-**Important:** Source model port values were measured from historical
-original Metrostroi mesh data. Workshop/Metrostroi revisions may use
-different geometry; compare the final rail ends and wheel contacts against
-the actual models mounted in Garry's Mod. This implementation has not been
-playtested inside GMod here. The model lift stays +5 SU; double track
-center spacing is 264 SU but the authored pivot differs between straight
-and curved prefabs.
-
-### Save, restore and Metrostroi network
-
-Committed native modules are stored by map in
-`data/metrostroi_expanded/native_tracks_<map>.json`. Module records
-include model, position, angle, route, turn and port geometry.
-
-The builder builds network paths from the exact module centerlines,
-including two independent lanes for double-track pieces, and merges
-contiguous native end nodes. It also writes these paths to the existing
-Metrostroi data workflow and requests a network rebuild on finish.
-Map cleanup and map restart restore committed original modules.
-Saved pre-v2 routes are migrated on map load to measured original-model
-rail endpoints; subsequent originally connected modules are realigned.
-A recovery copy is stored at
-`data/metrostroi_expanded/native_tracks_<map>_before_native_ports_v2.json`.
-To re-align already loaded old routes without restarting, admins can run
-`mex_native_realign_routes`. That command also preserves a separate
-`_before_manual_realign.json` backup.
-
-The older MEX route file is preserved for compatibility but the Track
-Builder UI creates **native modules only**. No original assets are modified.
-
-## Installed Metrostroi / Track Pack original model catalog
-
-The **Exact installed original model** dropdown lists real `.mdl` assets
-discovered in mounted `GAME` paths: stock Metrostroi tunnels/tracks and
-Track Pack, Metro Track Pack and other third-party folders. No model binary,
-texture or rail mesh is shipped, copied or synthesized by MEX.
-
-Use **Rescan mounted Metrostroi + Track Pack models** after mounting content:
+After installing new content, press **Rescan model catalog**. You can
+also run the admin command on the game server:
 
 ```text
 mex_native_rescan_models
 ```
 
-The server synchronizes the catalog and the **individually measured**
-centerline and connector headings to the client. The first grey preview of
-a newly selected model may briefly display **Waiting for server rail-end
-calibration**. The preview and eventual solid model use identical measured
-values instead of calculating distinct client/server approximations.
+Scans look in mounted `models/metrostroi`, `models/trackpack`,
+`models/track_pack`, common other track-pack root folders and other
+top-level folders with Metrostroi/Track Pack naming. To add an unusual
+pack under an arbitrary folder, a superadmin can register that root:
 
-For a normal two-ended track segment, MEX reads the original render mesh
-and locates pairs of running rails approximately 85.8 Source units apart.
-It scans centerline slices to find actual **beginning and end rail-head
-faces**. The entry and exit headings are measured separately: a constant
-radius, eased `turn1`, S-curve or straight model each has independent ports.
-The sampled cyan editor line shows the measured centerline; the overlay can
-be toggled with **Show measured rail centerline overlay**. Cyan editor
-lines are not track meshes and have no collisions.
+```text
+mex_native_catalog_root models/my_custom_track_pack
+```
 
-**Not every discovered MDL is a traversable track.** Models without two
-recognizable running railhead faces, with no original usable .phy, or with
-branching geometry are rejected rather than given invented endpoints.
-Custom double-track prefabs need separately verified dual-lane profiles,
-and original turnout/crossing pieces need registered multi-port geometry.
+The root list persists under
+`data/metrostroi_expanded/native_catalog_roots.json`. A scan is bounded
+to protect GMod from extremely large unrelated asset trees.
 
-Inspect one specific installed model on the **server** with:
+Catalog entries have intentionally **not** been filtered to claim every
+MDL is a working rail. Train bodies, signs, platforms or decoration models
+are visible as original catalog assets. Only genuine rails with measured
+endpoints and compatible physics are valid as Track Builder routes.
+Unavailable or unmeasurable track geometry is rejected with a message
+instead of drawing a fake replacement.
+
+## Per-model rail calibration
+
+For selected actual two-ended track models, MEX reads the installed MDL's
+render-rail mesh when supported and locates pairs of running railheads
+approximately 85.8 SU apart. It samples the original track centerline and
+records both *separate* end position, tangent and curvature. That means
+straight, eased transition, and curved models get different actual ports.
+
+View a specific model's measurements from the server console:
 
 ```text
 mex_native_model_info models/metrostroi/tracks/tunnel3072_turn1.mdl
 ```
 
-The output gives actual local start/end XYZ positions, their separate
-tangent headings, length, and straight/curve classification.
-
-For uncommon third-party content stored outside the automatically known
-folders, an admin can explicitly add its original model directory:
+For a third-party pack that uses unrecognized rail material names, a
+superadmin can provide **verified model-local running rail centerline
+measurements** rather than accept an arbitrary radius:
 
 ```text
-mex_native_catalog_root models/your_trackpack_folder
+mex_native_register_model_path models/my_custom_track_pack/example.mdl "0,0,5;0,64,5;-4,128,5;-13,192,5"
 ```
 
-For original Track Pack models whose rail mesh materials cannot be
-identified safely, a superadmin can enter *measured model-local*
-centerline coordinates rather than guessing a radius:
+Those per-model overrides persist in
+`data/metrostroi_expanded/native_model_ports.json`. Curved models need
+more than two points. If a model has multiple separate tracks, the
+current single-centerline analyzer **cannot safely infer** both lanes.
+
+For compatibility, historical **model-specific** measurements for a few
+classic Metrostroi `turn1` MDLs are retained when engine mesh access is
+unavailable; these are not presented as new-construction prefab presets.
+
+## Original switches and crossings
+
+A turnout or diamond is not made by overlapping two unrelated straight
+MDLs. A genuine junction needs **registered model-local ports and
+traversable links**. The catalog shows every model (including junction
+candidates) but rejects construction of uncalibrated switches/crossings.
+
+Register an installed original MDL and its *measured* ports:
 
 ```text
-mex_native_register_model_path models/your_trackpack_folder/example.mdl "0,0,5;0,64,5;-4,128,5;-13,192,5"
+mex_native_register_junction <id> <switch|crossing> <model.mdl> "<x,y,z,yaw;x,y,z,yaw;...>" "<1-2;1-3;...>"
 ```
 
-Use more waypoints for a curved model; include both actual authored rail
-end faces. Overrides persist in
-`data/metrostroi_expanded/native_model_ports.json`.
+- Switch: three ports with links 1–2 and 1–3.
+- Crossing: four ports forming two independent paths, generally 1–2
+  and 3–4.
+- Optional precise centerline via
+  `mex_native_set_junction_path <id> <port_a> <port_b> "<x,y,z;...>"`.
+- Matching original, compatible switch position MDLs/PHYs can be
+  registered with
+  `mex_native_set_switch_variants <id> <main.mdl> <diverge.mdl>`.
+  Switching when occupied by a train is blocked.
 
-For the fixed original stock `turn1` models the editor also retains
-verified per-model historical port calibration when reading the railhead
-material fails. **Existing saved tracks are not silently moved.**
-To reconstruct outdated saved stock curves, use the separate
-`mex_native_realign_routes` command, which saves a backup first.
+Junction configurations persist under
+`data/metrostroi_expanded/native_junctions.json`.
 
-## Switches and diamond crossings
+## Persistence & migration
 
-A switch or a crossing is **not** made by overlapping two regular track
-models. That would create wrong guard rails, double contacts, and invalid
-bogey collision. MEX checks new route centerlines against existing MEX-native
-routes and rejects accidental same-level crossings; only properly registered
-original diamond/switch models provide legal junctions. It **must be one installed original junction asset** with
-measured connector locations and real compiled physics.
+Completed native routes are stored by map in
+`data/metrostroi_expanded/native_tracks_<map>.json`.
+Original model path, orientation, measured centerline and connector
+positions are retained. Routes reload after map restart/cleanup, and
+their measured paths are fed into the existing Metrostroi network rebuild.
 
-Since the filenames and attachment pivots of third-party Metrostroi/Track
-Pack junctions are not reliably standardized, MEX does **not invent**
-a filename or connector geometry. Junction placement rejects missing or
-uncalibrated profiles instead of creating an unsafe fake turnout.
-
-### Registering an original junction
-
-Server superadmins can register a model against measured local attachment
-coordinates:
+Older pre-catalog saved routes remain readable. Do not silently move
+already committed track sections; a manual repair command is available:
 
 ```text
-mex_native_register_junction <id> <switch|crossing> <original_model.mdl> "<x,y,z,yaw;x,y,z,yaw;...>" "<1-2;1-3;...>"
+mex_native_realign_routes
 ```
 
-Port coordinates are **model-local**. Yaw is the direction **out of** the
-port, relative to the construction heading. The input is **port 1**.
+This takes a backup of the saved data before modifying old route
+connections.
 
-- A **switch** requires exactly three ports and paths **1–2** (main) and
-  **1–3** (diverging).
-- A **crossing** requires exactly four ports and two independent rail
-  paths, usually **1–2** and **3–4**.
-- To follow a real curving branch instead of a straight connector chord,
-  register measured intermediate local centerline waypoints:
-
-```text
-mex_native_set_junction_path <id> <port_a> <port_b> "<x,y,z;x,y,z;...>"
-```
-
-Original switch assets with fixed, non-moving geometry are locked to the
-main route. If the workshop kit provides **two compatible original models**
-with separately authored true .phy meshes for the main and diverging
-positions, register them:
-
-```text
-mex_native_set_switch_variants <id> <original_main_model.mdl> <original_diverging_model.mdl>
-```
-
-They must share the same calibrated local origin and three attachment ports.
-Press **E** on a committed switch to select its next original visual and
-physics state; switching is blocked while a train/bogey is nearby. On each
-state change MEX requests a rail-network update. This is **not yet a
-replacement for Metrostroi's complete dispatch, point-locking and signalling
-system**: special Metrostroi switch entities/control integration still
-requires in-game testing.
-
-Junction registry persists at
-`data/metrostroi_expanded/native_junctions.json`, shared to joining clients.
-The tool's **Registered junction profile ID** field uses that registry.
-
-### Diagnostics
-
-```text
-mex_native_status
-mex_native_list_junction_models
-```
-
-The second command looks for likely original crossing/switch model names in
-installed stock/Track Pack folders; it only reports candidates, never assumes
-their local pivots or path shapes. Missing `.phy` models are rejected on
-finish. Check the GMod server console for full errors.
-
-## Limitations / verification
-
-- Only exact original pieces are used; unsupported arbitrary-radius bends,
-  grades and lengths are not made to fit with fake geometry.
-- An actual diamond crossing or moving turnout is only constructible after
-  the relevant real model and **measured** ports are registered. There is no
-  bundled, invented generic junction asset.
-- Model lighting: original static-asset textures are preserved. Native model
-  rendering adds scoped neutral fill illumination because long Source scripted
-  entities often sample map lighting underneath terrain and appear black.
-  Grey preview modules get brighter neutral illumination too. MEX checks
-  for an unobstructed sky above the MDL at spawn time, so above-ground
-  Metrostroi tunnel pieces receive daylight fill as well as standalone
-  surface railway pieces. Buried tunnels retain softer fill illumination.
-  The **Outdoor rail model brightness** slider adjusts the lighting without
-  recoloring original textures; its client cvar is
-  `mex_native_outdoor_brightness` (default 0.85).
-- Current stock centerline assumptions and turn1 pivots are not verified live.
-  First test a 64/256 SU single straight, a curve in each direction, a
-  double-track module, then a registered crossing/switch on a test map.
-- Train rerailing and ALS/ARS switch dispatch on new real-model junctions
-  need validation against your specific Metrostroi build.
-- A GMod TOOL cannot cut holes in compiled BSP terrain or walls.
+**Limitations:** This code cannot cut holes in compiled BSP terrain.
+Non-track MDLs are browsable but not fabricated into working rails.
+The client/server mesh inspection, actual .phy contact and rerailing
+still require testing against the specific Metrostroi and Track Pack
+content versions mounted in Garry's Mod. No live GMod test has been
+performed as part of this change.
