@@ -4,7 +4,15 @@ if SERVER then AddCSLuaFile() end
 MEXNativeTrack = MEXNativeTrack or {}
 local N = MEXNativeTrack
 N.ModelCatalog = N.ModelCatalog or {}
-N.MeshProfiles = N.MeshProfiles or {}
+-- Reset old negative/failed calibration cache on Lua refresh, since older
+-- fixed-step sampling rejected straight original MDLs with only end vertices.
+local ANALYZER_VERSION = 3
+if N.MeshProfileCacheVersion ~= ANALYZER_VERSION then
+    N.MeshProfiles = {}
+    N.MeshProfileCacheVersion = ANALYZER_VERSION
+else
+    N.MeshProfiles = N.MeshProfiles or {}
+end
 N.NativeOverrides = N.NativeOverrides or {}
 local OVERRIDE_FILE = "metrostroi_expanded/native_model_ports.json"
 if SERVER then
@@ -319,7 +327,26 @@ local function ExtractRailProfile(model)
         end
     end
     if not best then
-        return nil, "could not detect both original running-rail ends (check model geometry or register measured rail ports)"
+        -- Some Track Packs assign a different but still rail-related
+        -- material to each running rail. Try their combined vertices.
+        local combined = {}
+        for strength = 3, 1, -1 do
+            for _, p in ipairs(pools[strength]) do
+                if #combined >= 110000 then break end
+                combined[#combined + 1] = p
+            end
+        end
+        if #combined >= 8 then
+            for _, axis in ipairs({2, 1}) do
+                local profile = ModelRailProfile(model, combined, axis, 1)
+                if profile and profile.confidence > bestScore then
+                    best, bestScore = profile, profile.confidence
+                end
+            end
+        end
+    end
+    if not best then
+        return nil, "original running rail heads could not be measured: no matching rail-end pair in the MDL (use a verified original-model path profile)"
     end
     return best
 end
