@@ -734,7 +734,9 @@ if CLIENT then
                         local double = ent:GetNW2Int("MEXNativePorts", 0) == 4
                             and ent:GetNW2String("MEXNativeJunctionID", "") == ""
                         all[#all + 1] = {pos = pos, key = key,
-                            start = double and j <= 2 or (not double and j == 1)}
+                            yaw = ent:GetNW2Float("MEXNativePortYaw" .. j, 0),
+                            start = ent:GetNW2Bool("MEXNativePortStart" .. j,
+                                double and j <= 2 or (not double and j == 1))}
                     end
                 end
             end
@@ -864,6 +866,11 @@ if CLIENT then
                         or Color(255, 175, 65))
                 render.DrawWireframeSphere(node.pos, selected and 12 or 8,
                     9, 9, c, true)
+                -- The crossbar is the FULL rail gauge at the model's physical
+                -- start/end face. It lets the player see a real attachment
+                -- plane, instead of a floating control point in the grass.
+                local across = Right(node.yaw) * (85.8 * 0.5)
+                render.DrawLine(node.pos - across, node.pos + across, c, true)
             end
         end
         if active then
