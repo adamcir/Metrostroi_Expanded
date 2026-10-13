@@ -1294,7 +1294,9 @@ net.Receive("MEXNativeRequestProfile", function(_, ply)
     if info.kind == "junction" then
         err = "Original junctions need measured multi-port switch/crossing topology."
     else
-        profile, err = N.AnalyzeNativeModel(model)
+        -- Reply with the exact SAME verified profile used by the server
+        -- placement code; never give the client an unchecked mesh estimate.
+        profile, err = GenericProfile(model)
     end
     net.Start("MEXNativeSingleProfile")
     net.WriteString(util.TableToJSON({
