@@ -21,34 +21,9 @@ local RAIL_MARKER_OFFSET = Vector(0, 0, RAIL_SURFACE_OFFSET)
 local function RenderPort(base)
     return base + RAIL_MARKER_OFFSET
 end
-local KIT = {
-    none = {single = {[4096] = "railroad4096.mdl", [1024] = "railroad1024.mdl"}},
-    round = {
-        single = {[1024] = "tunnel1024.mdl", [256] = "tunnel256.mdl", [64] = "tunnel64.mdl"},
-        double = {[1024] = "tunnel1024_double.mdl"},
-    },
-    rectangular = {
-        single = {[1024] = "tunnel1024_rect.mdl", [256] = "tunnel256_rect.mdl", [64] = "tunnel64_rect.mdl"},
-        double = {[1024] = "tunnel1024_double.mdl"},
-    },
-    wide = {double = {[1024] = "tunnel1024_double.mdl"}},
-}
-local TURNS = {
-    round = {
-        single = {
-            [3072] = {file = "tunnel3072_turn1.mdl", parts = 3},
-            [4096] = {file = "tunnel4096_turn1.mdl", parts = 4},
-            [8192] = {file = "tunnel8192_turn1.mdl", parts = 8},
-        },
-        double = {
-            [4096] = {file = "tunnel4096_double_turn1.mdl", parts = 4},
-            [8192] = {file = "tunnel8192_double_turn1.mdl", parts = 8},
-        },
-    },
-    rectangular = {
-        single = {[3072] = {file = "tunnel3072_rect_turn1.mdl", parts = 3}},
-    },
-}
+-- No prefab/tunnel/radius choices: each model is selected from the
+-- installed original MDL catalog. The historic per-model measurements below
+-- are retained strictly for safe migration of pre-catalog saved routes.
 N.Junctions = N.Junctions or {}
 -- Scans mounted Metrostroi and Track Pack MDLs, and measures the real rail
 -- centerline of each user-selected model (never substitutes custom meshes).
@@ -112,12 +87,6 @@ local function ValidModel(model)
     local valid = util.IsValidModel(model)
     modelCache[model] = {valid = valid, expiry = CurTime() + 30}
     return valid
-end
-local function Settings(settings)
-    local kind = tostring(settings.tunnel or "round")
-    if not KIT[kind] then kind = "round" end
-    local lane = tonumber(settings.tracks) == 2 and "double" or "single"
-    return kind, lane
 end
 local function Placement(start, yaw, model, length, kind, turn, radius, sweep)
     local ang = ModelAngles(yaw)
@@ -1072,42 +1041,19 @@ if CLIENT then
         net.Start("MEXNativeCatalogRescan")
         net.SendToServer()
     end
+    -- Compatibility diagnostic: read the real mounted catalog, never old
+    -- hardcoded curve-radius prefab tables.
     concommand.Add("mex_native_curve_assets", function()
-        local installed = 0
-        print("[MEX Native Track] Original curved model availability:")
-        for family, layouts in pairs(TURNS) do
-            for layout, specs in pairs(layouts) do
-                for radius, spec in pairs(specs) do
-                    local model = ROOT .. spec.file
-                    local ok = ValidModel(model)
-                    print(string.format("  [%s] %s / %s / R%d: %s",
-                        ok and "OK" or "MISSING", family, layout, radius, model))
-                    if ok then
-                        installed = installed + 1
-                        local profile = StockCurveProfile(model)
-                        if profile then
-                            print(string.format(
-                                "      %s rail-end ports: (%.2f,%.2f) -> (%.2f,%.2f), exit sweep %.2f degrees",
-                                profile.samples and "MESH-MEASURED" or "STOCK-CALIBRATED",
-                                profile.entryX or 0, profile.entryY or 0,
-                                profile.x, profile.y, profile.sweep
-                            ))
-                        end
-                    end
-                end
-            end
+        local names = {}
+        for name, info in pairs(N.ModelCatalog or {}) do
+            if info.kind == "curve" then names[#names + 1] = name end
         end
-        local available = file.Find(ROOT .. "*.mdl", "GAME") or {}
-        print("[MEX Native Track] Other mounted original curve candidates:")
-        for _, name in ipairs(available) do
-            if string.find(name, "turn", 1, true)
-                or string.find(name, "curve", 1, true) then
-                print("    " .. ROOT .. name)
-            end
-        end
+        table.sort(names)
+        print("[MEX Native Track] Mounted original curved MDL models:")
+        for _, name in ipairs(names) do print("  " .. name) end
         chat.AddText(Color(230, 230, 230),
-            "[MEX Track Builder] " .. installed ..
-            " original curve profiles installed. See client console for exact filenames.")
+            "[MEX Track Builder] " .. #names ..
+            " named curve models in catalog. See console for filenames.")
     end)
     net.Receive("MEXNativeCatalogChunk", function()
         local page, pages = net.ReadUInt(16), net.ReadUInt(16)
