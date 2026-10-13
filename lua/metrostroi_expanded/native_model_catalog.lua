@@ -454,7 +454,7 @@ local function DualRailPairs(vertices, axis, station, tolerance)
 end
 
 local function DoubleModelProfile(model, vertices, axis)
-    if #vertices < 16 or #vertices > 110000 then return nil end
+    if #vertices < 8 or #vertices > 110000 then return nil end
     local minAlong, maxAlong = math.huge, -math.huge
     local stations = {}
     for _, p in ipairs(vertices) do
