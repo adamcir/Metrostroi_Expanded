@@ -4,46 +4,36 @@
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
-## Original Metrostroi / Track Pack Model Catalog & Track Builder
+## Metrostroi / Track Pack Railway Model Catalog & Track Builder
 
-Open **Q → Tools → Metrostroi Expanded → Track Builder → OPEN ORIGINAL MODEL CATALOG**.
-The visual model browser lists **all mounted original MDL assets** from
-Metrostroi and Track Pack folders with thumbnails, 3D preview, search,
-categories, source filters and pages. There are **no preset tunnel families,
-curve-radius choices or automatic model substitutions**. Choose the exact
-installed MDL, optionally reverse its authored direction, and connect
-its real rail-end nodes. Models without measurable rails remain browsable
-but are not fabricated into working tracks.
+Open **Q → Tools → Metrostroi Expanded → Track Builder → OPEN TRACK MODEL CATALOG**.
+The browser now lists **only railway segment candidates** from the
+mounted original Metrostroi and Track Pack MDLs, not unrelated Metrostroi
+trains, signals, props or scenery. Browse through a searchable,
+continuously scrolling thumbnail grid without Prev/Next buttons. Click a
+thumbnail to inspect its original 3-D model in a larger, properly lit
+preview: drag to rotate, scroll over the preview to zoom. Only currently
+visible thumbnail models are rendered to reduce frame time.
 
-**LMB** starts the route and appends selected native modules. **RMB**
-commits it; **R** removes exactly the saved or grey model under the crosshair.
-**Shift+R** undoes the last unsaved placement. The targeted module is
-highlighted before deletion, while all other modules remain in the route.
-A grey translucent original-model preview appears under the tool cursor,
-and unfinished pieces stay ghosted.
-Free start/end connectors are shown; double-track modules expose
-independent rail endpoint nodes and two Metrostroi network paths.
+Select the **exact original railway MDL** (without tunnel/radius prefab
+presets). Genuine single rails and double-track tunnels have independently
+measured track centerlines, and double prefabs have four real rail-end
+connectors. Gradients are supported via a compact **Track grade**
+slider (+uphill, -downhill), and genuine inclined models retain their
+measured 3-D path. Original-model physics is preserved; the tool does
+not generate substitute rails or tunnel geometry.
 
-The builder scans mounted **Metrostroi and Track Pack** MDL directories
-(including Workshop content). Choose any detected model in the visual catalog;
-for real two-ended rail segments the engine measures actual rail-end
-faces, heading and straight/transition/curved centerline.
-The measured cyan guide is an editor-only visualization, **not a generated
-rail model**. Unsupported, non-track, multi-lane or unmeasurable MDLs are
-safely rejected instead of assigned imaginary snap coordinates.
-Use `mex_native_rescan_models` after mounting a new Track Pack.
+**LMB** starts the route and appends a selected original MDL; **RMB**
+saves it. **R** removes only the saved/grey module under the crosshair,
+and **Shift+R** undoes the last unsaved module. The model under the
+crosshair is highlighted before deletion. Free start/end connectors
+are shown and the grey preview follows the measured original geometry.
 
-The tool has explicit **Turnout** and **Rail crossing** types. They use
-real junction models with a calibrated 3- or 4-port connector registry,
-not overlapped straight models. Because Track Pack junction asset names
-and pivots vary, administrators must register their real models and port
-data before those types can be placed. Matching original moving-switch
-model/PHY variants can be registered for state changes; Metrostroi
-signalling/dispatch integration remains to be verified.
-
-The native route layout is saved per map and restored on restart/map
-cleanup. Stock model pivot alignment, wheel fit, collisions, rerailing
-and real-world switching still require Garry's Mod playtesting.
+Junctions require a real registered turnout/crossing MDL with
+calibrated port paths; the builder cannot invent track junctions.
+Models without measurable railhead geometry or original usable .phy
+are rejected instead of given fake attachment points. In-game testing
+of wheel contact, slopes and custom double-track profiles is required.
 
 See [Track Builder documentation](docs/TUNNEL_BUILDER.md).
 
