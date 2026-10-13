@@ -740,8 +740,20 @@ if CLIENT then
             end
         end
         nodes = {}
-        for _, node in ipairs(all) do
-            if counts[node.key] == 1 then nodes[#nodes + 1] = node end
+        -- All modules use original MDL coordinates. End caps separated by
+        -- fractions of a unit (or an older saved route's tiny offset) must
+        -- count as ONE joined node, not two fake "free" control points.
+        -- Never hide a real open rail end unless another module is within
+        -- 12 SU of the same rail center.
+        for index, node in ipairs(all) do
+            local joined = false
+            for j, other in ipairs(all) do
+                if j ~= index and node.pos:DistToSqr(other.pos) <= 12 * 12 then
+                    joined = true
+                    break
+                end
+            end
+            if not joined then nodes[#nodes + 1] = node end
         end
         return nodes
     end
@@ -1077,12 +1089,19 @@ end
 
 function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
     local best, bestDist = nil, (distance or 72)^2
-    local nodes, count = CollectPorts()
+    local nodes = CollectPorts()
     -- Screen-center targeting is much more intuitive than asking players
     -- to shoot the map surface exactly behind a floating connector marker.
     local rayBest, rayDist = nil, 28 * 28
-    for _, node in ipairs(nodes) do
-        if (count[node.key] or 0) < 2
+    for index, node in ipairs(nodes) do
+        local occupied = false
+        for j, other in ipairs(nodes) do
+            if j ~= index and node.pos:DistToSqr(other.pos) <= 12 * 12 then
+                occupied = true
+                break
+            end
+        end
+        if not occupied
             and (not tracks or node.lanes == (tonumber(tracks) == 2 and 2 or 1)) then
             local d = pos:DistToSqr(node.pos)
             if d < bestDist then best, bestDist = node, d end
