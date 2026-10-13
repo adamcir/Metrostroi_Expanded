@@ -110,7 +110,9 @@ if CLIENT then
         rescan:SetWide(136)
         rescan:SetText("Rescan mounted MDLs")
         rescan.DoClick = function()
-            RunConsoleCommand("mex_native_rescan_models")
+            if MEXNativeTrack and MEXNativeTrack.RequestCatalogRescan then
+                MEXNativeTrack.RequestCatalogRescan()
+            end
         end
 
         local footer = vgui.Create("DPanel", frame)
@@ -294,7 +296,9 @@ if CLIENT then
             noteText:SetText("Click any icon to inspect its real model. Click again to choose a different piece.")
         end
         if not MEXNativeTrack or not next(MEXNativeTrack.ModelCatalog or {}) then
-            RunConsoleCommand("mex_native_rescan_models")
+            if MEXNativeTrack and MEXNativeTrack.RequestCatalogRescan then
+                MEXNativeTrack.RequestCatalogRescan()
+            end
         end
     end
 
@@ -326,7 +330,12 @@ if CLIENT then
         panel:Button("Undo last module", "mex_native_undo")
         panel:Button("Remove aimed module", "mex_native_remove_aimed")
         panel:Button("Cancel construction", "mex_native_cancel")
-        panel:Button("Rescan model catalog", "mex_native_rescan_models")
+        local refresh = panel:Button("Rescan model catalog")
+        refresh.DoClick = function()
+            if MEXNativeTrack and MEXNativeTrack.RequestCatalogRescan then
+                MEXNativeTrack.RequestCatalogRescan()
+            end
+        end
         panel:Help("Unknown Track Pack rail meshes need measured original ports. Use mex_native_model_info models/...mdl to inspect.")
     end
 end
