@@ -837,6 +837,8 @@ function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
                         center = ent:GetNW2Vector("MEXNativePortCenter" .. i,
                             point - RAIL_MARKER_OFFSET),
                         yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
+                        pitch = ent:GetNW2Float("MEXNativePortPitch" .. i, 0),
+                        start = ent:GetNW2Bool("MEXNativePortStart" .. i, false),
                         lanes = wanted,
                         ent = ent, index = i,
                     }
@@ -963,11 +965,14 @@ if CLIENT then
         local aim = tr.Hit and not tr.HitSky and tr.HitPos
             or (ply:GetShootPos() + ply:GetAimVector() * 800)
         local active = ply:GetNW2Bool("MEXNativeActive", false)
+        local selectedName = string.lower(tool:GetClientInfo("native_model"))
+        local info = N.ModelCatalog[selectedName]
         local settings = {
-            native_model = tool:GetClientInfo("native_model"),
+            native_model = selectedName,
             native_reverse = tool:GetClientNumber("native_reverse", 0),
             branch = tool:GetClientNumber("native_branch", 2),
             grade = tool:GetClientNumber("native_grade", 0),
+            tracks = info and info.double and 2 or 1,
             start_grade = active
                 and ply:GetNW2Float("MEXNativePitch", 0) or nil,
         }
@@ -1459,6 +1464,8 @@ local function SpawnRoute(route, ghost)
             ent:SetNW2Vector("MEXNativePortCenter" .. portIndex,
                 port.center or (port.pos - RAIL_MARKER_OFFSET))
             ent:SetNW2Float("MEXNativePortYaw" .. portIndex, port.yaw or 0)
+            ent:SetNW2Float("MEXNativePortPitch" .. portIndex,
+                port.pitch or 0)
             ent:SetNW2Bool("MEXNativePortStart" .. portIndex, port.start == true)
         end
         ent:SetNW2Int("MEXNativePorts", portCount)
@@ -1591,6 +1598,7 @@ function N.Add(ply, aim, settings)
         Notify(ply, "Selected model is not mounted. Rescan your original model catalog.")
         return false
     end
+    settings.tracks = N.ModelCatalog[selected].double and 2 or 1
     local state = N.Active[ply]
     if not state then
         local tr = ply:GetEyeTrace()
@@ -1608,16 +1616,22 @@ function N.Add(ply, aim, settings)
         end
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
+        local grade = connector and (connector.start and
+            -(connector.pitch or 0) or (connector.pitch or 0))
+            or math.Clamp(tonumber(settings.grade) or 0, -20, 20)
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
-            pos = pos, yaw = yaw, parts = {}, preview = {}}
+            startPitch = grade, pos = pos, yaw = yaw, pitch = grade,
+            parts = {}, preview = {}}
         SyncState(ply)
         Notify(ply, connector and "Connected to an original model endpoint." or "Start node set. Aim ahead to preview an original model.")
         return true
     end
+    settings.start_grade = state.pitch or 0
     local candidate, err = N.Candidate(state.pos, state.yaw, aim, settings)
     if not candidate then Notify(ply, err); return false end
     for _, part in ipairs(candidate.parts) do state.parts[#state.parts + 1] = part end
     state.pos, state.yaw = candidate.pos, candidate.yaw
+    state.pitch = candidate.pitch or state.pitch or 0
     RefreshPreview(state)
     SyncState(ply)
     return true
@@ -1661,9 +1675,11 @@ local function UpdateConstructionEndpoint(state)
             or ports[last.lane == "double" and 3 or 2]
         state.pos = endpoint and (endpoint.center or endpoint.pos) or state.start
         state.yaw = last.junction and endpoint and endpoint.yaw
-            or (last.yaw - (last.turn or 0) * (last.sweep or 0))
+            or last.endYaw or (last.yaw - (last.turn or 0) * (last.sweep or 0))
+        state.pitch = last.endPitch or 0
     else
         state.pos, state.yaw = state.start, state.startYaw
+        state.pitch = state.startPitch or 0
     end
 end
 
