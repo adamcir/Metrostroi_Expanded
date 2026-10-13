@@ -6,7 +6,7 @@ local N = MEXNativeTrack
 N.ModelCatalog = N.ModelCatalog or {}
 -- Reset old negative/failed calibration cache on Lua refresh, since older
 -- fixed-step sampling rejected straight original MDLs with only end vertices.
-local ANALYZER_VERSION = 3
+local ANALYZER_VERSION = 4
 if N.MeshProfileCacheVersion ~= ANALYZER_VERSION then
     N.MeshProfiles = {}
     N.MeshProfileCacheVersion = ANALYZER_VERSION
@@ -142,6 +142,74 @@ end
 local function Dist2(a, b)
     local x, y = a[1] - b[1], a[2] - b[2]
     return math.sqrt(x*x + y*y)
+end
+
+-- Catalog categories are display hints, not evidence of curvature.
+-- A straight stock prefab must not acquire a bend merely because vertices
+-- from its sleepers, third rail or tunnel wall resemble a rail pair.
+local function NamedStraightModel(model)
+    return Kind(model) == "straight"
+end
+local function NamedCurveModel(model)
+    return Kind(model) == "curve"
+end
+local function AngularError(a, b)
+    return math.abs(math.AngleDifference(a, b))
+end
+local function ValidateRailProfile(profile)
+    local points = profile.points
+    local first, last = points[1], points[#points]
+    local chordYaw = PlanarYaw(first, last)
+    local maxKink, prevYaw = 0, nil
+    for i = 2, #points do
+        local a, b = points[i - 1], points[i]
+        local length = Dist2(a, b)
+        if length < 0.5 then
+            return false, "rail mesh has duplicate station positions"
+        end
+        local yaw = PlanarYaw(a, b)
+        if prevYaw then
+            maxKink = math.max(maxKink, AngularError(yaw, prevYaw))
+        end
+        prevYaw = yaw
+    end
+    profile.maxLocalKink = maxKink
+    profile.chordYaw = chordYaw
+    if NamedStraightModel(profile.model) then
+        -- Strong invariant: a straight rail has identical entry/exit
+        -- tangents and runs through both end faces without lateral bends.
+        -- A 10+ SU mismatch is visible as a sharp kink in the game.
+        if profile.lateralDeviation > 4
+            or AngularError(profile.entryYaw, chordYaw) > 2.5
+            or AngularError(profile.exitYaw, chordYaw) > 2.5
+            or AngularError(profile.entryYaw, profile.exitYaw) > 2.5
+            or maxKink > 4 then
+            return false,
+                "Ambiguous rail mesh: this straight MDL was falsely measured as curved. No inaccurate connector will be used."
+        end
+        -- The two REAL seam centers determine its line. An intentionally
+        -- straight prefab may have 40+ extraneous sleeper mesh stations;
+        -- these must not enter the Metrostroi track network as a zigzag.
+        profile.points = {first, last}
+        profile.entryYaw = chordYaw
+        profile.exitYaw = chordYaw
+        profile.deltaYaw = 0
+        profile.curved = false
+        profile.lateralDeviation = 0
+        profile.method = "validated original straight rail end faces"
+        return true
+    end
+    -- A turn may have a smooth arc or transition, but cannot change its
+    -- heading by tens of degrees in one microscopic rail-mesh step.
+    if maxKink > 14 then
+        return false, "Railhead measurement contains sharp inconsistent kinks"
+    end
+    if NamedCurveModel(profile.model) then
+        if #points < 4 or not profile.curved then
+            return false, "Curve model needs a verified curved railhead path"
+        end
+    end
+    return true
 end
 -- A compiled original MDL may have only TWO railhead vertex rows:
 -- one at each end of a 256/1024 SU straight! A fixed 25-slice sampler
@@ -320,8 +388,11 @@ local function ExtractRailProfile(model)
             for _, axis in ipairs({2, 1}) do
                 local profile = ModelRailProfile(model,
                     pools[strength], axis, strength)
-                if profile and profile.confidence > bestScore then
-                    best, bestScore = profile, profile.confidence
+                if profile then
+                    local accepted = ValidateRailProfile(profile)
+                    if accepted and profile.confidence > bestScore then
+                        best, bestScore = profile, profile.confidence
+                    end
                 end
             end
         end
@@ -339,14 +410,17 @@ local function ExtractRailProfile(model)
         if #combined >= 8 then
             for _, axis in ipairs({2, 1}) do
                 local profile = ModelRailProfile(model, combined, axis, 1)
-                if profile and profile.confidence > bestScore then
-                    best, bestScore = profile, profile.confidence
+                if profile then
+                    local accepted = ValidateRailProfile(profile)
+                    if accepted and profile.confidence > bestScore then
+                        best, bestScore = profile, profile.confidence
+                    end
                 end
             end
         end
     end
     if not best then
-        return nil, "original running rail heads could not be measured: no matching rail-end pair in the MDL (use a verified original-model path profile)"
+        return nil, "Original railheads could not be measured reliably; straight models are never bent to match a bad scan. Try another rail MDL or a measured profile."
     end
     return best
 end
