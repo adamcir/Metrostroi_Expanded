@@ -790,7 +790,15 @@ if CLIENT then
             or (anchor and anchor.center or aim)
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
             or (anchor and anchor.yaw or ply:EyeAngles().y)
-        local candidate, errorText = N.Candidate(origin, yaw, aim, settings)
+        local aimedNative = IsValid(tr.Entity)
+            and tr.Entity:GetNW2Bool("MEXNativeModule", false)
+        local invalidMidRail = not active and aimedNative and not anchor
+        local candidate, errorText
+        if invalidMidRail then
+            errorText = "Aim at a FREE rail-end connector, not the middle of an existing curve."
+        else
+            candidate, errorText = N.Candidate(origin, yaw, aim, settings)
+        end
         N.PreviewError = candidate and nil or errorText
         N.PreviewCurveRadius = nil
         if candidate and #candidate.parts > 0 then
@@ -825,7 +833,7 @@ if CLIENT then
             -- requested but not installed: its apparent endpoints would be
             -- wrong and the next click could never actually place it.
             -- In straight mode show a valid original sample at the cursor.
-            if settings.mode == "straight" then
+            if settings.mode == "straight" and not invalidMidRail then
                 local tunnel, lane = Settings(settings)
                 local kit = KIT[tunnel] and KIT[tunnel][lane]
                 local name, realLength
@@ -1309,6 +1317,12 @@ function N.Add(ply, aim, settings)
             ply:GetShootPos(), ply:GetAimVector())
             or N.FindPort(aim, 72, settings.tracks,
                 ply:GetShootPos(), ply:GetAimVector(), rayLength)
+        if IsValid(tr.Entity)
+            and tr.Entity:GetNW2Bool("MEXNativeModule", false)
+            and not connector then
+            Notify(ply, "Select a free original rail-end node. The middle of a curved MDL is not a track connection.")
+            return false
+        end
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
