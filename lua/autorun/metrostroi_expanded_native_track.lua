@@ -733,10 +733,15 @@ if CLIENT then
                         counts[key] = (counts[key] or 0) + 1
                         local double = ent:GetNW2Int("MEXNativePorts", 0) == 4
                             and ent:GetNW2String("MEXNativeJunctionID", "") == ""
-                        all[#all + 1] = {pos = pos, key = key,
+                        all[#all + 1] = {
+                            pos = pos, key = key,
+                            center = ent:GetNW2Vector("MEXNativePortCenter" .. j,
+                                pos - RAIL_MARKER_OFFSET),
+                            lanes = double and 2 or 1,
                             yaw = ent:GetNW2Float("MEXNativePortYaw" .. j, 0),
                             start = ent:GetNW2Bool("MEXNativePortStart" .. j,
-                                double and j <= 2 or (not double and j == 1))}
+                                double and j <= 2 or (not double and j == 1))
+                        }
                     end
                 end
             end
@@ -759,6 +764,31 @@ if CLIENT then
         end
         return nodes
     end
+    -- Same free-node ray/hit selection used by the server. Snapping the
+    -- preview only after LMB made a curve jump from the grass onto the rail;
+    -- now its grey MDL is already aligned BEFORE the user places anything.
+    local function ClientAimedFreePort(aim, eye, ray, tracks)
+        local byRay, rayError = nil, 28 * 28
+        local byHit, hitError = nil, 72 * 72
+        local required = tonumber(tracks) == 2 and 2 or 1
+        for _, node in ipairs(CollectVisibleEndpoints()) do
+            if node.lanes == required then
+                local distance = aim:DistToSqr(node.pos)
+                if distance < hitError then
+                    byHit, hitError = node, distance
+                end
+                local along = (node.pos - eye):Dot(ray)
+                if along >= 0 and along <= 8192 then
+                    local miss = node.pos:DistToSqr(eye + ray * along)
+                    if miss < rayError then
+                        byRay, rayError = node, miss
+                    end
+                end
+            end
+        end
+        return byRay or byHit
+    end
+
     local function Tool()
         local ply = LocalPlayer()
         if not IsValid(ply) then return nil end
@@ -784,8 +814,13 @@ if CLIENT then
             junction = tool:GetClientInfo("native_junction"),
             branch = tool:GetClientNumber("native_branch", 2),
         }
-        local anchor = not active and N.PortFromAimedEntity(tr, settings.tracks,
-            ply:GetShootPos(), ply:GetAimVector()) or nil
+        local anchor = nil
+        if not active then
+            anchor = N.PortFromAimedEntity(tr, settings.tracks,
+                ply:GetShootPos(), ply:GetAimVector())
+                or ClientAimedFreePort(aim, ply:GetShootPos(),
+                    ply:GetAimVector(), settings.tracks)
+        end
         local origin = active and ply:GetNW2Vector("MEXNativeEnd", aim)
             or (anchor and anchor.center or aim)
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
