@@ -482,8 +482,23 @@ function N.Candidate(start, yaw, aimed, settings)
         -- nominal radius, never the uninstalled radius requested by the tool.
         local sign = mode == "curve_right" and 1 or -1
         local model = ROOT .. spec.file
-        local part, finish, exitYaw = StockCurveWorldPart(
-            start, yaw, model, sign, radius, lane)
+        local part, finish, exitYaw
+        if lane == "single" and N.ModelCatalog[model] then
+            -- The actual railhead mesh beats historical hand-measured curve
+            -- constants. It eliminates the seam visible between consecutive
+            -- native Metrostroi turn1 models, including their sidewalls.
+            local measured, why = GenericProfile(model)
+            if measured then
+                part, finish, exitYaw = GenericOriginalPart(
+                    start, yaw, model, settings)
+            elseif CLIENT and why == "Waiting for server rail-end calibration." then
+                return nil, why
+            end
+        end
+        if not part then
+            part, finish, exitYaw = StockCurveWorldPart(
+                start, yaw, model, sign, radius, lane)
+        end
         if not part then
             return nil, "This original curve has no verified rail-end coordinates."
         end
@@ -1824,9 +1839,18 @@ local function RecalibrateRoute(route)
         local profile = StockCurveProfile(part.model)
         if not part.nativeModel and profile
             and (part.turn == 1 or part.turn == -1) then
-            local calibrated, finish, finalYaw =
-                StockCurveWorldPart(start, yaw, part.model, part.turn,
-                    part.radius or 4096, part.lane or "single")
+            local calibrated, finish, finalYaw
+            if part.lane ~= "double" and N.ModelCatalog[part.model] then
+                calibrated, finish, finalYaw = GenericOriginalPart(
+                    start, yaw, part.model, {
+                        mode = part.turn == 1 and "curve_right" or "curve_left"
+                    })
+            end
+            if not calibrated then
+                calibrated, finish, finalYaw =
+                    StockCurveWorldPart(start, yaw, part.model, part.turn,
+                        part.radius or 4096, part.lane or "single")
+            end
             if calibrated then
                 -- Keep the old route's model and layout choices; only realign
                 -- its model pose / graph / rail nodes to the actual MDL.
