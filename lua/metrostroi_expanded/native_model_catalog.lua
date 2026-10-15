@@ -157,7 +157,9 @@ function N.ScanModelCatalog()
                                 or lowerName:find("2way", 1, true) ~= nil
                                 or lowerName:find("2rail", 1, true) ~= nil
                                 or lowerName:find("twin", 1, true) ~= nil
-                                or lowerName:find("parallel", 1, true) ~= nil,
+                                or lowerName:find("parallel", 1, true) ~= nil
+                                or (istable(N.NativeOverrides[mdl])
+                                    and istable(N.NativeOverrides[mdl].lanes)),
                         }
                     end
                 end
