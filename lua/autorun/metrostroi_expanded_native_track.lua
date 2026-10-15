@@ -413,6 +413,12 @@ local function GenericProfile(model)
         end
     end
     if not measured and original then
+        if string.find(model, "double", 1, true) then
+            -- This legacy profile contains only a MIDPOINT. Using it as a
+            -- single track corrupts the four physical double-rail seams.
+            -- Never invent the second line: request its measured profile.
+            return nil, "Double curve requires two measured rail paths; use mex_native_register_double_model_path for this MDL."
+        end
         -- A few stock Metrostroi MDLs do not expose readable railhead
         -- submeshes on dedicated servers. Their measured historical
         -- per-model seam coordinates are retained as a compatibility
