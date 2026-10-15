@@ -626,7 +626,7 @@ function N.Candidate(start, yaw, aimed, settings)
         if info.double or info.kind == "junction" then
             return nil, "2x Single mode requires a single-track MDL."
         end
-        local ends = settings.pair_ends
+        local ends = settings.pair_ends or settings.double_ends
         if not istable(ends) or #ends ~= 2 then
             local spacing = math.Clamp(tonumber(settings.native_spacing) or 264, 180, 480)
             ends = {
@@ -756,6 +756,28 @@ function N.ModulePorts(part)
             lanes = part.lane == "double" and 2 or 1, start = i == 1}
     end
     return ports
+end
+
+
+-- End ports of an UNSAVED genuine double module, used when switching
+-- from a double MDL to a 2x pair during one continuous construction.
+function N.PairFromPart(part)
+    if not part or part.lane ~= "double" or part.junction then return nil end
+    local ports = N.ModulePorts(part)
+    if #ports ~= 4 then return nil end
+    local ends = {}
+    for lane = 1, 2 do
+        local port = ports[lane + 2]
+        ends[lane] = {
+            pos = port.pos - RAIL_MARKER_OFFSET,
+            yaw = port.yaw, pitch = port.pitch,
+        }
+    end
+    local right = Right(ends[1].yaw)
+    if ends[1].pos:Dot(right) > ends[2].pos:Dot(right) then
+        ends[1], ends[2] = ends[2], ends[1]
+    end
+    return ends
 end
 
 function N.ModulePaths(part)
@@ -1186,14 +1208,22 @@ if CLIENT then
             start_grade = active
                 and ply:GetNW2Float("MEXNativePitch", 0) or nil,
         }
-        if active and ply:GetNW2Bool("MEXNativePairActive", false) then
-            settings.pair_ends = {}
-            for i = 1, 2 do
-                settings.pair_ends[i] = {
-                    pos = ply:GetNW2Vector("MEXNativePairPos" .. i, vector_origin),
-                    yaw = ply:GetNW2Float("MEXNativePairYaw" .. i, 0),
-                    pitch = ply:GetNW2Float("MEXNativePairPitch" .. i, 0),
-                }
+        if active then
+            for _, spec in ipairs({
+                {"MEXNativePair", "pair_ends"},
+                {"MEXNativeDouble", "double_ends"},
+            }) do
+                if ply:GetNW2Bool(spec[1] .. "Active", false) then
+                    settings[spec[2]] = {}
+                    for i = 1, 2 do
+                        settings[spec[2]][i] = {
+                            pos = ply:GetNW2Vector(spec[1] .. "Pos" .. i,
+                                vector_origin),
+                            yaw = ply:GetNW2Float(spec[1] .. "Yaw" .. i, 0),
+                            pitch = ply:GetNW2Float(spec[1] .. "Pitch" .. i, 0),
+                        }
+                    end
+                end
             end
         end
         local anchor = nil
@@ -1582,13 +1612,19 @@ local function SyncState(ply)
     ply:SetNW2Vector("MEXNativeEnd", state and state.pos or vector_origin)
     ply:SetNW2Float("MEXNativeYaw", state and state.yaw or 0)
     ply:SetNW2Float("MEXNativePitch", state and state.pitch or 0)
-    local pair = state and state.pairEnds
-    ply:SetNW2Bool("MEXNativePairActive", pair ~= nil)
-    for i = 1, 2 do
-        local node = pair and pair[i]
-        ply:SetNW2Vector("MEXNativePairPos" .. i, node and node.pos or vector_origin)
-        ply:SetNW2Float("MEXNativePairYaw" .. i, node and node.yaw or 0)
-        ply:SetNW2Float("MEXNativePairPitch" .. i, node and node.pitch or 0)
+    for _, spec in ipairs({
+        {"MEXNativePair", state and state.pairEnds},
+        {"MEXNativeDouble", state and state.doubleEnds},
+    }) do
+        local prefix, ends = spec[1], spec[2]
+        ply:SetNW2Bool(prefix .. "Active", ends ~= nil)
+        for i = 1, 2 do
+            local node = ends and ends[i]
+            ply:SetNW2Vector(prefix .. "Pos" .. i,
+                node and node.pos or vector_origin)
+            ply:SetNW2Float(prefix .. "Yaw" .. i, node and node.yaw or 0)
+            ply:SetNW2Float(prefix .. "Pitch" .. i, node and node.pitch or 0)
+        end
     end
 end
 local function CollectPorts()
@@ -1868,12 +1904,14 @@ function N.Add(ply, aim, settings)
     end
     settings.start_grade = state.pitch or 0
     settings.pair_ends = state.pairEnds
+    settings.double_ends = state.doubleEnds
     local candidate, err = N.Candidate(state.pos, state.yaw, aim, settings)
     if not candidate then Notify(ply, err); return false end
     for _, part in ipairs(candidate.parts) do state.parts[#state.parts + 1] = part end
     state.pos, state.yaw = candidate.pos, candidate.yaw
     state.pitch = candidate.pitch or state.pitch or 0
     state.pairEnds = candidate.pairEnds
+    state.doubleEnds = N.PairFromPart(candidate.parts[#candidate.parts])
     RefreshPreview(state)
     SyncState(ply)
     return true
@@ -1913,6 +1951,7 @@ local function UpdateConstructionEndpoint(state)
     local last = state.parts[#state.parts]
     local previous = state.parts[#state.parts - 1]
     state.pairEnds = nil
+    state.doubleEnds = N.PairFromPart(last)
     if last and previous and last.pairLane == 2 and previous.pairLane == 1 then
         local firstPort = N.ModulePorts(previous)[2]
         local secondPort = N.ModulePorts(last)[2]
