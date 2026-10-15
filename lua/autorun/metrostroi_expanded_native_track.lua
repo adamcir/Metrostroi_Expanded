@@ -50,6 +50,7 @@ function NativePiece:Initialize()
             ok = self:PhysicsInitMultiConvex(hulls, "metal")
             if ok then
                 self:SetSolid(SOLID_VPHYSICS)
+                self:SetMoveType(MOVETYPE_VPHYSICS)
                 self:EnableCustomCollisions(true)
                 self.MEXNativeCollisionFallback = true
             end
@@ -502,6 +503,7 @@ local function GenericOriginalPart(start, yaw, model, settings)
         nativeModel = true, reverse = reverse,
         nativePoints = points,
         nativeLanePoints = profile.lanePoints,
+        nativeGauge = profile.gauge,
         calibrated = true,
     }
     return part, finish, finalYaw, finalGrade
@@ -523,7 +525,8 @@ function N.NativeRailConvexes(part)
         flat:Normalize()
         local across = Vector(flat.y, -flat.x, 0)
         for _, side in ipairs({-1, 1}) do
-            local offset = across * (side * 42.9)
+            local offset = across * (side * math.Clamp(
+                tonumber(part.nativeGauge) or 85.8, 65, 110) * 0.5)
             local p, q = a + offset, b + offset
             local width = across * 2.9
             local hull = {}
