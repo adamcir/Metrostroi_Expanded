@@ -201,7 +201,18 @@ end
 -- A straight stock prefab must not acquire a bend merely because vertices
 -- from its sleepers, third rail or tunnel wall resemble a rail pair.
 local function NamedStraightModel(model)
-    return Kind(model) == "straight"
+    local name = string.lower(string.GetFileFromFilename(model))
+    -- Numeric Track Pack segments are NOT necessarily straight. Trust
+    -- measured curvature, instead of rejecting genuine arcs named track17.
+    -- Explicit stock straight MDLs still get strict anti-false-curve checks.
+    return name:find("straight", 1, true) ~= nil
+        or name:find("pryam", 1, true) ~= nil
+        or name:find("railroad16", 1, true) ~= nil
+        or (string.StartWith(model, "models/metrostroi/tracks/")
+            and name:find("tunnel", 1, true) ~= nil
+            and not name:find("turn", 1, true)
+            and not name:find("slope", 1, true)
+            and not name:find("ramp", 1, true))
 end
 local function NamedCurveModel(model)
     return Kind(model) == "curve"
@@ -686,6 +697,34 @@ local function OverrideProfile(model, points)
         method = "registered original rail centerline",
     }
 end
+
+-- Exact measured double rail paths may be registered for Track Pack MDLs
+-- with unusual textures that cannot be recognized automatically.
+local function RegisteredDoubleProfile(model, lanes)
+    if not istable(lanes) or #lanes ~= 2 then return nil end
+    if not ValidOverride({points = lanes[1]})
+        or not ValidOverride({points = lanes[2]})
+        or #lanes[1] ~= #lanes[2] then return nil end
+    local centers = {}
+    for i = 1, #lanes[1] do
+        local a, b = lanes[1][i], lanes[2][i]
+        local dx, dy = b[1] - a[1], b[2] - a[2]
+        local gap = math.sqrt(dx * dx + dy * dy)
+        if gap < 150 or gap > 640 or math.abs(b[3] - a[3]) > 28 then
+            return nil
+        end
+        centers[i] = {(a[1] + b[1]) * 0.5,
+            (a[2] + b[2]) * 0.5, (a[3] + b[3]) * 0.5}
+    end
+    local profile = OverrideProfile(model, centers)
+    profile.double = true
+    profile.lanes = 2
+    profile.lanePoints = lanes
+    profile.method = "registered original double-track rail centerlines"
+    local valid = ValidateRailProfile(profile)
+    return valid and profile or nil
+end
+
 function N.AnalyzeNativeModel(model)
     if not isstring(model) or not string.StartWith(model,"models/")
         or not string.EndsWith(model,".mdl") then
@@ -696,6 +735,11 @@ function N.AnalyzeNativeModel(model)
         return nil,"model is not in the scanned installed Metrostroi/Track Pack catalog"
     end
     local override = N.NativeOverrides[model]
+    if istable(override) and istable(override.lanes) then
+        local profile = RegisteredDoubleProfile(model, override.lanes)
+        if profile then return profile end
+        return nil, "Registered double-track ports are invalid. Measure both real rail paths."
+    end
     if ValidOverride(override) then
         local profile = OverrideProfile(model, override.points)
         local valid, reason = ValidateRailProfile(profile)
@@ -749,6 +793,39 @@ if SERVER then
         file.CreateDir("metrostroi_expanded")
         file.Write(OVERRIDE_FILE, util.TableToJSON(N.NativeOverrides, true) or "{}")
         print("[MEX Native Track] Registered original rail-path profile for " .. model)
+    end)
+
+    concommand.Add("mex_native_register_double_model_path", function(ply, _, args)
+        if IsValid(ply) and not ply:IsSuperAdmin() then return end
+        local model = string.lower(tostring(args[1] or ""))
+        local encoded = tostring(args[2] or "")
+        if not N.ModelCatalog[model] then
+            print("[MEX Native Track] Unknown installed double MDL; rescan catalog.")
+            return
+        end
+        local lanes = {}
+        for rail in string.gmatch(encoded, "[^|]+") do
+            local points = {}
+            for group in string.gmatch(rail, "[^;]+") do
+                local p = {}
+                for value in string.gmatch(group, "[^,]+") do
+                    p[#p + 1] = tonumber(value)
+                end
+                points[#points + 1] = p
+            end
+            lanes[#lanes + 1] = points
+        end
+        local profile = RegisteredDoubleProfile(model, lanes)
+        if not profile then
+            print('[MEX Native Track] Usage: mex_native_register_double_model_path models/<path>.mdl "lane1_x,y,z;...|lane2_x,y,z;..." (equal station count, actual rail seams)')
+            return
+        end
+        N.NativeOverrides[model] = {lanes = lanes}
+        N.MeshProfiles[model] = nil
+        N.ModelCatalog[model].double = true
+        file.CreateDir("metrostroi_expanded")
+        file.Write(OVERRIDE_FILE, util.TableToJSON(N.NativeOverrides, true) or "{}")
+        print("[MEX Native Track] Measured two-lane endpoints saved: " .. model)
     end)
     concommand.Add("mex_native_model_info", function(ply, _, args)
         if IsValid(ply) and not ply:IsAdmin() then return end
