@@ -664,6 +664,9 @@ function N.Candidate(start, yaw, aimed, settings)
     if settings.pair_ends then
         return nil, "Finish the 2x section before changing to another track mode."
     end
+    if settings.double_ends and not info.double then
+        return nil, "Continue both lanes with 2x Single, or finish first and snap to a single lane."
+    end
     local part, finish, exitYaw, exitGrade = GenericOriginalPart(
         start, yaw, selected, settings)
     if not part then return nil, finish end
@@ -1316,6 +1319,8 @@ if CLIENT then
         local candidate, errorText
         if invalidMidRail then
             errorText = "Aim at a FREE rail-end connector, not the middle of an existing curve."
+        elseif active and ply:GetNW2Int("MEXNativeTrackMode", settings.tracks) ~= settings.tracks then
+            errorText = "Finish and reconnect at a rail-end before switching single/double modes."
         else
             candidate, errorText = N.Candidate(origin, yaw, aim, settings)
         end
@@ -1682,6 +1687,7 @@ local function SyncState(ply)
     ply:SetNW2Vector("MEXNativeEnd", state and state.pos or vector_origin)
     ply:SetNW2Float("MEXNativeYaw", state and state.yaw or 0)
     ply:SetNW2Float("MEXNativePitch", state and state.pitch or 0)
+    ply:SetNW2Int("MEXNativeTrackMode", state and state.trackMode or 0)
     for _, spec in ipairs({
         {"MEXNativePair", state and state.pairEnds},
         {"MEXNativeDouble", state and state.doubleEnds},
@@ -1968,12 +1974,17 @@ function N.Add(ply, aim, settings)
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
             startPitch = grade, pos = pos, yaw = yaw, pitch = grade,
             parts = {}, preview = {}, pairEnds = pairEnds,
+            trackMode = settings.tracks,
             doubleEnds = connector and settings.tracks == 2
                 and tonumber(settings.native_pair) ~= 1
                 and connector.pair_ends or nil}
         SyncState(ply)
         Notify(ply, connector and "Connected to an original model endpoint." or "Start node set. Aim ahead to preview an original model.")
         return true
+    end
+    if state.trackMode and state.trackMode ~= settings.tracks then
+        Notify(ply, "Finish and reconnect at a rail-end before switching single/double modes.")
+        return false
     end
     settings.start_grade = state.pitch or 0
     settings.pair_ends = state.pairEnds
