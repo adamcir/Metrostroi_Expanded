@@ -7,8 +7,6 @@ MEXNativeTrack = MEXNativeTrack or {}
 local N = MEXNativeTrack
 local ROOT = "models/metrostroi/tracks/"
 if CLIENT then
-    CreateClientConVar("mex_native_outdoor_brightness", "0.85", true, false,
-        "Neutral model lighting for real Metrostroi surface railway prefabs", 0.35, 1.5)
     CreateClientConVar("mex_native_show_measured_path", "1", true, false,
         "Draw measured original MDL rail-centerline only when using Track Builder")
 end
@@ -49,25 +47,70 @@ function NativePiece:Initialize()
             self:GetModel() .. "\\n")
     end
     self:SetUseType(SIMPLE_USE)
-    self:DrawShadow(false)
+    -- Original Source-engine entity shadows, not a flat fullbright tint.
+    self:DrawShadow(true)
 end
+
+-- Rail models are ordinary lit studio entities. Do NOT suppress Source
+-- lighting or inject constant model lights: that made tunnel tracks glow
+-- and prevented them becoming dark at night or under a tunnel ceiling.
+--
+-- One engine lighting probe is sampled ABOVE the rail surface, not at the
+-- model pivot buried in flatgrass/terrain. An infrequent upward trace adds
+-- modest occlusion for *runtime* tunnel roofs, whose shadows are not baked
+-- into the underlying BSP lightmaps. Floor/terrain BELOW the start point
+-- is deliberately excluded; no fake ground shadow meshes are generated.
+local ROOF_TRACE_HEIGHT = 46
+local ROOF_TRACE_RANGE = 2048
+local function TrackSkyOcclusion(ent, probe)
+    local sample = probe + Vector(0, 0, ROOF_TRACE_HEIGHT)
+    local excludeSelf = ent:GetNW2Bool("MEXNativeSurface", false)
+    local mask = MASK_OPAQUE or MASK_SOLID
+    local filter = excludeSelf and ent or nil
+    local hit = util.TraceLine({
+        start = sample,
+        endpos = sample + Vector(0, 0, ROOF_TRACE_RANGE),
+        mask = mask,
+        filter = filter,
+    })
+    if not hit then return 1 end
+    if hit.StartSolid then
+        -- If the probe happens to sit inside concrete/PHY, do not mistake
+        -- the map floor for an overhead roof. Reprobe higher up.
+        local higher = sample + Vector(0, 0, 48)
+        hit = util.TraceLine({
+            start = higher,
+            endpos = higher + Vector(0, 0, ROOF_TRACE_RANGE),
+            mask = mask,
+            filter = filter,
+        })
+        if not hit or hit.StartSolid then return 1 end
+    end
+    if not hit.Hit or hit.HitSky then return 1 end
+    -- Stronger under-roof rail dimming, gentler on a complete tunnel MDL
+    -- because its roof/exterior are part of the same rendered mesh.
+    return excludeSelf and 0.40 or 0.64
+end
+
 function NativePiece:Draw()
-    -- Stock Source tunnel/railroad models usually received baked map lighting
-    -- as static props. When spawned as scripted entities their light sample can
-    -- be inside grass/BSP, turning the long outside rail nearly black.
-    -- Give ONLY these original MDLs neutral vertex-light fill, never replace
-    -- the original materials or recolor their textures.
-    local brightness = GetConVar("mex_native_outdoor_brightness")
-    local outdoors = self:GetNW2Bool("MEXNativeOutdoor",
-        self:GetNW2Bool("MEXNativeSurface", false))
-    local fill = outdoors
-        and (brightness and math.Clamp(brightness:GetFloat(), 0.35, 1.5) or 0.85)
-        or 0.55
-    render.SuppressEngineLighting(true)
-    render.ResetModelLighting(fill, fill, fill)
+    local sample = self:GetNW2Vector("MEXNativeLightProbe",
+        self:GetPos() + Vector(0, 0, 70))
+    if self.MEXNextCoverCheck == nil or CurTime() >= self.MEXNextCoverCheck then
+        self.MEXNextCoverCheck = CurTime() + 1.35 +
+            (self:EntIndex() % 9) * 0.085
+        self.MEXCoverShade = TrackSkyOcclusion(self, sample)
+    end
+    -- Preserve any upstream renderer modulation and leave the lighting
+    -- state exactly as it was for other addons/models.
+    local red, green, blue = render.GetColorModulation()
+    local shade = self.MEXCoverShade or 1
+    render.SetLightingOrigin(sample)
+    render.SetColorModulation(red * shade, green * shade, blue * shade)
     self:DrawModel()
-    render.SuppressEngineLighting(false)
+    render.SetColorModulation(red, green, blue)
+    render.SetLightingOrigin(vector_origin)
 end
+
 function NativePiece:Use(activator)
     if SERVER and N.ToggleSwitch then N.ToggleSwitch(activator, self) end
 end
@@ -869,11 +912,10 @@ if CLIENT then
         render.SetBlend(0.57)
         render.SetColorModulation(warn and 1 or 0.95,
             warn and 0.45 or 0.95, warn and 0.45 or 0.95)
-        render.SuppressEngineLighting(true)
-        render.ResetModelLighting(0.78, 0.78, 0.78)
+        -- Preview is transparent, but uses the SAME normal scene
+        -- lighting as a committed model, not a glowing fullbright overlay.
         ghost:SetupBones()
         ghost:DrawModel()
-        render.SuppressEngineLighting(false)
         render.SetBlend(1)
         render.SetColorModulation(1, 1, 1)
     end
@@ -1442,17 +1484,18 @@ local function SpawnRoute(route, ghost)
         local surfaceModel = string.find(
             string.lower(part.model), "/railroad", 1, true) ~= nil
         ent:SetNW2Bool("MEXNativeSurface", surfaceModel)
-        -- A tunnel MDL placed above ground on flatgrass is also an OUTDOOR
-        -- prop. Its Source light probe can fall below the map and go black.
-        -- Detect a clear line to sky once on spawn, not during Draw().
-        local daylightOrigin = ent:GetPos() + Vector(0, 0, 40)
-        local daylightTrace = util.TraceLine({
-            start = daylightOrigin,
-            endpos = daylightOrigin + Vector(0, 0, 8192),
-            mask = MASK_SOLID_BRUSHONLY or MASK_SOLID,
-        })
-        ent:SetNW2Bool("MEXNativeOutdoor",
-            surfaceModel or not daylightTrace.Hit or daylightTrace.HitSky)
+        -- Real ambient-light sampling point: halfway along the AUTHORED
+        -- rail centerline, safely above the map ground, never inside grass.
+        local railPaths = N.ModulePaths(part)
+        local railPath = railPaths and railPaths[1]
+        local lightBase
+        if railPath and #railPath >= 2 then
+            lightBase = railPath[math.ceil(#railPath * 0.5)]
+        else
+            lightBase = part.start and V(part.start) or ent:GetPos()
+        end
+        ent:SetNW2Vector("MEXNativeLightProbe",
+            lightBase + Vector(0, 0, 74))
         ent:SetNW2Int("MEXNativeRoute", route.id or 0)
         ent:SetNW2Int("MEXNativeIndex", #new + 1)
     local ports = N.ModulePorts(part)
@@ -1472,7 +1515,7 @@ local function SpawnRoute(route, ghost)
             ent:SetNW2String("MEXNativeJunctionID", part.junction)
             ent:SetNW2Int("MEXNativeBranch", part.branch or 2)
         end
-        ent:DrawShadow(false)
+        ent:DrawShadow(true)
         new[#new + 1] = ent
     end
     return new
