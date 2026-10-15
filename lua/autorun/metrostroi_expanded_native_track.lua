@@ -42,8 +42,21 @@ function NativePiece:Initialize()
     self:SetMoveType(MOVETYPE_NONE)
     self:SetSolid(SOLID_VPHYSICS)
     local ok = self:PhysicsInitStatic(SOLID_VPHYSICS)
+    if not ok and self.MEXNativePart and N.NativeRailConvexes then
+        -- Real original MDL, collision strips reconstructed from its
+        -- measured railheads ONLY when the Workshop model has no .phy.
+        local hulls = N.NativeRailConvexes(self.MEXNativePart)
+        if hulls and #hulls > 0 then
+            ok = self:PhysicsInitMultiConvex(hulls, "metal")
+            if ok then
+                self:SetSolid(SOLID_VPHYSICS)
+                self:EnableCustomCollisions(true)
+                self.MEXNativeCollisionFallback = true
+            end
+        end
+    end
     if not ok then
-        ErrorNoHalt("[MEX Native Track] Original model has no usable .phy: " ..
+        ErrorNoHalt("[MEX Native Track] No original .phy or measured rail geometry: " ..
             self:GetModel() .. "\\n")
     end
     self:SetUseType(SIMPLE_USE)
@@ -488,6 +501,43 @@ local function GenericOriginalPart(start, yaw, model, settings)
     return part, finish, finalYaw, finalGrade
 end
 
+
+-- Collision fallback uses the selected original MDL's LOCAL rail path, not
+-- its OBB or a wide support bed. There are two narrow, separate rail strips.
+function N.NativeRailConvexes(part)
+    if not part.nativeModel then return nil end
+    local paths = part.lane == "double" and part.nativeLanePoints
+        or {part.nativePoints}
+    if not istable(paths) then return nil end
+    local hulls = {}
+    local function addRails(a, b)
+        local delta = b - a
+        local flat = Vector(delta.x, delta.y, 0)
+        if flat:LengthSqr() < 4 then return end
+        flat:Normalize()
+        local across = Vector(flat.y, -flat.x, 0)
+        for _, side in ipairs({-1, 1}) do
+            local offset = across * (side * 42.9)
+            local p, q = a + offset, b + offset
+            local width = across * 2.9
+            local hull = {}
+            for _, point in ipairs({p - width, p + width, q - width, q + width}) do
+                hull[#hull + 1] = point + Vector(0, 0, -8)
+                hull[#hull + 1] = point + Vector(0, 0, 2)
+            end
+            hulls[#hulls + 1] = hull
+        end
+    end
+    for _, path in ipairs(paths) do
+        if not istable(path) or #path < 2 then return nil end
+        local stride = math.max(1, math.ceil((#path - 1) / 24))
+        for i = 1, #path - 1, stride do
+            addRails(V(path[i]), V(path[math.min(#path, i + stride)]))
+        end
+    end
+    return #hulls > 0 and hulls or nil
+end
+
 -- Generate a strict sequence of original-size stock modules. There is no
 -- arbitrary deformation, scaling, procedural tunnel or geometry fallback.
 -- Only a model selected from the actual installed catalog can be placed.
@@ -564,6 +614,47 @@ function N.Candidate(start, yaw, aimed, settings)
     if info.kind == "junction" then
         return nil, "Original turnout/crossing needs measured 3- or 4-port junction registration."
     end
+    -- 2x = two UNCHANGED single MDLs. On a curve, Split flips the
+    -- traversal of the second authentic curve so both lines can branch.
+    if tonumber(settings.native_pair) == 1 then
+        if info.double or info.kind == "junction" then
+            return nil, "2x Single mode requires a single-track MDL."
+        end
+        local ends = settings.pair_ends
+        if not istable(ends) or #ends ~= 2 then
+            local spacing = math.Clamp(tonumber(settings.native_spacing) or 264, 180, 480)
+            ends = {
+                {pos = start - Right(yaw) * spacing * 0.5, yaw = yaw,
+                    pitch = tonumber(settings.start_grade) or tonumber(settings.grade) or 0},
+                {pos = start + Right(yaw) * spacing * 0.5, yaw = yaw,
+                    pitch = tonumber(settings.start_grade) or tonumber(settings.grade) or 0},
+            }
+        end
+        result.pairEnds = {}
+        for lane = 1, 2 do
+            local entry = ends[lane]
+            if not entry or not isvector(entry.pos) then
+                return nil, "2x rail endpoints unavailable; restart at a double rail end."
+            end
+            local reverse = tonumber(settings.native_reverse) or 0
+            if tonumber(settings.native_split) == 1 and info.kind == "curve"
+                and lane == 2 then reverse = reverse == 1 and 0 or 1 end
+            local part, exit, heading, grade = GenericOriginalPart(
+                entry.pos, entry.yaw, selected,
+                {native_reverse = reverse, start_grade = entry.pitch or 0})
+            if not part then return nil, exit end
+            part.pairLane = lane
+            result.parts[#result.parts + 1] = part
+            result.pairEnds[lane] = {pos = exit, yaw = heading, pitch = grade}
+        end
+        result.pos = (result.pairEnds[1].pos + result.pairEnds[2].pos) * 0.5
+        result.yaw = result.pairEnds[1].yaw
+        result.pitch = result.pairEnds[1].pitch
+        return result
+    end
+    if settings.pair_ends then
+        return nil, "Finish the 2x section before changing to another track mode."
+    end
     local part, finish, exitYaw, exitGrade = GenericOriginalPart(
         start, yaw, selected, settings)
     if not part then return nil, finish end
@@ -592,15 +683,23 @@ function N.ModulePorts(part)
                 if istable(samples) and #samples >= 2 then
                     local entry = part.reverse and samples[#samples] or samples[1]
                     local exit = part.reverse and samples[1] or samples[#samples]
+                    local after = part.reverse and samples[#samples - 1] or samples[2]
+                    local before = part.reverse and samples[2] or samples[#samples - 1]
+                    local entryPos = WorldRailPoint(origin, angle, entry)
+                    local exitPos = WorldRailPoint(origin, angle, exit)
+                    local afterPos = WorldRailPoint(origin, angle, after)
+                    local beforePos = WorldRailPoint(origin, angle, before)
                     ports[#ports + 1] = {
-                        pos = WorldRailPoint(origin, angle, entry),
-                        center = a, yaw = part.yaw + 180,
-                        pitch = -(part.pitch or 0), lanes = 2, start = true,
+                        pos = entryPos, center = a,
+                        yaw = HeadingBetween(afterPos, entryPos),
+                        pitch = -GradeBetween(entryPos, afterPos),
+                        lanes = 2, start = true,
                     }
                     ports[#ports + 1] = {
-                        pos = WorldRailPoint(origin, angle, exit),
-                        center = b, yaw = endYaw,
-                        pitch = part.endPitch or 0, lanes = 2, start = false,
+                        pos = exitPos, center = b,
+                        yaw = HeadingBetween(beforePos, exitPos),
+                        pitch = GradeBetween(beforePos, exitPos),
+                        lanes = 2, start = false,
                     }
                 end
             end
@@ -1484,6 +1583,7 @@ local function SpawnRoute(route, ghost)
             return nil, "Failed to create original model prop."
         end
         ent:SetModel(part.model)
+        ent.MEXNativePart = part
         ent:SetPos(V(part.pos))
         ent:SetAngles(Angle(part.ang[1], part.ang[2], part.ang[3]))
         ent:Spawn()
@@ -1492,7 +1592,7 @@ local function SpawnRoute(route, ghost)
         if not IsValid(phys) then
             ent:Remove()
             for _, prev in ipairs(new) do if IsValid(prev) then prev:Remove() end end
-            return nil, "Model has no usable original .phy collision: " .. part.model
+            return nil, "Original MDL has no usable .phy and its rails could not be reconstructed: " .. part.model
         end
         phys:EnableMotion(false)
         phys:Sleep()
