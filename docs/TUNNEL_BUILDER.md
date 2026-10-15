@@ -172,6 +172,50 @@ mex_native_register_junction <id> <switch|crossing> <model.mdl> "<x,y,z,yaw;x,y,
 Junction configurations persist under
 `data/metrostroi_expanded/native_junctions.json`.
 
+## Natural track and tunnel lighting
+
+Committed Metrostroi / Track Pack original MDLs use **normal Source engine
+studio lighting and entity shadows**. The old per-model fixed fullbright
+lighting (`render.SuppressEngineLighting(true)` /
+`render.ResetModelLighting(0.85, ...)`) has been removed: tracks should not
+glow unnaturally at night or inside a tunnel.
+
+- `DrawShadow(true)` enables Source entity shadows for solid placed rail
+  and tunnel pieces. Transparent, unsaved grey ghost models **do not** cast
+  permanent shadows.
+- The lighting origin for both committed models and ghost previews is
+  sampled roughly **74 SU above the actual running-rail centerline**,
+  instead of inside a flatgrass/BSP floor or at an arbitrary MDL pivot.
+  Underlying ground therefore does not spuriously block the model's
+  lighting probe.
+- A lightweight, cached upward visibility trace detects solid ceilings,
+  terrain overhead and roof-bearing original tunnel prefabs. Covered
+  pieces are darkened, including rails underneath a separate tunnel
+  roof. The trace starts well above rail level; ground *beneath* the rail
+  cannot block it. Actual map and dynamic lights remain handled by
+  the Source renderer instead of a manually forced white lightbox.
+- Cover tests run about once every 1.35–2 seconds per visible model;
+  there are no extra spotlights, custom geometry or per-frame traces.
+  The legacy `mex_native_outdoor_brightness` fill slider is obsolete
+  and no longer changes track illumination.
+
+If the map is already loaded when Lua code updates, use the **server/admin**
+command below to refresh shadows and the rail-lighting probes for existing
+modules without deleting or rebuilding them:
+
+```text
+mex_native_refresh_lighting
+```
+
+**Engine limitation:** GMod cannot automatically rebake a map's BSP
+lightmaps when a tunnel is spawned. Engine dynamic entity shadows and
+localized model darkness are supported, but fully accurate cast shadows
+on every face of the underlying map terrain require baking lighting
+with Hammer or a separate rendering/shadow system. Whether Source
+projects shadows for very large MDLs depends on the map and client
+shadow configuration. This change does not claim physically accurate
+GI or lightmap regeneration.
+
 ## Persistence & migration
 
 Completed native routes are stored by map in
