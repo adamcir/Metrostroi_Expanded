@@ -60,7 +60,10 @@ end
 -- modest occlusion for *runtime* tunnel roofs, whose shadows are not baked
 -- into the underlying BSP lightmaps. Floor/terrain BELOW the start point
 -- is deliberately excluded; no fake ground shadow meshes are generated.
-local ROOF_TRACE_HEIGHT = 46
+-- The engine lighting probe is 74 SU above the track. Check for a
+-- ceiling from ~56 SU above the railhead so LOW roofs are not missed,
+-- while remaining safely clear of the ground and sleeper collision.
+local ROOF_TRACE_HEIGHT = -18
 local ROOF_TRACE_RANGE = 2048
 local function TrackSkyOcclusion(ent, probe)
     local sample = probe + Vector(0, 0, ROOF_TRACE_HEIGHT)
