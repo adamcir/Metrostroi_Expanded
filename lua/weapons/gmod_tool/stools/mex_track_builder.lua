@@ -13,6 +13,9 @@ TOOL.ClientConVar = {
     native_reverse = "0",
     native_branch = "2",
     native_grade = "0",
+    native_pair = "0",
+    native_split = "0",
+    native_spacing = "264",
 }
 
 if CLIENT then
@@ -34,6 +37,9 @@ function TOOL:LeftClick(trace)
         native_reverse = self:GetClientNumber("native_reverse", 0),
         branch = self:GetClientNumber("native_branch", 2),
         grade = self:GetClientNumber("native_grade", 0),
+        native_pair = self:GetClientNumber("native_pair", 0),
+        native_split = self:GetClientNumber("native_split", 0),
+        native_spacing = self:GetClientNumber("native_spacing", 264),
     })
 end
 
@@ -298,6 +304,9 @@ if CLIENT then
             if not IsValid(frame) then return end
             selected = info.model
             RunConsoleCommand("mex_track_builder_native_model", selected)
+            if info.double or info.kind == "junction" then
+                RunConsoleCommand("mex_track_builder_native_pair", "0")
+            end
             name:SetText(info.name or "Original track")
             modelPath:SetText(info.model)
             attributes:SetText((info.source or "Original") .. "   •   "
@@ -305,9 +314,12 @@ if CLIENT then
                     string.upper(info.kind or "track")))
             junctionPort:SetVisible(info.kind == "junction")
             details:InvalidateLayout(true)
-            hint:SetText(info.double and
-                "Double-track: two real rail paths and four connectors. Drag to rotate; wheel to zoom."
-                or "Actual model geometry. Drag to rotate; wheel to zoom. Grade is set when starting a free route.")
+            local errorText = MEXNativeTrack and
+                MEXNativeTrack.CatalogErrors and MEXNativeTrack.CatalogErrors[selected]
+            hint:SetText(errorText and ("Rail-end calibration: " .. errorText)
+                or (info.double and
+                    "Double model: 4 measured ports. Select 2x singles to continue both lanes."
+                    or "Actual original MDL. Single pieces can snap to either lane of a double. Scroll to zoom."))
             SetupModelView(preview, selected, true)
             local center = preview:GetLookAt() or vector_origin
             originCam = preview:GetCamPos() - center
@@ -456,9 +468,16 @@ if CLIENT then
         panel:TextEntry("Selected model", "mex_track_builder_native_model")
         panel:CheckBox("Reverse rail direction", "mex_track_builder_native_reverse")
         panel:NumSlider("Track grade (+up / -down), degrees",
-            "mex_track_builder_native_grade", -12, 12, 1)
-        panel:Help("Grade is applied to a new free route; when snapping to an existing rail end, the end's actual grade is inherited.")
-        panel:Help("Double-track MDLs use both real rail paths automatically.")
+            "mex_track_builder_native_grade", -20, 20, 1)
+        panel:CheckBox("2x single rails (connect both ends of a double track)",
+            "mex_track_builder_native_pair")
+        panel:CheckBox("Split paired curves outward (left + right)",
+            "mex_track_builder_native_split")
+        panel:NumSlider("2x spacing when starting a free route (SU)",
+            "mex_track_builder_native_spacing", 180, 480, 0)
+        panel:Help("Up/down: set positive or negative grade on a new route. Existing rail-end pitch is inherited.")
+        panel:Help("Single MDLs connect to EACH measured double-track lane independently. 2x places two original single-track MDLs; Split turns the second curved MDL in reverse.")
+        panel:Help("Finish a 2x section before switching back to a single or double MDL.")
         panel:Help("LMB: start/place   RMB: finish   R: remove   Shift+R: undo")
         panel:CheckBox("Show measured rail path",
             "mex_native_show_measured_path")
