@@ -399,7 +399,7 @@ local function GenericProfile(model)
     local measured, err = N.AnalyzeNativeModel(model)
     local original = STOCK_CURVE_PORTS[model]
     if measured and original
-        and measured.method ~= "registered original rail centerline" then
+        and not string.StartWith(tostring(measured.method or ""), "registered original") then
         local expectedX = original.entryX or 0
         local expectedY = original.entryY or 0
         -- Original straight-line sleeper/third-rail meshes must never be
@@ -1925,7 +1925,8 @@ local function UpdateConstructionEndpoint(state)
         if state.pairEnds then
             state.pos = (state.pairEnds[1].pos + state.pairEnds[2].pos) * 0.5
         end
-        state.yaw = last.junction and endpoint and endpoint.yaw
+        state.yaw = state.pairEnds and state.pairEnds[1].yaw
+            or (last.junction and endpoint and endpoint.yaw)
             or last.endYaw or (last.yaw - (last.turn or 0) * (last.sweep or 0))
         state.pitch = last.endPitch or 0
     else
