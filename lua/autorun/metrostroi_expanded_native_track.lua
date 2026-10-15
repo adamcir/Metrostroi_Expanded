@@ -2129,6 +2129,49 @@ hook.Add("PostCleanupMap", "MEXNativeTrackRespawnAfterCleanup", function()
         end
     end)
 end)
+-- Update models already spawned before a Lua auto-refresh without moving,
+-- respawning or deleting any track. All changes affect rendering only.
+local function RefreshNativeLighting()
+    local refreshed = 0
+    for id, props in pairs(N.Props or {}) do
+        local route = N.Routes[id]
+        for index, ent in ipairs(props) do
+            if IsValid(ent) then
+                ent:DrawShadow(true)
+                local part = route and route.parts[index]
+                if part then
+                    local paths = N.ModulePaths(part)
+                    local points = paths and paths[1]
+                    local point = points and points[math.ceil(#points * 0.5)]
+                        or (part.start and V(part.start) or ent:GetPos())
+                    ent:SetNW2Vector("MEXNativeLightProbe",
+                        point + Vector(0, 0, 74))
+                    local lowerModel = string.lower(part.model or "")
+                    ent:SetNW2Bool("MEXNativeSurface",
+                        not lowerModel:find("tunnel", 1, true)
+                        and not lowerModel:find("station", 1, true)
+                        and not lowerModel:find("arch", 1, true))
+                end
+                refreshed = refreshed + 1
+            end
+        end
+    end
+    return refreshed
+end
+hook.Add("OnReloaded", "MEXNativeTrackRestoreLightingOnReload", function()
+    timer.Simple(0, RefreshNativeLighting)
+end)
+concommand.Add("mex_native_refresh_lighting", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local amount = RefreshNativeLighting()
+    print("[MEX Native Track] Restored normal model lighting and engine shadows for " ..
+        amount .. " existing original MDL track modules.")
+    if IsValid(ply) then
+        ply:ChatPrint("[MEX Native Track] Restored lighting/shadows for " ..
+            amount .. " original track modules.")
+    end
+end)
+
 hook.Add("PlayerDisconnected", "MEXNativeTrackLeave", function(ply)
     local state = N.Active[ply]
     ClearPreview(state)
