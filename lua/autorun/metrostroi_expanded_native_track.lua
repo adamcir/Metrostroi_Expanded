@@ -84,7 +84,13 @@ local function TrackSkyOcclusion(ent, probe)
             mask = mask,
             filter = filter,
         })
-        if not hit or hit.StartSolid then return 1 end
+        if not hit then return 1 end
+        if hit.StartSolid then
+            -- Both probes are inside a solid above the rail. This is
+            -- genuinely buried/covered track, NOT a sunlit ground-level
+            -- section. Treat it as dark rather than accidentally fullbright.
+            return excludeSelf and 0.40 or 0.64
+        end
     end
     if not hit.Hit or hit.HitSky then return 1 end
     -- Stronger under-roof rail dimming, gentler on a complete tunnel MDL
@@ -1481,9 +1487,13 @@ local function SpawnRoute(route, ghost)
         phys:EnableMotion(false)
         phys:Sleep()
         ent:SetNW2Bool("MEXNativeModule", true)
-        local surfaceModel = string.find(
-            string.lower(part.model), "/railroad", 1, true) ~= nil
-        ent:SetNW2Bool("MEXNativeSurface", surfaceModel)
+        local lowerModel = string.lower(part.model)
+        local enclosedModel = lowerModel:find("tunnel", 1, true) ~= nil
+            or lowerModel:find("station", 1, true) ~= nil
+            or lowerModel:find("arch", 1, true) ~= nil
+        -- Separate/above-ground rails should never be mistaken for a
+        -- tunnel roof, even if their model is in a non-Metrostroi folder.
+        ent:SetNW2Bool("MEXNativeSurface", not enclosedModel)
         -- Real ambient-light sampling point: halfway along the AUTHORED
         -- rail centerline, safely above the map ground, never inside grass.
         local railPaths = N.ModulePaths(part)
