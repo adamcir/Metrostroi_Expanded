@@ -26,6 +26,22 @@ and junction models. Real double-track MDLs require two separately measured
 running-rail centerlines and all four rail-end ports. An uncertain
 double-track module cannot fall back to an invented rail separation.
 
+### Two single-track modules after a double-track tunnel
+
+Enable **2x single rails** in the Track Builder panel and select a mounted
+**single-track** MDL. Aim at either of the two *free* end connectors of a
+double-track model. MEX reads **both** real physical double end ports, then
+places two ordinary, unscaled single-track originals — one on each lane.
+Both sides remain separate endpoints and may continue through additional
+2x pieces. Turn on **Split paired curves outward** with an original curved
+single-track MDL to send the two tracks in opposing directions using its
+forward and reverse geometry. No bending or scaling of the MDLs is done.
+
+You can also start paired rails on empty ground with the **2x spacing**
+slider (default 264 Source units). When paired construction is finished,
+save with RMB and continue either single lane from its own open port.
+**Shift+R** removes both modules of the last paired placement as one step.
+
 ### Uphill and downhill construction
 
 The tool offers **Track grade (+up / -down), degrees** (default 0).
@@ -36,9 +52,10 @@ Authentic ramp/gradient MDLs keep their measured ascending/descending
 Z profile and endpoint tangents.
 
 A flat model joined to a steeply tilted piece may form an abrupt vertical
-kink. Use original graded transition sections for realistic and driveable
-slope changes. Wheel/physics fitting of pitched models still needs
-in-game validation.
+kink. Use original **ramp / gradient / ascend / descend / slope** MDLs for
+smooth and driveable elevation transitions. The end pitch of the original
+model becomes the next module's start pitch. Exact mesh and physics fitting
+of third-party pitched models still needs in-game validation.
 
 ## Construction controls
 
@@ -87,7 +104,12 @@ to protect GMod from extremely large unrelated asset trees.
 Catalog entries have intentionally **not** been filtered to claim every
 MDL is a working rail. Train bodies, signs, platforms or decoration models
 are visible as original catalog assets. Only genuine rails with measured
-endpoints and compatible physics are valid as Track Builder routes.
+endpoints are valid as Track Builder routes. Models with their own .phy
+use that original collision. When a valid two-ended MDL lacks its compiled
+.phy, MEX can build narrow local rail-strip collisions from its measured
+railheads; it never uses a massive rectangular collision around a tunnel.
+A model without either usable native PHY or a reliable rail profile is
+rejected with a specific error.
 Unavailable or unmeasurable track geometry is rejected with a message
 instead of drawing a fake replacement.
 
@@ -139,8 +161,18 @@ mex_native_register_model_path models/my_custom_track_pack/example.mdl "0,0,5;0,
 
 Those per-model overrides persist in
 `data/metrostroi_expanded/native_model_ports.json`. Curved models need
-more than two points. If a model has multiple separate tracks, the
-current single-centerline analyzer **cannot safely infer** both lanes.
+more than two points. For unusual **double-track** models whose textures prevent automatic
+railhead detection, register **two measured original rail centerlines**,
+with the SAME number of stations in each lane:
+
+```text
+mex_native_register_double_model_path models/my_pack/double_track.mdl "0,0,0;0,256,0|264,0,0;264,256,0"
+```
+
+The numbers above demonstrate the file format only; **replace them with
+measured local coordinates from your actual MDL**. MEX verifies the two
+lanes' separation and tracks the physical end faces independently. After
+registering an override, refresh the model catalog for updated metadata.
 
 For compatibility, historical **model-specific** measurements for a few
 classic Metrostroi `turn1` MDLs are retained when engine mesh access is
