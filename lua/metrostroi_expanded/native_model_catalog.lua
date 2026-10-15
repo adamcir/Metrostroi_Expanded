@@ -6,7 +6,7 @@ local N = MEXNativeTrack
 N.ModelCatalog = N.ModelCatalog or {}
 -- Reset old negative/failed calibration cache on Lua refresh, since older
 -- fixed-step sampling rejected straight original MDLs with only end vertices.
-local ANALYZER_VERSION = 5
+local ANALYZER_VERSION = 6
 if N.MeshProfileCacheVersion ~= ANALYZER_VERSION then
     N.MeshProfiles = {}
     N.MeshProfileCacheVersion = ANALYZER_VERSION
@@ -23,9 +23,14 @@ local DEFAULT_ROOTS = {
     "models/metrostroi",
     "models/metrostroi_tracks",
     "models/metrostroi_trackpack",
+    "models/metrostroi_tracks_pack",
+    "models/metrotracks",
+    "models/metro_track",
     "models/trackpack",
     "models/track_pack",
     "models/metrostroi_tunnels",
+    "models/railroads",
+    "models/railway",
     "models/nekrasovskaya",
     "models/kalininskaya",
     "models/mn_r",
@@ -40,6 +45,8 @@ local function IsPackDirectory(name)
         or s:find("metrotrack", 1, true) ~= nil
         or s:find("metro_track", 1, true) ~= nil
         or s:find("railway", 1, true) ~= nil
+        or s:find("railroad", 1, true) ~= nil
+        or s:find("metrotracks", 1, true) ~= nil
         or s:find("tracks", 1, true) ~= nil
         or s:find("nekrasovskaya", 1, true) ~= nil
         or s:find("kalininskaya", 1, true) ~= nil
@@ -49,16 +56,24 @@ local function Kind(path)
     local name = string.lower(string.GetFileFromFilename(path or ""))
     if name:find("switch", 1, true) or name:find("strel", 1, true)
         or name:find("cross", 1, true) or name:find("syezd", 1, true)
-        or name:find("junction", 1, true) then return "junction" end
+        or name:find("junction", 1, true)
+        or name:find("turnout", 1, true) or name:find("crossover", 1, true)
+        or name:find("branch", 1, true) or name:find("fork", 1, true)
+        or name:find("strelka", 1, true) then return "junction" end
     if name:find("turn", 1, true) or name:find("curve", 1, true)
         or name:find("povorot", 1, true)
-        or name:find("radius", 1, true) then return "curve" end
+        or name:find("radius", 1, true)
+        or name:find("bend", 1, true) or name:find("arc", 1, true)
+        then return "curve" end
     if name:find("ramp", 1, true) or name:find("slope", 1, true)
         or name:find("uphill", 1, true) or name:find("incline", 1, true)
         or name:find("grade", 1, true)
         or name:find("_up", 1, true)
         or name:find("_down", 1, true)
-        or name:find("podem", 1, true) then return "slope" end
+        or name:find("podem", 1, true)
+        or name:find("ascend", 1, true) or name:find("descend", 1, true)
+        or name:find("gradient", 1, true) or name:find("descent", 1, true)
+        then return "slope" end
     if name:find("tunnel", 1, true) or name:find("railroad", 1, true)
         or name:find("straight", 1, true) or name:find("track", 1, true)
         or name:find("puti", 1, true) then return "straight" end
@@ -87,6 +102,7 @@ local function IsTrackModel(path)
         or directory:find("/railroads/", 1, true) ~= nil
         or directory:find("/tunnels/", 1, true) ~= nil
         or directory:find("/rails/", 1, true) ~= nil
+        or directory:find("/railway/", 1, true) ~= nil
 end
 
 function N.ScanModelCatalog()
@@ -138,7 +154,10 @@ function N.ScanModelCatalog()
                             name = name:gsub("%.mdl$", ""),
                             double = lowerName:find("double", 1, true) ~= nil
                                 or lowerName:find("2track", 1, true) ~= nil
-                                or lowerName:find("2way", 1, true) ~= nil,
+                                or lowerName:find("2way", 1, true) ~= nil
+                                or lowerName:find("2rail", 1, true) ~= nil
+                                or lowerName:find("twin", 1, true) ~= nil
+                                or lowerName:find("parallel", 1, true) ~= nil,
                         }
                     end
                 end
@@ -357,8 +376,10 @@ local function ModelRailProfile(model, allVertices, axis, materialScore)
     end
 
     local first, last = points[1], points[#points]
-    local firstNext = points[math.min(3, #points)]
-    local lastPrev = points[math.max(1, #points - 2)]
+    -- Tangents must be measured AT the end faces. Looking two stations
+    -- ahead smoothed off curved turn1 transitions and misaligned modules.
+    local firstNext = points[2]
+    local lastPrev = points[#points - 1]
     local entryYaw = PlanarYaw(first, firstNext)
     local exitYaw = PlanarYaw(lastPrev, last)
     local delta = math.AngleDifference(exitYaw, entryYaw)
@@ -501,8 +522,8 @@ local function DoubleModelProfile(model, vertices, axis)
         return nil
     end
     local a, b = centers[1], centers[#centers]
-    local entryYaw = PlanarYaw(a, centers[math.min(3, #centers)])
-    local exitYaw = PlanarYaw(centers[math.max(1, #centers - 2)], b)
+    local entryYaw = PlanarYaw(a, centers[2])
+    local exitYaw = PlanarYaw(centers[#centers - 1], b)
     local delta = math.AngleDifference(exitYaw, entryYaw)
     local length = 0
     for i = 2, #centers do length = length + Dist2(centers[i - 1], centers[i]) end
@@ -574,6 +595,9 @@ local function ExtractRailProfile(model)
     local wantsDouble = mdlName:find("double", 1, true)
         or mdlName:find("2track", 1, true)
         or mdlName:find("2way", 1, true)
+        or mdlName:find("2rail", 1, true)
+        or mdlName:find("twin", 1, true)
+        or mdlName:find("parallel", 1, true)
     if wantsDouble then
         local bestDual, dualScore
         local testPools = {pools[3], pools[2], pools[1]}
