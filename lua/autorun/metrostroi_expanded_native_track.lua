@@ -664,6 +664,11 @@ function N.Candidate(start, yaw, aimed, settings)
     local part, finish, exitYaw, exitGrade = GenericOriginalPart(
         start, yaw, selected, settings)
     if not part then return nil, finish end
+    if part.lane == "double" and settings.double_ends then
+        local matched, reason = N.FitDoubleEntry(part, settings.double_ends)
+        if not matched then return nil, reason end
+        finish, exitYaw = V(part.finish), part.endYaw
+    end
     result.parts[1] = part
     result.pos, result.yaw, result.pitch = finish, exitYaw, exitGrade
     return result
@@ -778,6 +783,65 @@ function N.PairFromPart(part)
         ends[1], ends[2] = ends[2], ends[1]
     end
     return ends
+end
+
+
+-- Fit the TWO native seam positions to the two already existing double
+-- endpoints using one rigid transform. This never stretches or bends an
+-- MDL. If the original lane spacing/tangents are incompatible, refuse
+-- construction rather than leaving one of the two rails disconnected.
+function N.FitDoubleEntry(part, ends)
+    if not istable(ends) or #ends ~= 2 then return true end
+    local ports = N.ModulePorts(part)
+    if #ports ~= 4 then return false, "Original double model lacks four measured ports." end
+    local entries = {ports[1], ports[2]}
+    local right = Right(part.yaw)
+    if entries[1].pos:Dot(right) > entries[2].pos:Dot(right) then
+        entries[1], entries[2] = entries[2], entries[1]
+    end
+    local desired = {
+        ends[1].pos + RAIL_MARKER_OFFSET,
+        ends[2].pos + RAIL_MARKER_OFFSET,
+    }
+    local oldGap = entries[1].pos:Distance(entries[2].pos)
+    local newGap = desired[1]:Distance(desired[2])
+    if math.abs(oldGap - newGap) > 4 then
+        return false, string.format("Double seam widths differ by %.1f SU; choose compatible measured MDLs.", math.abs(oldGap-newGap))
+    end
+    local oldHeading = HeadingBetween(entries[1].pos, entries[2].pos)
+    local newHeading = HeadingBetween(desired[1], desired[2])
+    local change = math.AngleDifference(newHeading, oldHeading)
+    if math.abs(change) > 5 then
+        return false, "Double seam angle incompatible with the previous two rail ends."
+    end
+    local oldOrigin = V(part.pos)
+    local changeAngle = Angle(0, change, 0)
+    local function turn(vec) return RotateLocal(vec, changeAngle) end
+    local shift1 = desired[1] - turn(entries[1].pos - oldOrigin)
+    local shift2 = desired[2] - turn(entries[2].pos - oldOrigin)
+    local newOrigin = (shift1 + shift2) * 0.5
+    local function moved(pos)
+        return newOrigin + turn(V(pos) - oldOrigin)
+    end
+    part.start, part.finish = P(moved(part.start)), P(moved(part.finish))
+    part.pos = P(newOrigin)
+    part.ang[2] = part.ang[2] + change
+    part.yaw = part.yaw + change
+    part.endYaw = part.endYaw + change
+    local fitted = N.ModulePorts(part)
+    local ordered = {fitted[1], fitted[2]}
+    if ordered[1].pos:Dot(Right(part.yaw)) >
+        ordered[2].pos:Dot(Right(part.yaw)) then
+        ordered[1], ordered[2] = ordered[2], ordered[1]
+    end
+    for i = 1, 2 do
+        if ordered[i].pos:Distance(desired[i]) > 3
+            or math.abs(math.AngleDifference(ordered[i].yaw, ends[i].yaw)) > 5
+            or math.abs((ordered[i].pitch or 0) - (ends[i].pitch or 0)) > 4 then
+            return false, "Measured double rails do not meet both seams continuously; select a compatible module."
+        end
+    end
+    return true
 end
 
 function N.ModulePaths(part)
@@ -1239,6 +1303,9 @@ if CLIENT then
             or (anchor and anchor.yaw or ply:EyeAngles().y)
         if not active and anchor then
             settings.start_grade = anchor.pitch or 0
+            if info and info.double then
+                settings.double_ends = anchor.pair_ends
+            end
         end
         local aimedNative = IsValid(tr.Entity)
             and tr.Entity:GetNW2Bool("MEXNativeModule", false)
@@ -1897,7 +1964,10 @@ function N.Add(ply, aim, settings)
             or math.Clamp(tonumber(settings.grade) or 0, -20, 20)
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
             startPitch = grade, pos = pos, yaw = yaw, pitch = grade,
-            parts = {}, preview = {}, pairEnds = pairEnds}
+            parts = {}, preview = {}, pairEnds = pairEnds,
+            doubleEnds = connector and settings.tracks == 2
+                and tonumber(settings.native_pair) ~= 1
+                and connector.pair_ends or nil}
         SyncState(ply)
         Notify(ply, connector and "Connected to an original model endpoint." or "Start node set. Aim ahead to preview an original model.")
         return true
