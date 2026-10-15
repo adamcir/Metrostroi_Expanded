@@ -915,15 +915,22 @@ if CLIENT then
         ghost:SetPos(V(part.pos))
         ghost:SetAngles(Angle(part.ang[1], part.ang[2], part.ang[3]))
         ghost:SetColor(warn and Color(220, 80, 80, 125) or grey)
+        local start = part.start and V(part.start) or V(part.pos)
+        local finish = part.finish and V(part.finish) or start
+        local sample = (start + finish) * 0.5 + Vector(0, 0, 74)
+        local r, g, b = render.GetColorModulation()
+        render.SetLightingOrigin(sample)
         render.SetBlend(0.57)
-        render.SetColorModulation(warn and 1 or 0.95,
-            warn and 0.45 or 0.95, warn and 0.45 or 0.95)
-        -- Preview is transparent, but uses the SAME normal scene
-        -- lighting as a committed model, not a glowing fullbright overlay.
+        render.SetColorModulation(r * (warn and 1 or 0.95),
+            g * (warn and 0.45 or 0.95),
+            b * (warn and 0.45 or 0.95))
+        -- Preview is translucent, but shares ordinary Source lighting
+        -- with a committed model. No artificial fullbright illumination.
         ghost:SetupBones()
         ghost:DrawModel()
         render.SetBlend(1)
-        render.SetColorModulation(1, 1, 1)
+        render.SetColorModulation(r, g, b)
+        render.SetLightingOrigin(vector_origin)
     end
     local nodes, nextNodesRefresh = {}, 0
     local function CollectVisibleEndpoints()
