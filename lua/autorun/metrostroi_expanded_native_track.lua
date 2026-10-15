@@ -955,6 +955,48 @@ function N.PortOccupied(owner, marker)
     return false
 end
 
+
+-- The double MDL publishes four MEASURED endpoints: start L/R and end L/R.
+-- Single rails join one lane; paired singles use both free ports at one end.
+function N.PairedAnchors(ent, index)
+    if not IsValid(ent) or ent:GetNW2Int("MEXNativePorts", 0) ~= 4
+        or ent:GetNW2String("MEXNativeJunctionID", "") ~= "" then return nil end
+    local first = index <= 2 and 1 or 3
+    local pair = {}
+    for i = first, first + 1 do
+        local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
+        if point == vector_origin or N.PortOccupied(ent, point) then return nil end
+        pair[#pair + 1] = {
+            pos = point - RAIL_MARKER_OFFSET,
+            yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
+            pitch = ent:GetNW2Float("MEXNativePortPitch" .. i, 0),
+        }
+    end
+    local right = Right(pair[1].yaw)
+    if pair[1].pos:Dot(right) > pair[2].pos:Dot(right) then
+        pair[1], pair[2] = pair[2], pair[1]
+    end
+    return pair
+end
+
+function N.AdaptAnchor(node, wanted)
+    if not node then return nil end
+    local anchor = table.Copy(node)
+    if anchor.lanes == 2 then
+        if wanted == 1 then
+            -- Never attach a single rail to the fictitious tunnel midpoint.
+            anchor.center = anchor.pos - RAIL_MARKER_OFFSET
+            anchor.lanes = 1
+        else
+            anchor.pair_ends = N.PairedAnchors(anchor.ent, anchor.index)
+            if not anchor.pair_ends then return nil end
+        end
+    elseif wanted == 2 then
+        return nil
+    end
+    return anchor
+end
+
 function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
     local ent = trace and trace.Entity
     if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
@@ -963,7 +1005,7 @@ function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
     local wanted = tonumber(tracks) == 2 and 2 or 1
     local num = ent:GetNW2Int("MEXNativePorts", 0)
     local double = num == 4 and ent:GetNW2String("MEXNativeJunctionID", "") == ""
-    if (double and 2 or 1) ~= wanted then return nil end
+    if wanted == 2 and not double then return nil end
     local best, score = nil, math.huge
     for i = 1, num do
         local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
@@ -997,7 +1039,7 @@ function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
             end
         end
     end
-    return best
+    return N.AdaptAnchor(best, wanted)
 end
 
 
@@ -1055,6 +1097,7 @@ if CLIENT then
                             lanes = double and 2 or 1,
                             yaw = ent:GetNW2Float("MEXNativePortYaw" .. j, 0),
                             pitch = ent:GetNW2Float("MEXNativePortPitch" .. j, 0),
+                            ent = ent, index = j,
                             start = ent:GetNW2Bool("MEXNativePortStart" .. j,
                                 double and j <= 2 or (not double and j == 1))
                         }
@@ -1088,7 +1131,7 @@ if CLIENT then
         local byHit, hitError = nil, 72 * 72
         local required = tonumber(tracks) == 2 and 2 or 1
         for _, node in ipairs(CollectVisibleEndpoints()) do
-            if node.lanes == required then
+            if node.lanes == required or (node.lanes == 2 and required == 1) then
                 local distance = aim:DistToSqr(node.pos)
                 if distance < hitError then
                     byHit, hitError = node, distance
@@ -1102,7 +1145,7 @@ if CLIENT then
                 end
             end
         end
-        return byRay or byHit
+        return N.AdaptAnchor(byRay or byHit, required)
     end
 
     local function Tool()
@@ -1129,10 +1172,24 @@ if CLIENT then
             native_reverse = tool:GetClientNumber("native_reverse", 0),
             branch = tool:GetClientNumber("native_branch", 2),
             grade = tool:GetClientNumber("native_grade", 0),
-            tracks = info and info.double and 2 or 1,
+            native_pair = tool:GetClientNumber("native_pair", 0),
+            native_split = tool:GetClientNumber("native_split", 0),
+            native_spacing = tool:GetClientNumber("native_spacing", 264),
+            tracks = ((info and info.double) or
+                tool:GetClientNumber("native_pair", 0) == 1) and 2 or 1,
             start_grade = active
                 and ply:GetNW2Float("MEXNativePitch", 0) or nil,
         }
+        if active and ply:GetNW2Bool("MEXNativePairActive", false) then
+            settings.pair_ends = {}
+            for i = 1, 2 do
+                settings.pair_ends[i] = {
+                    pos = ply:GetNW2Vector("MEXNativePairPos" .. i, vector_origin),
+                    yaw = ply:GetNW2Float("MEXNativePairYaw" .. i, 0),
+                    pitch = ply:GetNW2Float("MEXNativePairPitch" .. i, 0),
+                }
+            end
+        end
         local anchor = nil
         if not active then
             anchor = N.PortFromAimedEntity(tr, settings.tracks,
@@ -1519,17 +1576,26 @@ local function SyncState(ply)
     ply:SetNW2Vector("MEXNativeEnd", state and state.pos or vector_origin)
     ply:SetNW2Float("MEXNativeYaw", state and state.yaw or 0)
     ply:SetNW2Float("MEXNativePitch", state and state.pitch or 0)
+    local pair = state and state.pairEnds
+    ply:SetNW2Bool("MEXNativePairActive", pair ~= nil)
+    for i = 1, 2 do
+        local node = pair and pair[i]
+        ply:SetNW2Vector("MEXNativePairPos" .. i, node and node.pos or vector_origin)
+        ply:SetNW2Float("MEXNativePairYaw" .. i, node and node.yaw or 0)
+        ply:SetNW2Float("MEXNativePairPitch" .. i, node and node.pitch or 0)
+    end
 end
 local function CollectPorts()
     local nodes, count = {}, {}
     for _, route in ipairs(N.Routes) do
-        for _, part in ipairs(route.parts or {}) do
-            for _, port in ipairs(N.ModulePorts(part)) do
+        for partIndex, part in ipairs(route.parts or {}) do
+            for portIndex, port in ipairs(N.ModulePorts(part)) do
+                local entity = N.Props[route.id] and N.Props[route.id][partIndex]
                 local key = PortKey(port.pos)
                 count[key] = (count[key] or 0) + 1
                 nodes[#nodes + 1] = {pos = port.pos, center = port.center,
                     yaw = port.yaw, pitch = port.pitch, lanes = port.lanes,
-                    key = key}
+                    ent = entity, index = portIndex, key = key}
             end
         end
     end
@@ -1555,7 +1621,8 @@ function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
             end
         end
         if not occupied
-            and (not tracks or node.lanes == (tonumber(tracks) == 2 and 2 or 1)) then
+            and (not tracks or node.lanes == (tonumber(tracks) == 2 and 2 or 1)
+                or (tonumber(tracks) ~= 2 and node.lanes == 2)) then
             local d = pos:DistToSqr(node.pos)
             if d < bestDist then best, bestDist = node, d end
             if isvector(eye) and isvector(aimDir) then
@@ -1567,7 +1634,7 @@ function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
             end
         end
     end
-    return rayBest or best
+    return N.AdaptAnchor(rayBest or best, tonumber(tracks) == 2 and 2 or 1)
 end
 
 local function SpawnRoute(route, ghost)
@@ -1760,7 +1827,8 @@ function N.Add(ply, aim, settings)
         Notify(ply, "Selected model is not mounted. Rescan your original model catalog.")
         return false
     end
-    settings.tracks = N.ModelCatalog[selected].double and 2 or 1
+    settings.tracks = (N.ModelCatalog[selected].double
+        or tonumber(settings.native_pair) == 1) and 2 or 1
     local state = N.Active[ply]
     if not state then
         local tr = ply:GetEyeTrace()
@@ -1778,21 +1846,28 @@ function N.Add(ply, aim, settings)
         end
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
+        local pairEnds = tonumber(settings.native_pair) == 1
+            and connector and connector.pair_ends or nil
+        if pairEnds then
+            pos = (pairEnds[1].pos + pairEnds[2].pos) * 0.5
+        end
         local grade = connector and (connector.pitch or 0)
             or math.Clamp(tonumber(settings.grade) or 0, -20, 20)
         N.Active[ply] = {owner = ply, start = pos, startYaw = yaw,
             startPitch = grade, pos = pos, yaw = yaw, pitch = grade,
-            parts = {}, preview = {}}
+            parts = {}, preview = {}, pairEnds = pairEnds}
         SyncState(ply)
         Notify(ply, connector and "Connected to an original model endpoint." or "Start node set. Aim ahead to preview an original model.")
         return true
     end
     settings.start_grade = state.pitch or 0
+    settings.pair_ends = state.pairEnds
     local candidate, err = N.Candidate(state.pos, state.yaw, aim, settings)
     if not candidate then Notify(ply, err); return false end
     for _, part in ipairs(candidate.parts) do state.parts[#state.parts + 1] = part end
     state.pos, state.yaw = candidate.pos, candidate.yaw
     state.pitch = candidate.pitch or state.pitch or 0
+    state.pairEnds = candidate.pairEnds
     RefreshPreview(state)
     SyncState(ply)
     return true
@@ -1830,11 +1905,26 @@ end
 -- remove the modules after it, so a temporary route may contain a gap.
 local function UpdateConstructionEndpoint(state)
     local last = state.parts[#state.parts]
+    local previous = state.parts[#state.parts - 1]
+    state.pairEnds = nil
+    if last and previous and last.pairLane == 2 and previous.pairLane == 1 then
+        local firstPort = N.ModulePorts(previous)[2]
+        local secondPort = N.ModulePorts(last)[2]
+        if firstPort and secondPort then
+            state.pairEnds = {
+                {pos = firstPort.center, yaw = firstPort.yaw, pitch = firstPort.pitch},
+                {pos = secondPort.center, yaw = secondPort.yaw, pitch = secondPort.pitch},
+            }
+        end
+    end
     if last then
         local ports = N.ModulePorts(last)
         local endpoint = last.junction and ports[last.branch or 2]
             or ports[last.lane == "double" and 3 or 2]
         state.pos = endpoint and (endpoint.center or endpoint.pos) or state.start
+        if state.pairEnds then
+            state.pos = (state.pairEnds[1].pos + state.pairEnds[2].pos) * 0.5
+        end
         state.yaw = last.junction and endpoint and endpoint.yaw
             or last.endYaw or (last.yaw - (last.turn or 0) * (last.sweep or 0))
         state.pitch = last.endPitch or 0
@@ -1853,7 +1943,11 @@ function N.Undo(ply)
         Notify(ply, "Nothing to undo. LMB starts construction; R deletes the aimed saved module.")
         return false
     end
-    table.remove(state.parts)
+    local last = table.remove(state.parts)
+    if last and last.pairLane == 2 then
+        local previous = state.parts[#state.parts]
+        if previous and previous.pairLane == 1 then table.remove(state.parts) end
+    end
     UpdateConstructionEndpoint(state)
     RefreshPreview(state)
     SyncState(ply)
