@@ -1077,6 +1077,15 @@ function N.PairedAnchors(ent, index)
     return pair
 end
 
+-- Select a physical lane of a four-port double MDL. 1/3 belong to rail A,
+-- 2/4 to rail B. Choosing a lane never uses the tunnel midpoint.
+function N.MatchesPhysicalLane(node, lane, tracks)
+    lane = tonumber(lane) or 0
+    if tonumber(tracks) == 2 or lane == 0 or not node
+        or node.lanes ~= 2 then return true end
+    return ((node.index - 1) % 2 + 1) == lane
+end
+
 function N.AdaptAnchor(node, wanted)
     if not node then return nil end
     local anchor = table.Copy(node)
@@ -1095,7 +1104,7 @@ function N.AdaptAnchor(node, wanted)
     return anchor
 end
 
-function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
+function N.PortFromAimedEntity(trace, tracks, eye, aimDir, wantedLane)
     local ent = trace and trace.Entity
     if not IsValid(ent) or not ent:GetNW2Bool("MEXNativeModule", false) then
         return nil
@@ -1107,7 +1116,9 @@ function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
     local best, score = nil, math.huge
     for i = 1, num do
         local point = ent:GetNW2Vector("MEXNativePort" .. i, vector_origin)
-        if point ~= vector_origin and not N.PortOccupied(ent, point) then
+        if point ~= vector_origin and not N.PortOccupied(ent, point)
+            and N.MatchesPhysicalLane({lanes = double and 2 or 1,
+                index = i}, wantedLane, wanted) then
             local hitDist = isvector(trace.HitPos) and trace.HitPos:DistToSqr(point)
                 or math.huge
             local miss = math.huge
@@ -1130,7 +1141,7 @@ function N.PortFromAimedEntity(trace, tracks, eye, aimDir)
                         yaw = ent:GetNW2Float("MEXNativePortYaw" .. i, 0),
                         pitch = ent:GetNW2Float("MEXNativePortPitch" .. i, 0),
                         start = ent:GetNW2Bool("MEXNativePortStart" .. i, false),
-                        lanes = wanted,
+                        lanes = double and 2 or 1,
                         ent = ent, index = i,
                     }
                 end
@@ -1224,12 +1235,13 @@ if CLIENT then
     -- Same free-node ray/hit selection used by the server. Snapping the
     -- preview only after LMB made a curve jump from the grass onto the rail;
     -- now its grey MDL is already aligned BEFORE the user places anything.
-    local function ClientAimedFreePort(aim, eye, ray, tracks)
+    local function ClientAimedFreePort(aim, eye, ray, tracks, wantedLane)
         local byRay, rayError = nil, 28 * 28
         local byHit, hitError = nil, 72 * 72
         local required = tonumber(tracks) == 2 and 2 or 1
         for _, node in ipairs(CollectVisibleEndpoints()) do
-            if node.lanes == required or (node.lanes == 2 and required == 1) then
+            if (node.lanes == required or (node.lanes == 2 and required == 1))
+                and N.MatchesPhysicalLane(node, wantedLane, required) then
                 local distance = aim:DistToSqr(node.pos)
                 if distance < hitError then
                     byHit, hitError = node, distance
@@ -1265,16 +1277,23 @@ if CLIENT then
         local active = ply:GetNW2Bool("MEXNativeActive", false)
         local selectedName = string.lower(tool:GetClientInfo("native_model"))
         local info = N.ModelCatalog[selectedName]
+        local stationLayout = tool:GetClientNumber("station_layout", 0)
+        local requestedPair = tool:GetClientNumber("native_pair", 0)
+        if stationLayout == 2 or stationLayout == 4 then requestedPair = 1 end
         local settings = {
             native_model = selectedName,
             native_reverse = tool:GetClientNumber("native_reverse", 0),
             branch = tool:GetClientNumber("native_branch", 2),
             grade = tool:GetClientNumber("native_grade", 0),
-            native_pair = tool:GetClientNumber("native_pair", 0),
+            native_pair = requestedPair,
+            native_lane = tool:GetClientNumber("native_lane", 0),
+            station_layout = stationLayout,
+            station_offset = tool:GetClientNumber("station_offset", 160),
             native_split = tool:GetClientNumber("native_split", 0),
-            native_spacing = tool:GetClientNumber("native_spacing", 264),
-            tracks = ((info and info.double) or
-                tool:GetClientNumber("native_pair", 0) == 1) and 2 or 1,
+            native_spacing = stationLayout == 2
+                and math.Clamp(tool:GetClientNumber("station_offset", 160) * 2, 180, 480)
+                or tool:GetClientNumber("native_spacing", 264),
+            tracks = ((info and info.double) or requestedPair == 1) and 2 or 1,
             start_grade = active
                 and ply:GetNW2Float("MEXNativePitch", 0) or nil,
         }
@@ -1299,14 +1318,20 @@ if CLIENT then
         local anchor = nil
         if not active then
             anchor = N.PortFromAimedEntity(tr, settings.tracks,
-                ply:GetShootPos(), ply:GetAimVector())
+                ply:GetShootPos(), ply:GetAimVector(), settings.native_lane)
                 or ClientAimedFreePort(aim, ply:GetShootPos(),
-                    ply:GetAimVector(), settings.tracks)
+                    ply:GetAimVector(), settings.tracks, settings.native_lane)
         end
         local origin = active and ply:GetNW2Vector("MEXNativeEnd", aim)
             or (anchor and anchor.center or aim)
         local yaw = active and ply:GetNW2Float("MEXNativeYaw", 0)
             or (anchor and anchor.yaw or ply:EyeAngles().y)
+        if not active and not anchor and
+            (stationLayout == 1 or stationLayout == 3) then
+            local offset = math.Clamp(settings.station_offset, 90, 480)
+            origin = origin + Right(yaw) *
+                (stationLayout == 1 and offset or -offset)
+        end
         if not active and anchor then
             settings.start_grade = anchor.pitch or 0
             if info and info.double then
@@ -1724,7 +1749,7 @@ end
 -- sleepers or collision surface. This works at ANY distance along a curve.
 -- Both server placement and client ghost rendering call the same function.
 
-function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
+function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance, wantedLane)
     local best, bestDist = nil, (distance or 72)^2
     local rayBest, rayDist = nil, 28 * 28
     local wanted = tonumber(tracks) == 2 and 2 or 1
@@ -1737,7 +1762,8 @@ function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
             occupied = N.PortOccupied(node.ent, node.pos)
         end
         if not occupied and (node.lanes == wanted or
-            (wanted == 1 and node.lanes == 2)) then
+            (wanted == 1 and node.lanes == 2))
+            and N.MatchesPhysicalLane(node, wantedLane, wanted) then
             local d = isvector(pos) and pos:DistToSqr(node.pos) or math.huge
             if d < bestDist then best, bestDist = node, d end
             if isvector(eye) and isvector(aimDir) then
@@ -1943,7 +1969,22 @@ function N.Add(ply, aim, settings)
         Notify(ply, "Selected model is not mounted. Rescan your original model catalog.")
         return false
     end
-    settings.tracks = (N.ModelCatalog[selected].double
+    local info = N.ModelCatalog[selected]
+    local station = math.floor(tonumber(settings.station_layout) or 0)
+    if station == 2 or station == 4 then
+        if info.double or info.kind == "junction" then
+            Notify(ply, "Station two-track starter needs an original SINGLE rail model.")
+            return false
+        end
+        settings.native_pair = 1
+        -- For an island platform the specified platform-edge clearance
+        -- determines the two independently constructed track centers.
+        if station == 2 then
+            settings.native_spacing = math.Clamp(
+                (tonumber(settings.station_offset) or 160) * 2, 180, 480)
+        end
+    end
+    settings.tracks = (info.double
         or tonumber(settings.native_pair) == 1) and 2 or 1
     local state = N.Active[ply]
     if not state then
@@ -1951,9 +1992,10 @@ function N.Add(ply, aim, settings)
         local rayLength = tr and tr.Hit and not tr.HitSky
             and ply:GetShootPos():Distance(tr.HitPos) or nil
         local connector = N.PortFromAimedEntity(tr, settings.tracks,
-            ply:GetShootPos(), ply:GetAimVector())
+            ply:GetShootPos(), ply:GetAimVector(), settings.native_lane)
             or N.FindPort(aim, 72, settings.tracks,
-                ply:GetShootPos(), ply:GetAimVector(), rayLength)
+                ply:GetShootPos(), ply:GetAimVector(), rayLength,
+                settings.native_lane)
         if IsValid(tr.Entity)
             and tr.Entity:GetNW2Bool("MEXNativeModule", false)
             and not connector then
@@ -1962,6 +2004,15 @@ function N.Add(ply, aim, settings)
         end
         local yaw = connector and connector.yaw or ply:EyeAngles().y
         local pos = connector and (connector.center or connector.pos) or aim
+        -- Station layout starts at the chosen platform reference point.
+        -- No platform geometry is manufactured: only installed original MDLs.
+        -- Existing snap ports always win and are NEVER displaced by layout.
+        local station = math.floor(tonumber(settings.station_layout) or 0)
+        if not connector and (station == 1 or station == 3) then
+            local offset = math.Clamp(tonumber(settings.station_offset)
+                or 160, 90, 480)
+            pos = pos + Right(yaw) * (station == 1 and offset or -offset)
+        end
         local pairEnds = tonumber(settings.native_pair) == 1
             and connector and connector.pair_ends or nil
         if pairEnds then
