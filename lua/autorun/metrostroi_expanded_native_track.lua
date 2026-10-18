@@ -1726,33 +1726,31 @@ end
 
 function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance)
     local best, bestDist = nil, (distance or 72)^2
-    local nodes = CollectPorts()
-    -- Screen-center targeting is much more intuitive than asking players
-    -- to shoot the map surface exactly behind a floating connector marker.
     local rayBest, rayDist = nil, 28 * 28
-    for index, node in ipairs(nodes) do
-        local occupied = false
-        for j, other in ipairs(nodes) do
-            if j ~= index and node.pos:DistToSqr(other.pos) <= 12 * 12 then
-                occupied = true
-                break
-            end
+    local wanted = tonumber(tracks) == 2 and 2 or 1
+    local nodes, counts = CollectPorts()
+    for _, node in ipairs(nodes) do
+        -- Exact, real rail-end ports only. Two coincident ends are an occupied
+        -- seam, not another connector; a double MDL still exposes each lane.
+        local occupied = (counts[node.key] or 0) > 1
+        if not occupied and IsValid(node.ent) then
+            occupied = N.PortOccupied(node.ent, node.pos)
         end
-        if not occupied
-            and (not tracks or node.lanes == (tonumber(tracks) == 2 and 2 or 1)
-                or (tonumber(tracks) ~= 2 and node.lanes == 2)) then
-            local d = pos:DistToSqr(node.pos)
+        if not occupied and (node.lanes == wanted or
+            (wanted == 1 and node.lanes == 2)) then
+            local d = isvector(pos) and pos:DistToSqr(node.pos) or math.huge
             if d < bestDist then best, bestDist = node, d end
             if isvector(eye) and isvector(aimDir) then
                 local along = (node.pos - eye):Dot(aimDir)
-                if along >= 0 and along <= 8192 then
+                local maxDistance = math.min(8192, (traceDistance or 8192) + 96)
+                if along > 0 and along <= maxDistance then
                     local miss = node.pos:DistToSqr(eye + aimDir * along)
                     if miss < rayDist then rayBest, rayDist = node, miss end
                 end
             end
         end
     end
-    return N.AdaptAnchor(rayBest or best, tonumber(tracks) == 2 and 2 or 1)
+    return N.AdaptAnchor(rayBest or best, wanted)
 end
 
 local function SpawnRoute(route, ghost)
