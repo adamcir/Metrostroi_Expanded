@@ -16,6 +16,7 @@ TOOL.ClientConVar = {
     native_pair = "0",
     native_split = "0",
     native_spacing = "264",
+    native_lane = "0",
     station_layout = "0",
     station_offset = "160",
 }
@@ -34,31 +35,15 @@ function TOOL:LeftClick(trace)
     if not IsValid(ply) or not ply:IsAdmin() or not MEXNativeTrack then return false end
     local aim = trace.Hit and not trace.HitSky and trace.HitPos
         or (ply:GetShootPos() + ply:GetAimVector() * 800)
-    -- A station starter describes the rail arrangement relative to the
-    -- future platform. Platform structures themselves are not spawned here.
-    local station = self:GetClientNumber("station_layout", 0)
-    local offset = math.Clamp(self:GetClientNumber("station_offset", 160), 90, 480)
-    local active = MEXNativeTrack.Active and MEXNativeTrack.Active[ply]
-    if not active and (station == 1 or station == 3) then
-        local yaw = ply:EyeAngles().y
-        local right = Vector(math.sin(math.rad(yaw)), -math.cos(math.rad(yaw)), 0)
-        -- The chosen point represents a platform edge. Move the rail
-        -- center away from that edge, without changing its longitudinal axis.
-        aim = aim + right * (station == 1 and offset or -offset)
-    end
-    local paired = self:GetClientNumber("native_pair", 0)
-    local model = string.lower(self:GetClientInfo("native_model"))
-    local info = MEXNativeTrack.ModelCatalog and MEXNativeTrack.ModelCatalog[model]
-    if (station == 2 or station == 4) and info and not info.double
-        and info.kind ~= "junction" then
-        paired = 1
-    end
     return MEXNativeTrack.Add(ply, aim, {
         native_model = self:GetClientInfo("native_model"),
         native_reverse = self:GetClientNumber("native_reverse", 0),
         branch = self:GetClientNumber("native_branch", 2),
         grade = self:GetClientNumber("native_grade", 0),
-        native_pair = paired,
+        native_pair = self:GetClientNumber("native_pair", 0),
+        native_lane = self:GetClientNumber("native_lane", 0),
+        station_layout = self:GetClientNumber("station_layout", 0),
+        station_offset = self:GetClientNumber("station_offset", 160),
         native_split = self:GetClientNumber("native_split", 0),
         native_spacing = self:GetClientNumber("native_spacing", 264),
     })
@@ -492,10 +477,11 @@ if CLIENT then
         local station = vgui.Create("DComboBox")
         station:SetTall(26)
         station:AddChoice("Ordinary railway", 0)
-        station:AddChoice("Platform on left - one rail", 1)
-        station:AddChoice("Island platform - two separate rails", 2)
-        station:AddChoice("Platform on right - one rail", 3)
-        station:AddChoice("Two outside platforms - two separate rails", 4)
+        station:AddChoice("Station start: platform left / rail right", 1)
+        station:AddChoice("Station start: island / two separate rails", 2)
+        station:AddChoice("Station start: platform right / rail left", 3)
+        station:AddChoice("Station start: side platforms / two rails", 4)
+        station:AddChoice("Station start: central rail / both platforms", 5)
         local stationCvar = GetConVar("mex_track_builder_station_layout")
         station:ChooseOptionID((stationCvar and stationCvar:GetInt() or 0) + 1)
         station.OnSelect = function(_, _, _, value)
@@ -504,17 +490,28 @@ if CLIENT then
         panel:AddItem(station)
         panel:NumSlider("Station edge to rail offset (SU)",
             "mex_track_builder_station_offset", 90, 480, 0)
-        panel:Help("Station starter offsets the first single rail or starts a 2x pair. It does not create platforms. Select a SINGLE MDL for two independent rails.")
+        panel:Help("Click the desired station reference line. Single rails use an original MDL; island and side platforms start two separately rendered original single MDLs. Station structures are not generated.")
         panel:NumSlider("Track grade (+up / -down), degrees",
             "mex_track_builder_native_grade", -20, 20, 1)
         panel:CheckBox("2x single rails (connect both ends of a double track)",
             "mex_track_builder_native_pair")
+        local lane = vgui.Create("DComboBox")
+        lane:SetTall(25)
+        lane:AddChoice("Double connector: automatic (aim at rail)", 0)
+        lane:AddChoice("Double connector: rail A only", 1)
+        lane:AddChoice("Double connector: rail B only", 2)
+        local laneCvar = GetConVar("mex_track_builder_native_lane")
+        lane:ChooseOptionID((laneCvar and laneCvar:GetInt() or 0) + 1)
+        lane.OnSelect = function(_, _, _, value)
+            RunConsoleCommand("mex_track_builder_native_lane", tostring(value))
+        end
+        panel:AddItem(lane)
         panel:CheckBox("Split paired curves outward (left + right)",
             "mex_track_builder_native_split")
         panel:NumSlider("2x spacing when starting a free route (SU)",
             "mex_track_builder_native_spacing", 180, 480, 0)
         panel:Help("Up/down: set positive or negative grade on a new route. Existing rail-end pitch is inherited.")
-        panel:Help("Single MDLs connect to EACH measured double-track lane independently. 2x places two original single-track MDLs; Split turns the second curved MDL in reverse.")
+        panel:Help("For separate construction: turn 2x OFF, choose rail A or B, and finish each lane independently. For simultaneous twin track: enable 2x. Curve end ports follow the measured original rail paths.")
         panel:Help("Finish a 2x section before switching back to a single or double MDL.")
         panel:Help("LMB: start/place   RMB: finish   R: remove   Shift+R: undo")
         panel:CheckBox("Show measured rail path",
