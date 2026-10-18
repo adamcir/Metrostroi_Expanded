@@ -1514,6 +1514,9 @@ if CLIENT then
         if not string.StartWith(model, "models/") then return end
         if istable(data.profile) and istable(data.profile.points) then
             N.ServerNativeProfiles[model] = data.profile
+            if N.ModelCatalog[model] then
+                N.ModelCatalog[model].double = data.profile.double == true
+            end
             N.CatalogErrors[model] = nil
         else
             N.CatalogErrors[model] = tostring(data.error or "Model is not a verifiable rail segment.")
@@ -1755,23 +1758,28 @@ function N.FindPort(pos, distance, tracks, eye, aimDir, traceDistance, wantedLan
     local wanted = tonumber(tracks) == 2 and 2 or 1
     local nodes, counts = CollectPorts()
     for _, node in ipairs(nodes) do
-        -- Exact, real rail-end ports only. Two coincident ends are an occupied
-        -- seam, not another connector; a double MDL still exposes each lane.
-        local occupied = (counts[node.key] or 0) > 1
-        if not occupied and IsValid(node.ent) then
-            occupied = N.PortOccupied(node.ent, node.pos)
-        end
-        if not occupied and (node.lanes == wanted or
-            (wanted == 1 and node.lanes == 2))
+        if (node.lanes == wanted or (wanted == 1 and node.lanes == 2))
             and N.MatchesPhysicalLane(node, wantedLane, wanted) then
             local d = isvector(pos) and pos:DistToSqr(node.pos) or math.huge
-            if d < bestDist then best, bestDist = node, d end
+            local rayError = math.huge
             if isvector(eye) and isvector(aimDir) then
                 local along = (node.pos - eye):Dot(aimDir)
-                local maxDistance = math.min(8192, (traceDistance or 8192) + 96)
-                if along > 0 and along <= maxDistance then
-                    local miss = node.pos:DistToSqr(eye + aimDir * along)
-                    if miss < rayDist then rayBest, rayDist = node, miss end
+                -- Some original curved MDLs collide at their walls long
+                -- before the ray reaches the physical rail endpoint. Never
+                -- shorten rail-end picking to the surface trace distance.
+                if along > 0 and along <= 8192 then
+                    rayError = node.pos:DistToSqr(eye + aimDir * along)
+                end
+            end
+            -- Occupancy tests scan world entities; execute them ONLY for
+            -- geometrically plausible endpoints rather than every rail.
+            if (d < bestDist or rayError < rayDist)
+                and (counts[node.key] or 0) <= 1
+                and (not IsValid(node.ent)
+                    or not N.PortOccupied(node.ent, node.pos)) then
+                if d < bestDist then best, bestDist = node, d end
+                if rayError < rayDist then
+                    rayBest, rayDist = node, rayError
                 end
             end
         end
@@ -1970,6 +1978,14 @@ function N.Add(ply, aim, settings)
         return false
     end
     local info = N.ModelCatalog[selected]
+    -- Filename categories are only hints. Trust verified actual rail paths
+    -- from the installed MDL when deciding whether it has two lanes.
+    if info.kind ~= "junction" then
+        local nativeProfile = GenericProfile(selected)
+        if nativeProfile then
+            info.double = nativeProfile.double == true
+        end
+    end
     local station = math.floor(tonumber(settings.station_layout) or 0)
     if station == 2 or station == 4 then
         if info.double or info.kind == "junction" then
