@@ -1334,7 +1334,11 @@ if CLIENT then
         end
         if not active and anchor then
             settings.start_grade = anchor.pitch or 0
-            if info and info.double then
+            if settings.native_pair == 1 then
+                -- Preview must use the same two ACTUAL double-rail end
+                -- positions as the server, not guessed +/- spacing.
+                settings.pair_ends = anchor.pair_ends
+            elseif info and info.double then
                 settings.double_ends = anchor.pair_ends
             end
         end
