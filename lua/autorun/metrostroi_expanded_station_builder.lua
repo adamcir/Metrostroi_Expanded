@@ -123,7 +123,8 @@ if CLIENT then
         render.SetMaterial(CachedMaterial(material))
         render.DrawBox(self:GetPos(),self:GetAngles(),mn,mx,c,true)
         local kind=self:GetNW2String("MEXStKind","")
-        if kind=="light" then
+        if kind=="light" and (self.MEXNextLight or 0)<=CurTime() then
+            self.MEXNextLight=CurTime()+0.10
             local l=DynamicLight(self:EntIndex())
             if l then
                 l.pos=self:GetPos()-Vector(0,0,14)
@@ -131,7 +132,7 @@ if CLIENT then
                 l.brightness=1.3
                 l.Size=340
                 l.Decay=1000
-                l.DieTime=CurTime()+0.13
+                l.DieTime=CurTime()+0.24
             end
         elseif kind=="sign" then
             local name=self:GetNW2String("MEXStLabel","")
@@ -249,6 +250,20 @@ local function BuildModules(cfg)
         for _,platform in ipairs(platforms) do
             local center,w=platform.center,platform.width
             add(x,center,deck-12,GRID,w,24,floorMat,floorTint,true)
+            -- A visible supporting fascia descends from the platform
+            -- edge towards the track bed, not through running railheads.
+            local fasciaSides
+            if cfg.layout==3 then
+                fasciaSides={-1,1}
+            else
+                fasciaSides={center<0 and 1 or -1}
+            end
+            for _,side in ipairs(fasciaSides) do
+                local facadeHeight=math.max(deck-4,36)
+                add(x,center+side*(w*0.5-6),
+                    deck-facadeHeight*0.5,GRID,12,facadeHeight,
+                    wallMat,wallTint,true)
+            end
             -- Two tactile edges make platforms immediately legible.
             for _,side in ipairs({-1,1}) do
                 local edge=center+side*(w/2-9)
@@ -350,7 +365,7 @@ local function BuildModules(cfg)
         end
     end
     -- Prevent a malicious combination from exhausting entity limits.
-    if #pieces>800 then return nil,"Station layout exceeds module safety limit." end
+    if #pieces>900 then return nil,"Station layout exceeds module safety limit." end
     return pieces
 end
 
