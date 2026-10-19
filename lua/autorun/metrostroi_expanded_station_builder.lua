@@ -89,9 +89,10 @@ if CLIENT then
     local materialCache={}
     local function CachedMaterial(path)
         if materialCache[path] then return materialCache[path] end
-        -- Most Half-Life 2 map textures use LightmappedGeneric (for BSP
-        -- brushes). Build an equivalent vertex-lit model material for
-        -- these runtime boxes instead of producing dark/checker textures.
+        -- Brush textures are lightmapped and VertexLitGeneric on procedural
+        -- DrawBox geometry often receives no valid map lighting. Use a
+        -- deliberately softly tinted, two-sided surface instead of the
+        -- totally black station interior seen on outdoor sandbox maps.
         local source=Material(path)
         if source:IsError() then
             source=Material(MATERIALS.clean)
@@ -101,14 +102,17 @@ if CLIENT then
             texture="models/debug/debugwhite"
         end
         local alias="mex_station_surface_"..util.CRC(path)
-        materialCache[path]=CreateMaterial(alias,"VertexLitGeneric",{
+        materialCache[path]=CreateMaterial(alias,"UnlitGeneric",{
             ["$basetexture"]=texture,
-            ["$model"]="1",
             ["$vertexcolor"]="1",
             ["$vertexalpha"]="1",
+            ["$nocull"]="1",
         })
         return materialCache[path]
     end
+    surface.CreateFont("MEXStationSignFont",{
+        font="Roboto",size=48,weight=750,antialias=true,extended=true
+    })
     function StationPart:Draw()
         local mn=self:GetNW2Vector("MEXStMin",Vector(-16,-16,-4))
         local mx=self:GetNW2Vector("MEXStMax",Vector(16,16,4))
@@ -127,26 +131,32 @@ if CLIENT then
             self.MEXNextLight=CurTime()+0.10
             local l=DynamicLight(self:EntIndex())
             if l then
-                l.pos=self:GetPos()-Vector(0,0,14)
-                l.r,l.g,l.b=c.r,c.g,c.b
-                l.brightness=1.3
-                l.Size=340
-                l.Decay=1000
-                l.DieTime=CurTime()+0.24
+                l.pos=self:GetPos()-Vector(0,0,20)
+                l.r,l.g,l.b=255,236,198
+                l.brightness=2.0
+                l.Size=470
+                l.Decay=900
+                l.DieTime=CurTime()+0.22
             end
         elseif kind=="sign" then
             local name=self:GetNW2String("MEXStLabel","")
             if name~="" then
-                local center=self:GetPos()
+                local pos=self:GetPos()
                 local yaw=self:GetAngles().y
-                local w=math.abs(mx.y-mn.y)
-                local size=math.Clamp(200/math.max(#name,12),8,17)
+                local thick=math.abs(mx.y-mn.y)
+                local length=math.abs(mx.x-mn.x)
+                surface.SetFont("MEXStationSignFont")
+                local textW=surface.GetTextSize(name)
+                local scale=math.min(0.22,(length-22)/math.max(textW,1))
+                scale=math.max(scale,0.075)
                 for _,side in ipairs({-1,1}) do
-                    local face=Angle(0,yaw+(side==1 and 90 or -90),90)
-                    local p=center+Forward(yaw)*side*7
-                    cam.Start3D2D(p,face,0.18)
-                        draw.SimpleText(name,"DermaLarge",0,0,
-                            Color(255,255,255),TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER)
+                    -- Text must be on the long sideways-facing sign surface,
+                    -- not the 12-SU end cap of a floating cube.
+                    local face=Angle(0,yaw+(side==1 and -90 or 90),90)
+                    local p=pos+Right(yaw)*side*(thick*0.5+0.6)
+                    cam.Start3D2D(p,face,scale)
+                        draw.SimpleText(name,"MEXStationSignFont",0,0,
+                            color_white,TEXT_ALIGN_CENTER,TEXT_ALIGN_CENTER)
                     cam.End3D2D()
                 end
             end
