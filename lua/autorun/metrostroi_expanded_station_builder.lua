@@ -387,7 +387,9 @@ if CLIENT then
         local length=fixed and fixed:GetBool() and
             RoundLength(desired and desired:GetFloat() or 1024)
             or RoundLength(delta)
-        local center=start+Forward(yaw)*(length/2)
+        local backwards=delta<0 and not (fixed and fixed:GetBool())
+        local previewYaw=backwards and (yaw+180)%360 or yaw
+        local center=start+Forward(previewYaw)*(length/2)
         local settings={
             width=GetConVar("mex_station_builder_width"):GetFloat(),
             gap=GetConVar("mex_station_builder_gap"):GetFloat(),
@@ -400,21 +402,21 @@ if CLIENT then
         local platforms,left,right=Layout(c)
         if not platforms then return end
         render.SetColorMaterial()
-        local ang=Angle(0,yaw,0)
+        local ang=Angle(0,previewYaw,0)
         local deck=10+c.height
         for _,p in ipairs(platforms) do
-            render.DrawWireframeBox(center+Right(yaw)*p.center+
+            render.DrawWireframeBox(center+Right(previewYaw)*p.center+
                 Vector(0,0,deck-12),ang,
                 Vector(-length/2,-p.width/2,-12),
                 Vector(length/2,p.width/2,12),
                 Color(58,230,140),true)
         end
-        render.DrawWireframeBox(center+Right(yaw)*((left+right)/2)+
+        render.DrawWireframeBox(center+Right(previewYaw)*((left+right)/2)+
             Vector(0,0,deck+c.ceiling),ang,
             Vector(-length/2,-(right-left)/2,-2),
             Vector(length/2,(right-left)/2,2),
             Color(90,180,245),true)
-        render.DrawLine(start,start+Forward(yaw)*length,
+        render.DrawLine(start,start+Forward(previewYaw)*length,
             Color(255,201,56),true)
     end)
     return
