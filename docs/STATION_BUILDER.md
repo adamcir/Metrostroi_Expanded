@@ -13,6 +13,25 @@ Station Builder is a separate GMod Toolgun tool for constructing **real, walkabl
 7. Aim in the station's longitudinal direction and press **LMB** again. The resulting station length snaps to 256 Source-unit segments (min 512, max 4096). Alternatively select **Fixed station length**.
 8. To redesign an existing station, change its parameters in the Toolgun menu, aim at a solid station part and press **RMB**; it retains its position and length. **R** removes the entire station. While positioning a station, **RMB** or **R** cancels placement.
 
+## Updated visual design (October 2026)
+
+The station is now generated as a continuous, visually cohesive tiled hall, rather than detached boxes on a dark map.
+
+- Light two-sided interior finishes no longer depend on a map's missing lightmaps for their visibility. Brick, concrete and tile source materials are used when mounted; absent textures fall back to a neutral surface rather than a pink checkerboard.
+- Platforms have continuous textured floors, subtle grout, concrete retaining fascias, accent edge bands and rail-facing safety strips.
+- A low **non-solid** floor below the running railheads fills visual darkness under the tracks without creating another rail collision.
+- Walls are continuous with aligned panel seams and regular accent stripes; the underside of the roof is light colored and joined by transverse structural ribs.
+- Recessed warm-white luminaires sit in ceiling frames, not as unsupported luminous blocks.
+- Station name boards are mounted flush with the walls. Island-platform signs are visibly suspended from two ceiling rods, not floating in midair.
+- Columns and benches are physically supported and placed to the back of side platforms to preserve the usable walking space.
+- The default station starts **without disconnected outdoor staircases**. Enable stairs only when an appropriate approach is available.
+
+After installing updated Lua, **restart the map** or reload the addon and run `mex_station_reload` as an admin. Previously saved stations are regenerated from their saved parameters using the new visual design. Configurations and tracks are preserved.
+
+### Known constraints
+
+These are runtime GMod meshes and physics boxes, not compiled BSP geometry. The builder cannot cut a hole in an existing map, remove vegetation, or bake real LightmappedGeneric shadows. Although station surfaces stay visible on dark sandbox maps, they will not receive the same baked lighting as a Hammer-built station. You should still verify collision clearances and frame rate with your installed Metrostroi models and chosen maps.
+
 ## Architecture generated
 
 - Physical platform slabs and tactile safety stripes that leave the rail bed open.
