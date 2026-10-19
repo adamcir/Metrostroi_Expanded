@@ -6,7 +6,7 @@ TOOL.Command=nil
 TOOL.ConfigName=""
 TOOL.ClientConVar={
     layout="1", width="320", height="44", gap="100", spacing="480",
-    ceiling="290", style="2", stairs="1", lights="1",
+    ceiling="290", style="2", cladding="1", stairs="1", lights="1",
     name="Adamovske metro", accent="458965",
     rotation="0", fixed="0", length="1024"
 }
@@ -27,6 +27,7 @@ local function Options(tool)
         spacing=tool:GetClientNumber("spacing",480),
         ceiling=tool:GetClientNumber("ceiling",290),
         style=tool:GetClientNumber("style",2),
+        cladding=tool:GetClientNumber("cladding",1),
         stairs=tool:GetClientNumber("stairs",1),
         lights=tool:GetClientNumber("lights",1),
         name=tool:GetClientInfo("name"),
@@ -71,7 +72,6 @@ function TOOL:Reload(trace)
     return MEXStationBuilder.Remove(ply,trace.Entity)
 end
 if CLIENT then
-    local C_BG=Color(34,42,49)
     local C_TITLE=Color(62,109,83)
     local C_TEXT=Color(227,234,234)
     local function Section(panel,text)
@@ -143,6 +143,11 @@ if CLIENT then
             {"Classic concrete and tile",1},
             {"Modern clean station",2},
             {"Industrial brick station",3},
+        })
+        Choices(panel,"Wall cladding","cladding",{
+            {"Light rectangular tiles",1},
+            {"Concrete panels",2},
+            {"Exposed brick",3},
         })
         panel:NumSlider("Platform top above railhead (SU)",
             "mex_station_builder_height",28,80,0)
