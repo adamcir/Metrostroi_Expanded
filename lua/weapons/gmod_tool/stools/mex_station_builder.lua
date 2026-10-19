@@ -6,7 +6,7 @@ TOOL.Command=nil
 TOOL.ConfigName=""
 TOOL.ClientConVar={
     layout="1", width="320", height="44", gap="100", spacing="480",
-    ceiling="290", style="2", cladding="1", stairs="1", lights="1",
+    ceiling="290", style="2", cladding="1", stairs="0", lights="1",
     name="Adamovske metro", accent="458965",
     rotation="0", fixed="0", length="1024"
 }
