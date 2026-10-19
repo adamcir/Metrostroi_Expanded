@@ -88,9 +88,25 @@ end
 if CLIENT then
     local materialCache={}
     local function CachedMaterial(path)
-        if not materialCache[path] then
-            materialCache[path]=Material(path)
+        if materialCache[path] then return materialCache[path] end
+        -- Most Half-Life 2 map textures use LightmappedGeneric (for BSP
+        -- brushes). Build an equivalent vertex-lit model material for
+        -- these runtime boxes instead of producing dark/checker textures.
+        local source=Material(path)
+        if source:IsError() then
+            source=Material(MATERIALS.clean)
         end
+        local texture=source:GetString("$basetexture")
+        if not texture or texture=="" then
+            texture="models/debug/debugwhite"
+        end
+        local alias="mex_station_surface_"..util.CRC(path)
+        materialCache[path]=CreateMaterial(alias,"VertexLitGeneric",{
+            ["$basetexture"]=texture,
+            ["$model"]="1",
+            ["$vertexcolor"]="1",
+            ["$vertexalpha"]="1",
+        })
         return materialCache[path]
     end
     function StationPart:Draw()
