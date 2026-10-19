@@ -15,6 +15,7 @@ local MIN_LENGTH, MAX_LENGTH = 512, 4096
 local STRUCTURAL_MODEL = "models/hunter/blocks/cube025x025x025.mdl"
 local MATERIALS = {
     floor = "concrete/concretefloor001a",
+    tile = "tile/tilefloor001a",
     wall = "brick/brickwall003a",
     roof = "concrete/concretewall001a",
     clean = "models/debug/debugwhite",
@@ -245,7 +246,8 @@ local function BuildModules(cfg)
     local neutral=Color(91,105,106)
     local safety=Color(236,173,54)
     local grout=Color(155,165,163)
-    local floorMat=MATERIALS.clean
+    local floorMat=classic and MATERIALS.floor
+        or (industrial and MATERIALS.floor or MATERIALS.tile)
     local wallMat=cfg.cladding==3 and MATERIALS.wall
         or (cfg.cladding==2 and MATERIALS.roof or MATERIALS.clean)
     local floorBehindRails=Color(73,80,82)
