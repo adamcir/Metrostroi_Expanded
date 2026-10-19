@@ -288,10 +288,10 @@ local function BuildModules(cfg)
             add(x,y,deck-29,GRID,w-7,4,MATERIALS.clean,
                 neutral,false)
             if cfg.cladding~=3 then
-                for seam=1,3 do
-                    add(x-GRID/2+seam*64,y,deck+0.7,
-                        1.3,w-18,1.1,MATERIALS.clean,grout,false)
-                end
+                -- One fine tile seam per module is enough; rendering
+                -- hundreds of seam entities made long stations expensive.
+                add(x,y,deck+0.7,1.5,w-18,1.1,
+                    MATERIALS.clean,grout,false)
             end
             for _,side in ipairs(towards) do
                 local edge=y+side*(w*0.5-8)
@@ -382,15 +382,10 @@ local function BuildModules(cfg)
             add(x,innerY-side*3,deck+113,GRID-2,5,14,
                 MATERIALS.clean,accent,false)
             if cfg.cladding==1 then
-                for division=1,3 do
-                    add(x-GRID/2+division*64,innerY-side*3,
-                        (deck+roof)/2,1.7,2,roof-deck-30,
-                        MATERIALS.clean,grout,false)
-                end
-                for z=deck+83,roof-28,82 do
-                    add(x,innerY-side*3,z,GRID-5,1.7,1.6,
-                        MATERIALS.clean,grout,false)
-                end
+                add(x,innerY-side*3,(deck+roof)/2,1.8,2,
+                    roof-deck-30,MATERIALS.clean,grout,false)
+                add(x,innerY-side*3,deck+82,GRID-5,1.7,1.6,
+                    MATERIALS.clean,grout,false)
             end
             -- Signs are FLUSH on the walls, readable along the platform,
             -- not giant floating blocks in the middle of the hall.
