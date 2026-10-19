@@ -57,6 +57,10 @@ local StationPart = {
 function StationPart:Initialize()
     if CLIENT then
         self:DrawShadow(false)
+        -- Avoid first-frame Source PVS/frustum culling by the tiny
+        -- backing MDL before custom NW2 render bounds are received.
+        self:SetRenderBounds(Vector(-4096,-2048,-512),
+            Vector(4096,2048,1024))
         return
     end
     self:SetModel(STRUCTURAL_MODEL)
@@ -471,6 +475,32 @@ end)
 hook.Add("PlayerDisconnected","MEXStationsDiscardDraft",function(ply)
     S.Drafts[ply]=nil
 end)
+hook.Add("PhysgunPickup","MEXStationBuilderPreventPickup",function(_,ent)
+    if IsValid(ent) and ent:GetNW2Bool("MEXStationPart",false) then
+        return false
+    end
+end)
+hook.Add("CanTool","MEXStationBuilderProtect",function(_,trace,mode)
+    if IsValid(trace.Entity) and
+        trace.Entity:GetNW2Bool("MEXStationPart",false) and
+        mode~="mex_station_builder" then return false end
+end)
+concommand.Add("mex_station_list",function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local count=0
+    for id,cfg in pairs(S.Stations) do
+        count=count+1
+        Notice(ply,string.format("#%d: %s, %d SU, layout %d",
+            id,cfg.name,cfg.length,cfg.layout))
+    end
+    Notice(ply,string.format("%d saved station(s) on %s.",
+        count,game.GetMap()))
+end)
+concommand.Add("mex_station_reload",function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    Restore()
+    Notice(ply,"Station modules rebuilt from map save.")
+end)
 
 -- Snap direction to *authentic Metrostroi rail geometry*. Snap the start
 -- position for single-line layouts; island/twin layouts use the midpoint
@@ -478,7 +508,7 @@ end)
 local function SnapRail(pos,keepLateral)
     local N=MEXNativeTrack
     if not N or not N.Routes or not N.ModulePaths then return pos,nil end
-    local best,score=nil,200*200
+    local best,score=nil,(keepLateral and 600 or 200)^2
     -- Loop the saved track geometry, not entity pivot distances: large
     -- curved/straight MDLs can have their pivots >500 SU from either end.
     for _,route in pairs(N.Routes) do
