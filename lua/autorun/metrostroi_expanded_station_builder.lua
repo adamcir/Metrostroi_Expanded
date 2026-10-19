@@ -145,6 +145,7 @@ local function Template(settings)
         spacing=math.Clamp(math.floor(tonumber(settings.spacing) or 480),264,1000),
         ceiling=math.Clamp(math.floor(tonumber(settings.ceiling) or 290),250,480),
         style=math.Clamp(math.floor(tonumber(settings.style) or 1),1,3),
+        cladding=math.Clamp(math.floor(tonumber(settings.cladding) or 1),1,3),
         stairs=math.Clamp(math.floor(tonumber(settings.stairs) or 0),0,3),
         lights=settings.lights~=false and tonumber(settings.lights)~=0,
         name=CleanString(settings.name),
@@ -180,8 +181,6 @@ local function Layout(cfg)
         left=math.min(left,platform.center-platform.width*0.5)
         right=math.max(right,platform.center+platform.width*0.5)
     end
-    local rails=cfg.layout==3 or cfg.layout==4
-        and d*0.5 or 0
     if cfg.layout==3 or cfg.layout==4 then
         left=math.min(left,-d*0.5-125)
         right=math.max(right,d*0.5+125)
@@ -207,7 +206,8 @@ local function BuildModules(cfg)
     local classic=cfg.style==1
     local industrial=cfg.style==3
     local floorMat=classic and MATERIALS.floor or MATERIALS.clean
-    local wallMat=industrial and MATERIALS.wall or MATERIALS.clean
+    local wallMat=cfg.cladding==3 and MATERIALS.wall or
+        (cfg.cladding==2 and MATERIALS.roof or MATERIALS.clean)
     local roofMat=industrial and MATERIALS.wall or MATERIALS.roof
     local floorTint=classic and Color(198,192,171)
         or (industrial and Color(115,120,124) or Color(218,219,215))
@@ -246,6 +246,18 @@ local function BuildModules(cfg)
                 add(x,py,deck+12,38,38,16,MATERIALS.clean,trim,false)
                 add(x,py,roof-15,38,38,16,MATERIALS.clean,trim,false)
             end
+            -- Furnishing modules stand away from the track-facing edges.
+            if i%4==0 and w>=240 then
+                local by=center
+                add(x+28,by,deck+20,98,35,12,
+                    MATERIALS.clean,Color(81,92,90),true)
+                add(x+28,by-18,deck+43,98,9,42,
+                    MATERIALS.clean,Color(74,85,83),true)
+                for _,dx in ipairs({-30,30}) do
+                    add(x+28+dx,by,deck+8,9,26,16,
+                        MATERIALS.clean,Color(85,85,82),true)
+                end
+            end
             if cfg.lights then
                 add(x,center,roof-17,88,30,6,
                     MATERIALS.clean,Color(255,241,200),false,"light")
@@ -265,6 +277,20 @@ local function BuildModules(cfg)
                 wallMat,wallTint,true)
             add(x,side-(side>0 and 1 or -1)*11,
                 deck+37,GRID-2,3,14,MATERIALS.clean,trim,false)
+            if cfg.cladding==1 then
+                -- Render decorative tile grout on the interior wall face.
+                -- Thin non-solid strips do not introduce track collisions.
+                local inside=side-(side>0 and 1 or -1)*11.6
+                for k=1,3 do
+                    add(x-GRID/2+k*64,inside,
+                        (deck+roof)/2,2,1,roof-deck-4,
+                        MATERIALS.clean,Color(150,154,149),false)
+                end
+                for z=deck+82,roof-10,80 do
+                    add(x,inside,z,GRID-2,1,2,
+                        MATERIALS.clean,Color(150,154,149),false)
+                end
+            end
             if i%2==0 then
                 add(x,side-(side>0 and 1 or -1)*12,
                     roof-76,110,3,62,MATERIALS.clean,
@@ -280,8 +306,8 @@ local function BuildModules(cfg)
     if cfg.stairs~=0 then
         for _,platform in ipairs(platforms) do
             for _,atEnd in ipairs({false,true}) do
-                if (cfg.stairs==1 and atEnd) or
-                    (cfg.stairs==2 and not atEnd) or cfg.stairs==3 then
+                if (cfg.stairs==1 and not atEnd) or
+                    (cfg.stairs==2 and atEnd) or cfg.stairs==3 then
                     local outward=atEnd and 1 or -1
                     local baseX=atEnd and cfg.length or 0
                     local stairW=math.min(platform.width-65,170)
@@ -453,11 +479,10 @@ local function SnapRail(pos,keepLateral)
     local N=MEXNativeTrack
     if not N or not N.Routes or not N.ModulePaths then return pos,nil end
     local best,score=nil,200*200
-    for _,ent in ipairs(ents.FindInSphere(pos,500)) do
-        if IsValid(ent) and ent:GetNW2Bool("MEXNativeModule",false) then
-            local route=N.Routes[ent:GetNW2Int("MEXNativeRoute",0)]
-            local part=route and route.parts and
-                route.parts[ent:GetNW2Int("MEXNativeIndex",0)]
+    -- Loop the saved track geometry, not entity pivot distances: large
+    -- curved/straight MDLs can have their pivots >500 SU from either end.
+    for _,route in pairs(N.Routes) do
+        for _,part in ipairs(route.parts or {}) do
             if part then
                 for _,path in ipairs(N.ModulePaths(part)) do
                     for j=2,#path do
