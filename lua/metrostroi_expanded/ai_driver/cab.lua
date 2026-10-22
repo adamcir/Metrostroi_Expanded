@@ -61,6 +61,37 @@ function Cab.SetLight(train, key, enabled)
     return true, info.title .. (enabled and " zapinam" or " vypinam")
 end
 
+-- Prepare a real 81-717 KV reverser for a driver who has left the cab.
+-- Does not bypass ARS, wire traction, turn on battery or release brakes.
+function Cab.Prepare(train)
+    if not IsValid(train) or not train.KV
+        or type(train.KV.TriggerInput) ~= "function"
+        or type(train.ButtonEvent) ~= "function" then
+        return false, "KV_70 not available"
+    end
+    if IsValid(train:GetDriver()) then return false, "a player is at the controls" end
+    if math.abs(tonumber(train.Speed) or 0) > 0.5 then
+        return false, "prepare the cab only when stopped"
+    end
+    if tonumber(train.KV.ControllerPosition) ~= 0 then
+        return false, "first put KV in neutral position"
+    end
+    local ok, err = pcall(function()
+        if tonumber(train.KV.Enabled) ~= 1 or not train:IsWrenchPresent() then
+            train:ButtonEvent("KVWrenchKV", true)
+            train:ButtonEvent("KVWrenchKV", false)
+        end
+        if tonumber(train.KV.ReverserPosition) == 0 then
+            train.KV:TriggerInput("ReverserSet", 1)
+        end
+    end)
+    if not ok then return false, tostring(err) end
+    if tonumber(train.KV.Enabled) ~= 1 or tonumber(train.KV.ReverserPosition) ~= 1 then
+        return false, "wrench/reverser still not ready"
+    end
+    return true, "Reverzor pripraven; jizda je nadale zavisla na ARS, napajeni a rezimu LIVE."
+end
+
 function Cab.Lights() return LIGHTS end
 
 return Cab
