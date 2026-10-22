@@ -2,9 +2,9 @@
 
 ## Architecture: where the Markdown belongs
 
-- **`backend/driver_guide.md`:** model's instructions. Backend sends this file as Ollama
+- **`tools/ai_driver_backend/driver_guide.md`:** model's instructions. Backend sends this file as Ollama
   system prompt, so the AI can read its driving principles. Keep this with the backend.
-- **`addon/docs/AI_DRIVER_INTEGRATION.md`:** in-game interfaces, controls, train variants,
+- **`docs/AI_DRIVER.md`:** in-game interfaces, controls, train variants,
   physics, route mapping and test procedures. Keep this in the addon repo.
 - **Lua code in addon:** the actual actuator and safety implementation. **A `.md` file
   cannot control the physical train.** The game must never depend on model response
@@ -12,9 +12,10 @@
 
 ## Installation
 
-Copy the `addon/lua/` tree into `garrysmod/addons/metrostroi-expanded/lua/`.
-Do not alter any existing files. The addon adds `mex_ai_driver.lua` and two modules.
-Install/start the separate Node backend (see `backend/README.md`).
+Install the Metrostroi Expanded addon from this repository. The AI Driver Lua files
+are already part of the addon; no manual copying is needed. Install/start the
+separate Node backend using `scripts/install_ai_backend.ps1` (Windows) or
+`scripts/install_ai_backend.sh` (Linux). Details: `tools/ai_driver_backend/README.md`.
 
 Requires server-side LuaSocket. No client module and no Python.
 
@@ -27,6 +28,7 @@ mex_ai_live 0
 mex_ai_attach
 mex_ai_status
 mex_ai_detach
+mex_ai_visual_refresh
 ```
 
 The initial mode **only reads telemetry and gets AI decisions** (`mex_ai_live 0`).
@@ -36,6 +38,51 @@ Only 81-717 variants with compatible KV_70 are enabled in this first implementat
 The train needs battery/control circuits, a present wrench and set reverser in the
 appropriate cab **before** enabling the driver. The AI does not prepare the cab.
 It will give up control when a human driver is detected.
+
+## Visible driver in the real front cab seat
+
+Attaching `mex_ai_attach` also spawns a **seated, non-solid player-model
+representation** at the original Metrostroi cab's `train.DriverSeat`.
+The default is `models/player/barney.mdl`: an available blue-uniformed
+HL2/GMod character. This is a visual prop, **not** a real player bot, so
+Metrostroi's `GetDriver()` still works for detecting human takeovers.
+The prop stays parented to the train's actual front driver's jeep seat,
+including its cabin movement.
+
+**Critical distinction:** MEX Passenger Seats creates many invisible
+`models/nova/jeep_seat.mdl` passenger pods. AI Driver never searches for
+a nearest pod. It only accepts `train.DriverSeat` (or the explicit
+`seat_driver` NW2 entity) when `SeatType == "driver"`,
+`TrainEntity == train`, and `MPS.PassengerSeat` is false.
+No existing passenger or instructor seat is used, moved, or replaced.
+
+The operator is cleaned up on `mex_ai_detach`, human entering the cab,
+train deletion, and Lua reload. No extra vehicle seat is created.
+It appears even with `mex_ai_live 0`, so you can inspect it safely.
+
+Customize via the **server console**:
+
+```text
+mex_ai_visual 1
+mex_ai_driver_model models/player/barney.mdl
+mex_ai_visual_x 0
+mex_ai_visual_y 0
+mex_ai_visual_z -26
+mex_ai_visual_yaw 90
+mex_ai_visual_refresh
+```
+
+To calibrate the sitting position, aim at the attached cab when running
+`mex_ai_visual_refresh`. Offsets are in the **original driver seat's
+local coordinates**, and yaw is relative to that seat. The model needs
+a compatible player skeleton and a sitting sequence such as
+`sit_rollercoaster`. Unsupported/custom models without a seated
+animation are removed rather than displayed standing in the cab.
+`mex_ai_visual 0` hides the operator at the next update.
+The operator is not a physical occupant of the jeep pod: this avoids
+fake-player interference with the actual GMod vehicle driver logic.
+It cannot manually press cab buttons; the separate KV controller handles
+train control when explicitly enabled and route information is available.
 
 ## First train adapter (verified against published Metrostroi KV_70 code)
 
