@@ -644,7 +644,24 @@ prop rather than a real bot player, so human takeover detection still works.
 Use `mex_ai_driver_model`, `mex_ai_visual_x/y/z`, `mex_ai_visual_yaw` and
 `mex_ai_visual_refresh` to customize model/pose. See [AI Driver docs](docs/AI_DRIVER.md).
 The operator is visible in dry-run mode; it does not imply that automatic
-sign recognition or autonomous route following is implemented.
+sign recognition or autonomous route following is implemented. The operator
+position is now calibrated in the **train's own axes**, not the rotated jeep
+pod axes (`mex_ai_operator_x/y/z` and `mex_ai_operator_yaw`).
+
+Admin players can issue commands through chat: `!mexai prevezmi`,
+`!mexai jed do <stanice>`, `!mexai zastav`, `!mexai pokracuj`,
+`!mexai ars`, `!mexai priprav`, and
+`!mexai svetla pult zapni`/`vypni`. Unknown conversational text
+is answered by the Ollama backend through a separate read-only chat
+protocol, and cannot directly issue train control commands. If a player
+is driving, AI takeover is queued until they exit the original front
+driver seat. `ОЧ` is a **missing ARS frequency indicator**; when active,
+MEX AI requests braking and does not forge lamp states.
+
+The experimental `mex_ai_ars_only 1` mode allows up to 15 km/h
+under genuine active ARS conditions when the map has no documented
+route graph. This is opt-in and cannot provide station navigation.
+`mex_ai_live` still defaults to 0.
 
 ## AI Metro Driver (experimental)
 
