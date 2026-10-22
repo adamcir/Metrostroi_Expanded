@@ -29,7 +29,7 @@ if [ -z "$DEST" ]; then
 fi
 [ -f "$SRC/mex_ai_server.js" ] || { echo "Source backend missing: $SRC" >&2; exit 1; }
 mkdir -p "$DEST/test"
-for ITEM in mex_ai_server.js driver_guide.md chat_guide.md package.json example_request.json README.md test/server.test.js; do
+for ITEM in mex_ai_server.js driver_guide.md chat_guide.md package.json example_request.json README.md test/server.test.js test/chat.test.js; do
     if { [ "$ITEM" = driver_guide.md ] || [ "$ITEM" = chat_guide.md ]; } && [ -f "$DEST/$ITEM" ] && [ "$FORCE" -eq 0 ]; then
         echo "Preserving customized driver_guide.md"
     else
