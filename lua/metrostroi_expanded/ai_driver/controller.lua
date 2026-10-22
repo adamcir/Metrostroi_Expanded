@@ -4,6 +4,12 @@ local Controller = {}
 local DECELERATION_MPS2 = 0.75
 local SAFETY_MARGIN_M = 15
 
+-- Opt-in *limited* movement on maps without a calibrated MEX route graph.
+-- ARS can tell us local speed authority, not a destination or a red signal
+-- ahead. This is restricted to 15 km/h and never overrides OCh/no frequency.
+local ARS_ONLY = CreateConVar("mex_ai_ars_only", "0", FCVAR_ARCHIVE,
+    "Experimental ARS-only driving at max 15 km/h (no sign/station navigation)")
+
 local function ValidNumber(value, min, max)
     value = tonumber(value)
     if value and value == value and value >= min and value <= max then return value end
@@ -21,6 +27,9 @@ function Controller.ReadTrain(train)
             arsLimit = 0
         end
     end
+    if ars and (ars.NoFreq == true or ars.RealNoFreq == true) then
+        arsLimit = 0 -- OCh means no ARS carrier. Never infer speed permission.
+    end
     local doorsClosed = nil
     if train.LeftDoorsOpen ~= nil and train.RightDoorsOpen ~= nil then
         doorsClosed = not train.LeftDoorsOpen and not train.RightDoorsOpen
@@ -35,6 +44,7 @@ function Controller.ReadTrain(train)
         class = train:GetClass(),
         speed_kmh = math.abs(ValidNumber(train.Speed, -160, 160) or 0),
         ars_limit_kmh = arsLimit,
+        ars_no_frequency = ars and (ars.NoFreq == true or ars.RealNoFreq == true) or nil,
         kv_position = train.KV and ValidNumber(train.KV.ControllerPosition, -3, 3) or nil,
         reverser_position = train.KV and ValidNumber(train.KV.ReverserPosition, -1, 1) or nil,
         doors_closed = doorsClosed,
@@ -46,11 +56,27 @@ function Controller.ReadRoute(train)
     -- Track Builder or map integration can register a hook returning this object.
     local ok, route = pcall(hook.Run, "MEXAIDriverRouteState", train)
     if not ok or not istable(route) or route.known ~= true then
+        -- This FALLBACK is useful for verifying KV/regulation without an
+        -- annotated track map. It is not an automatic station navigation
+        -- system. Unknown/no-frequency ARS always prevents acceleration.
+        local ars = train.ALS_ARS
+        if ARS_ONLY:GetBool() and ars and ars.EnableARS == true
+            and ars.EnableALS == true and ars.NoFreq ~= true
+            and ars.RealNoFreq ~= true and tonumber(ars.SpeedLimit)
+            and tonumber(ars.SpeedLimit) > 0 then
+            return {
+                known = true, source = "ARS_ONLY",
+                current_limit_kmh = math.min(15, math.max(0, tonumber(ars.SpeedLimit))),
+                traction_allowed = true,
+                brake_prepare_active = false
+            }
+        end
         return { known = false }
     end
     -- Unknown fields are intentionally dropped. Never infer a sign by proximity alone.
     local result = {
         known = true,
+        source = "TRACK",
         traction_allowed = route.traction_allowed,
         brake_prepare_active = route.brake_prepare_active == true,
         current_limit_kmh = ValidNumber(route.current_limit_kmh, 0, 120),
@@ -85,6 +111,7 @@ end
 function Controller.GetEnvelope(state)
     local r, t = state.route, state.train
     if not r.known then return 0, "route_unknown" end
+    if t.ars_no_frequency == true then return 0, "ars_no_frequency_OCh" end
     if t.doors_closed ~= true or t.driver_present == true then return 0, "interlock" end
     local allowed = 120
     local hasAuthority = false
@@ -109,7 +136,7 @@ function Controller.GetEnvelope(state)
     return math.max(0, allowed), "route_envelope"
 end
 
-function Controller.GetPosition(state, reply, replyAge)
+function Controller.GetPosition(state, reply, replyAge, stoppedByChat)
     local train, route = state.train, state.route
     local speed = train.speed_kmh
     local envelope = Controller.GetEnvelope(state)
@@ -122,6 +149,10 @@ function Controller.GetPosition(state, reply, replyAge)
         mode = reply.mode
     end
     target = math.min(target, envelope)
+    if stoppedByChat then
+        mode = "STOP"
+        target = 0
+    end
     local delta = speed - target
     local overspeed = speed - envelope
     if (route.next_sign and route.next_sign.kind == "TRACTION_OFF" and route.next_sign.distance_m <= 5) then
