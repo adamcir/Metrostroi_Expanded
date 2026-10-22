@@ -634,6 +634,18 @@ Replicated archived server ConVars:
 - **Admin Train Fixer** is admin-only: left click fully repairs one wagon, right click repairs its consist, Reload repairs every Metrostroi wagon on the map
 - `mex_damage_status` now reports failed control/relay/light/indicator counts and the last wear-related failure
 
+## AI Driver visible operator
+
+When `mex_ai_attach` is used on a supported cab, MEX displays a seated AI operator
+using the standard `models/player/barney.mdl` (blue-uniformed) model.
+It attaches to Metrostroi's **original front** `train.DriverSeat`, never to the
+many invisible MEX **passenger** jeep seats. The character is a non-solid visual
+prop rather than a real bot player, so human takeover detection still works.
+Use `mex_ai_driver_model`, `mex_ai_visual_x/y/z`, `mex_ai_visual_yaw` and
+`mex_ai_visual_refresh` to customize model/pose. See [AI Driver docs](docs/AI_DRIVER.md).
+The operator is visible in dry-run mode; it does not imply that automatic
+sign recognition or autonomous route following is implemented.
+
 ## AI Metro Driver (experimental)
 
 A dry-run-first AI driver for Metrostroi using LuaSocket and an independent Node.js/Ollama backend is available in this repository. The installer scripts are scripts/install_ai_backend.ps1 (Windows) and scripts/install_ai_backend.sh (Linux). Train control is server-side; model guidelines live in tools/ai_driver_backend/driver_guide.md. See docs/AI_DRIVER.md for integration and safety requirements. An accurate track-route provider is not yet included, so automatic sign detection and unattended driving are not yet functional.
