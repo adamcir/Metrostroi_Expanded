@@ -1,6 +1,13 @@
 -- MEX AI Driver - opt-in, server-side train pilot (dry-run by default).
 local Bridge = include("metrostroi_expanded/ai_driver/bridge.lua")
 local Controller = include("metrostroi_expanded/ai_driver/controller.lua")
+-- A Lua reload must not leave an orphaned operator in the old seat.
+MEXAIDriver = MEXAIDriver or {}
+if MEXAIDriver.Visuals and type(MEXAIDriver.Visuals.RemoveAll) == "function" then
+    MEXAIDriver.Visuals.RemoveAll()
+end
+local Visual = include("metrostroi_expanded/ai_driver/visual.lua")
+MEXAIDriver.Visuals = Visual
 local LIVE = CreateConVar("mex_ai_live", "0", FCVAR_ARCHIVE, "Allow MEX AI to actuate compatible train KV (0=dry-run)")
 local sessions = {}
 MEXAIDriver = MEXAIDriver or {}
@@ -42,8 +49,16 @@ concommand.Add("mex_ai_attach", function(ply)
             .. " (LIVE=" .. LIVE:GetInt() .. ")")
         return
     end
-    sessions[train] = {lastSend = -100, pending = false, reply = nil, replyAt = -100, lastStatus = "new", wasLive = false}
-    Inform(ply, "Attached to " .. train:GetClass() .. " #" .. train:EntIndex() .. " (LIVE=" .. LIVE:GetInt() .. ")")
+    if Controller.ReadTrain(train).driver_present then
+        Inform(ply, "Cannot attach: a human is sitting in the front driver seat.")
+        return
+    end
+    sessions[train] = {lastSend = -100, pending = false, reply = nil, replyAt = -100,
+        lastStatus = "new", wasLive = false, lastVisualRetry = -100}
+    local ok, result = Visual.Ensure(train)
+    sessions[train].visualError = ok and nil or result
+    Inform(ply, "Attached to " .. train:GetClass() .. " #" .. train:EntIndex()
+        .. " (LIVE=" .. LIVE:GetInt() .. ", operator=" .. Visual.Describe(train) .. ")")
 end)
 
 concommand.Add("mex_ai_detach", function(ply)
@@ -52,6 +67,7 @@ concommand.Add("mex_ai_detach", function(ply)
     if IsValid(train) and sessions[train] then
         local session = sessions[train]
         sessions[train] = nil
+        Visual.Remove(train)
         -- Never actuate the train when dry-running or while a human is driving.
         if session.wasLive and not Controller.ReadTrain(train).driver_present then
             Controller.Apply(train, 0)
@@ -74,6 +90,8 @@ concommand.Add("mex_ai_status", function(ply)
             Inform(ply, string.format("train=%d speed=%.1f envelope=%.1f route=%s reply=%s pending=%s (%s)",
                 train:EntIndex(), state.train.speed_kmh, envelope,
                 tostring(state.route.known), tostring(session.reply and session.reply.mode), tostring(session.pending), reason))
+            Inform(ply, "operator=" .. Visual.Describe(train)
+                .. " visual_error=" .. tostring(session.visualError))
         end
     end
 end)
@@ -81,6 +99,19 @@ end)
 -- Externally supported integration point for Track Builder, stations and maps:
 -- hook.Add("MEXAIDriverRouteState", "...", function(train) return {known=true,...} end)
 MEXAIDriver.GetAttached = function() return sessions end
+
+concommand.Add("mex_ai_visual_refresh", function(ply)
+    if not IsAdmin(ply) then return end
+    local train = FindViewedTrain(ply)
+    if not IsValid(train) or not sessions[train] then
+        Inform(ply, "Aim at a train with an attached MEX AI Driver.")
+        return
+    end
+    local ok, result = Visual.Refresh(train)
+    sessions[train].visualError = ok and nil or result
+    Inform(ply, ok and ("Operator refreshed: " .. Visual.Describe(train))
+        or ("Operator could not be created: " .. tostring(result)))
+end)
 
 local function SendDecision(train, session, state)
     session.pending = true
@@ -103,6 +134,7 @@ timer.Remove("MEX_AI_DriverTick")
 timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
     for train, session in pairs(sessions) do
         if not IsValid(train) then
+            Visual.Remove(train)
             sessions[train] = nil
         else
             local state = {
@@ -111,9 +143,15 @@ timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
             }
             if state.train.driver_present then
                 -- Human operator always gets priority. Do not touch their KV.
+                Visual.Remove(train)
                 sessions[train] = nil
                 print("[MEX AI] Human driver detected; pilot detached from " .. train:EntIndex())
             else
+                if RealTime() - (session.lastVisualRetry or -100) >= 1 then
+                    session.lastVisualRetry = RealTime()
+                    local ok, result = Visual.Ensure(train)
+                    session.visualError = ok and nil or result
+                end
                 if not session.pending and RealTime() - session.lastSend >= 2.5 then
                     SendDecision(train, session, state)
                 end
@@ -142,4 +180,4 @@ timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
     end
 end)
 
-print("[MEX AI] Driver loaded; use mex_ai_attach / mex_ai_status. LIVE is disabled by default.")
+print("[MEX AI] Driver loaded; use mex_ai_attach / mex_ai_status / mex_ai_visual_refresh. LIVE is disabled by default.")
