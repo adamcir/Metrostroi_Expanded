@@ -44,18 +44,11 @@ function Chat.Parse(text)
         or textLower == "co ukazuje ars" then
         return {kind="ARS"}
     end
-    local destination = raw:match("^[Jj][Ee][ĎďDd]%s+[Dd][Oo]%s+(.+)$")
-        or raw:match("^[Jj][Ee][Dd]%s+[Dd][Oo]%s+(.+)$")
-        or raw:match("^[Jj][Ee][Dd]%s+[Nn][Aa]%s+(.+)$")
-    -- Most station names are Czech and can include diacritics.
-    if not destination then
-        local simple = textLower:match("^jed%s+do%s+(.+)$")
-            or textLower:match("^jed%s+na%s+(.+)$")
-        if simple then
-            local sep = raw:find("%s")
-            local rest = sep and string.Trim(raw:sub(sep+1)) or ""
-            destination = rest:match("^%S+%s+(.+)$")
-        end
+    -- Recognize Czech diacritics in the command, but preserve the original
+    -- capitalized/diacritic station name in the stored destination.
+    local destination = nil
+    if textLower:match("^jed%s+do%s+.+$") or textLower:match("^jed%s+na%s+.+$") then
+        destination = raw:match("^%S+%s+%S+%s+(.+)$")
     end
     if destination then
         destination = string.Trim(destination):gsub("[%c]"," "):sub(1,70)
