@@ -206,7 +206,9 @@ hook.Add("PlayerSay", "MEX_AI_DriverChat", function(ply, text, teamChat)
             tostring(state.route.source or "unknown"), speed, cause,
             tostring(session.paused), session.destination))
     elseif cmd.kind == "LIGHT" then
-        if Controller.ReadTrain(train).driver_present then
+        if not LIVE:GetBool() then
+            Inform(ply, "Dry-run mode: mex_ai_live 0. I will not operate switches.")
+        elseif Controller.ReadTrain(train).driver_present then
             Inform(ply, "Human driver is in the cab; panel commands disabled.")
         else
             local success, answer = Cab.SetLight(train, cmd.key, cmd.enabled)
