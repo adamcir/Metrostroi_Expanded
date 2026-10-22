@@ -1,18 +1,27 @@
 -- Server-only LuaSocket NDJSON client for MEX AI Driver.
 -- Nonblocking: no socket operation may wait for Ollama inference.
-local Bridge = {}
+local Bridge = {
+    Available = false,
+    Error = "not initialized"
+}
+-- Always export the complete public interface. In particular, the server's
+-- mex_ai_status must work even if require("socket") fails in this realm.
+function Bridge.PendingCount() return 0 end
+function Bridge.Reset() end
+
 local ok, socketLibrary = pcall(require, "socket")
 local socketLib = ok and socketLibrary or _G.socket
 if type(socketLib) ~= "table" or type(socketLib.tcp) ~= "function" then
-    print("[MEX AI] LuaSocket missing: " .. tostring(socketLibrary))
-    Bridge.Available = false
+    Bridge.Error = ok and "socket module returned no usable tcp() function" or tostring(socketLibrary)
+    print("[MEX AI] LuaSocket not available in the SERVER realm: " .. Bridge.Error)
     function Bridge.Request(_, callback)
-        if callback then callback(false, "luasocket_unavailable") end
+        if callback then callback(false, "luasocket_unavailable: " .. Bridge.Error) end
         return false
     end
     return Bridge
 end
 Bridge.Available = true
+Bridge.Error = nil
 
 local host = CreateConVar("mex_ai_host", "127.0.0.1", FCVAR_ARCHIVE, "MEX AI backend host")
 local port = CreateConVar("mex_ai_port", "3002", FCVAR_ARCHIVE, "MEX AI backend TCP port")
