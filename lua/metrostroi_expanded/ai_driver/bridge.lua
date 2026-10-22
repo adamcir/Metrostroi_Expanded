@@ -23,6 +23,7 @@ if type(socketLib) ~= "table" or type(socketLib.tcp) ~= "function" then
         if callback then callback(false, "luasocket_unavailable: " .. Bridge.Error) end
         return false
     end
+    Bridge.RequestChat = Bridge.Request
     return Bridge
 end
 Bridge.Available = true
@@ -53,7 +54,7 @@ local function CountPending()
     return n
 end
 
-function Bridge.Request(message, callback)
+local function Submit(message, callback, kind)
     if CountPending() >= MAX_PENDING then
         if callback then callback(false, "too_many_requests") end
         return false
@@ -62,7 +63,7 @@ function Bridge.Request(message, callback)
     local id = tostring(nextId)
     message.id = id
     message.v = 1
-    message.type = "decision"
+    message.type = kind
     local encoded = util.TableToJSON(message, false)
     if not encoded or #encoded > 16000 then
         if callback then callback(false, "bad_request") end
@@ -86,6 +87,7 @@ function Bridge.Request(message, callback)
     pending[id] = {
         tcp = tcp,
         id = id,
+        expectedType = kind,
         state = connected and "send" or "connect",
         payload = encoded .. "\n",
         sent = 0,
@@ -94,6 +96,19 @@ function Bridge.Request(message, callback)
         callback = callback
     }
     return true
+end
+
+function Bridge.Request(message, callback)
+    return Submit(message, callback, "decision")
+end
+
+function Bridge.RequestChat(message, callback)
+    if not istable(message) or not isstring(message.text)
+        or #message.text > 240 then
+        if callback then callback(false, "invalid_chat_request") end
+        return false
+    end
+    return Submit(message, callback, "chat")
 end
 
 function Bridge.Reset()
@@ -138,7 +153,7 @@ timer.Create("MEX_AI_BridgeTick", 0.05, 0, function()
                     Finish(id, false, "mismatched_id")
                 elseif data.type == "error" then
                     Finish(id, false, tostring(data.error))
-                elseif data.type ~= "decision" or data.v ~= 1 then
+                elseif data.type ~= req.expectedType or data.v ~= 1 then
                     Finish(id, false, "invalid_protocol")
                 else
                     Finish(id, true, data)
