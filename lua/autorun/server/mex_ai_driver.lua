@@ -7,8 +7,13 @@ MEXAIDriver = MEXAIDriver or {}
 MEXAIDriver.Controller = Controller
 
 local function Inform(ply, text)
-    print("[MEX AI] " .. text)
-    if IsValid(ply) then ply:ChatPrint("[MEX AI] " .. text) end
+    -- ChatPrint may also be mirrored to the local console. Send one message
+    -- per invocation instead of printing it twice for player commands.
+    if IsValid(ply) then
+        ply:ChatPrint("[MEX AI] " .. text)
+    else
+        print("[MEX AI] " .. text)
+    end
 end
 
 local function FindViewedTrain(ply)
@@ -32,7 +37,12 @@ concommand.Add("mex_ai_attach", function(ply)
         Inform(ply, "Aim at a supported 81-717 cab train (KV_70).")
         return
     end
-    sessions[train] = {lastSend = -100, pending = false, reply = nil, replyAt = -100, lastStatus = "new"}
+    if sessions[train] then
+        Inform(ply, "Already attached to " .. train:GetClass() .. " #" .. train:EntIndex()
+            .. " (LIVE=" .. LIVE:GetInt() .. ")")
+        return
+    end
+    sessions[train] = {lastSend = -100, pending = false, reply = nil, replyAt = -100, lastStatus = "new", wasLive = false}
     Inform(ply, "Attached to " .. train:GetClass() .. " #" .. train:EntIndex() .. " (LIVE=" .. LIVE:GetInt() .. ")")
 end)
 
@@ -40,9 +50,12 @@ concommand.Add("mex_ai_detach", function(ply)
     if not IsAdmin(ply) then return end
     local train = FindViewedTrain(ply)
     if IsValid(train) and sessions[train] then
+        local session = sessions[train]
         sessions[train] = nil
-        -- Stop applying traction when control is relinquished.
-        Controller.Apply(train, 0)
+        -- Never actuate the train when dry-running or while a human is driving.
+        if session.wasLive and not Controller.ReadTrain(train).driver_present then
+            Controller.Apply(train, 0)
+        end
         Inform(ply, "Detached " .. train:EntIndex())
     else
         Inform(ply, "Look at an attached cab train.")
@@ -51,7 +64,9 @@ end)
 
 concommand.Add("mex_ai_status", function(ply)
     if not IsAdmin(ply) then return end
-    Inform(ply, "LuaSocket=" .. tostring(Bridge.Available) .. " LIVE=" .. LIVE:GetInt() .. " pending=" .. Bridge.PendingCount())
+    local pendingCount = type(Bridge.PendingCount) == "function" and Bridge.PendingCount() or 0
+    local socketStatus = Bridge.Available and "OK" or ("UNAVAILABLE (" .. tostring(Bridge.Error or "module not loaded") .. ")")
+    Inform(ply, "LuaSocket=" .. socketStatus .. " LIVE=" .. LIVE:GetInt() .. " pending=" .. pendingCount)
     for train, session in pairs(sessions) do
         if IsValid(train) then
             local state = {train = Controller.ReadTrain(train), route = Controller.ReadRoute(train)}
@@ -95,8 +110,7 @@ timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
                 route = Controller.ReadRoute(train)
             }
             if state.train.driver_present then
-                -- Human operator always gets priority.
-                Controller.Apply(train, 0)
+                -- Human operator always gets priority. Do not touch their KV.
                 sessions[train] = nil
                 print("[MEX AI] Human driver detected; pilot detached from " .. train:EntIndex())
             else
@@ -108,8 +122,14 @@ timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
                 session.lastPosition = position
                 session.lastTarget = target
                 session.lastMode = mode
+                if not LIVE:GetBool() and session.wasLive then
+                    -- One-time safe relinquish when live control is turned off.
+                    Controller.Apply(train, 0)
+                    session.wasLive = false
+                end
                 if LIVE:GetBool() then
                     local ok, err = Controller.Apply(train, position)
+                    if ok then session.wasLive = true end
                     if not ok and session.lastStatus ~= err then
                         session.lastStatus = err
                         print("[MEX AI] Cannot actuate #" .. train:EntIndex() .. ": " .. tostring(err))
