@@ -2,10 +2,19 @@
 local Visual = {Active = {}}
 local SHOW = CreateConVar("mex_ai_visual", "1", FCVAR_ARCHIVE)
 local MODEL = CreateConVar("mex_ai_driver_model", "models/player/barney.mdl", FCVAR_ARCHIVE)
-local DX = CreateConVar("mex_ai_visual_x", "0", FCVAR_ARCHIVE)
-local DY = CreateConVar("mex_ai_visual_y", "0", FCVAR_ARCHIVE)
-local DZ = CreateConVar("mex_ai_visual_z", "-26", FCVAR_ARCHIVE)
-local YAW = CreateConVar("mex_ai_visual_yaw", "90", FCVAR_ARCHIVE)
+-- New train-local pose controls (old seat-local offsets are intentionally not
+-- reused because the rotated jeep pod offset put the model under the dashboard).
+-- A 81-717 driver seat lives at train x=421, y=0, z=-15.2 Source units.
+-- Shift the actor *behind* that point by 30 SU, and lift it 14 SU compared
+-- with the previous seat-local -26 setting.
+local DX = CreateConVar("mex_ai_operator_x", "-30", FCVAR_ARCHIVE,
+    "AI model offset in train-local X from original cab driver-seat anchor")
+local DY = CreateConVar("mex_ai_operator_y", "0", FCVAR_ARCHIVE,
+    "AI model offset in train-local Y from cab driver-seat anchor")
+local DZ = CreateConVar("mex_ai_operator_z", "-12", FCVAR_ARCHIVE,
+    "AI model offset in train-local Z from cab driver-seat anchor")
+local YAW = CreateConVar("mex_ai_operator_yaw", "0", FCVAR_ARCHIVE,
+    "AI model yaw RELATIVE TO TRAIN FORWARD, not rotated jeep pod")
 
 function Visual.FindSeat(train)
     if not IsValid(train) then return nil, "invalid_train" end
@@ -43,15 +52,16 @@ local function ModelPath()
     return path
 end
 
-local function Pose(actor)
-    if not IsValid(actor) then return end
-    local seat = actor:GetParent()
-    if not IsValid(seat) then return end
-    actor:SetPos(seat:LocalToWorld(Vector(
+local function Pose(actor, train, seat)
+    if not IsValid(actor) or not IsValid(train) or not IsValid(seat) then return end
+    -- The real Metrostroi jeep pod is rotated -90 degrees relative to the
+    -- vehicle. Use the TRAIN basis instead or it shifts sideways/under the cab.
+    local seatLocal = train:WorldToLocal(seat:GetPos())
+    actor:SetLocalPos(seatLocal + Vector(
         math.Clamp(DX:GetFloat(), -100, 100),
         math.Clamp(DY:GetFloat(), -100, 100),
-        math.Clamp(DZ:GetFloat(), -100, 100))))
-    actor:SetAngles(seat:LocalToWorldAngles(Angle(0, YAW:GetFloat(), 0)))
+        math.Clamp(DZ:GetFloat(), -100, 100)))
+    actor:SetLocalAngles(Angle(0, math.Clamp(YAW:GetFloat(), -180, 180), 0))
 end
 
 local function Sit(actor)
@@ -89,7 +99,8 @@ function Visual.Ensure(train)
     if Occupied(seat) then Visual.Remove(train) return false, "occupied_by_player" end
     local path = ModelPath()
     local actor = Visual.Active[train]
-    if IsValid(actor) and actor:GetParent() == seat and actor:GetModel() == path then
+    if IsValid(actor) and actor:GetParent() == train and actor.MEXAIDriverSeat == seat
+        and actor:GetModel() == path then
         return true, actor
     end
     Visual.Remove(train)
@@ -106,8 +117,9 @@ function Visual.Ensure(train)
     actor:SetNotSolid(true)
     actor:SetCollisionGroup(COLLISION_GROUP_IN_VEHICLE)
     actor:DrawShadow(false)
-    actor:SetParent(seat)
-    Pose(actor)
+    actor:SetParent(train)
+    actor.MEXAIDriverSeat = seat
+    Pose(actor, train, seat)
     actor:SetNW2Bool("MEXAI.Operator", true)
     actor:SetNW2Entity("MEXAI.Train", train)
     train:DeleteOnRemove(actor)
