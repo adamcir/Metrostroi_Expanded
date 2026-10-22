@@ -10,8 +10,8 @@ START=0
 MODEL="qwen3:8b"
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --dir) DEST=$2; shift 2 ;;
-        --model) MODEL=$2; shift 2 ;;
+        --dir) [ "$#" -ge 2 ] || { echo "--dir requires path" >&2; exit 2; }; DEST=$2; shift 2 ;;
+        --model) [ "$#" -ge 2 ] || { echo "--model requires value" >&2; exit 2; }; MODEL=$2; shift 2 ;;
         --force-guide) FORCE=1; shift ;;
         --pull-model) PULL=1; shift ;;
         --start) START=1; shift ;;
@@ -23,7 +23,7 @@ command -v node >/dev/null 2>&1 || { echo "Node.js >=18 required" >&2; exit 1; }
 MAJOR=$(node -p 'parseInt(process.versions.node.split(".")[0],10)')
 [ "$MAJOR" -ge 18 ] || { echo "Node.js >=18 required" >&2; exit 1; }
 if [ -z "$DEST" ]; then
-    BASE="$XDG_DATA_HOME"
+    BASE="${XDG_DATA_HOME:-}"
     if [ -z "$BASE" ]; then BASE="$HOME/.local/share"; fi
     DEST="$BASE/metrostroi-expanded/ai-backend"
 fi
@@ -37,14 +37,7 @@ for ITEM in mex_ai_server.js driver_guide.md package.json example_request.json R
         echo "Installed $ITEM"
     fi
 done
-cat > "$DEST/start_backend.sh" <<'EOF'
-#!/bin/sh
-set -eu
-cd "$(dirname "$0")"
-if [ -z "$OLLAMA_MODEL" ]; then OLLAMA_MODEL="qwen3:8b"; fi
-export OLLAMA_MODEL
-exec node mex_ai_server.js
-EOF
+printf '#!/bin/sh\nset -eu\ncd "$(dirname "$0")"\nif [ -z "${OLLAMA_MODEL:-}" ]; then OLLAMA_MODEL="%s"; fi\nexport OLLAMA_MODEL\nexec node mex_ai_server.js\n' "$MODEL" > "$DEST/start_backend.sh"
 chmod +x "$DEST/start_backend.sh"
 if ! command -v ollama >/dev/null 2>&1; then
     echo "Warning: Ollama not found." >&2
