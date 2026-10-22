@@ -65,16 +65,20 @@ Customize via the **server console**:
 ```text
 mex_ai_visual 1
 mex_ai_driver_model models/player/barney.mdl
-mex_ai_visual_x 0
-mex_ai_visual_y 0
-mex_ai_visual_z -26
-mex_ai_visual_yaw 90
+mex_ai_operator_x -30
+mex_ai_operator_y 0
+mex_ai_operator_z -12
+mex_ai_operator_yaw 0
 mex_ai_visual_refresh
 ```
 
 To calibrate the sitting position, aim at the attached cab when running
-`mex_ai_visual_refresh`. Offsets are in the **original driver seat's
-local coordinates**, and yaw is relative to that seat. The model needs
+`mex_ai_visual_refresh`. Offsets are in the **train's coordinates**, measured from the original
+front driver seat anchor (not the pod's rotated local axes). The new
+defaults move the operator about 30 Source units back and 14 units up
+relative to the first version; this fixes the avatar clipping through
+the panel seen in the October 22 screenshot. Calibration in the actual
+in-game cabin may still be needed. The model needs
 a compatible player skeleton and a sitting sequence such as
 `sit_rollercoaster`. Unsupported/custom models without a seated
 animation are removed rather than displayed standing in the cab.
@@ -172,3 +176,78 @@ this is **not a guaranteed emergency stop** for damaged/unsupported trains.
 7. Only after these checks, set `mex_ai_live 1` on the server.
 
 Do not assume integration with a real route exists just because the backend runs.
+## Chat, control of lights and ARS-only first driving mode
+
+Player chat commands are prefixed with `!mexai` or `/mexai`. Only admins
+can change train controls. Players can communicate with the assigned operator
+while aiming at its 81-717 cab or standing near the **front** cab seat.
+
+Examples:
+
+```text
+!mexai prevezmi
+!mexai jed misto me
+!mexai jed do Centralni
+!mexai priprav
+!mexai zastav
+!mexai pokracuj
+!mexai ars
+!mexai stav
+!mexai svetla pult zapni
+!mexai svetla kabina vypni
+!mexai svetla salon zapni
+!mexai svetla svetlomety vypni
+!mexai proc stojime?
+```
+
+`prevezmi`: if the human is **in the front driver seat**, take-over
+will be queued for 30 seconds. The player must exit first. AI never
+shares or overrides an occupied cab. After exiting, attach is completed
+automatically. The visual operator is a nonphysical avatar and does not
+occupy a GMod seat itself. `priprav` is live-only and stopped-only:
+sets the original 81-717 driver KV wrench and forward reverser through
+Metrostroi input methods; it does not force power, override ARS or open
+doors. To actually move the train, battery/circuits and other manual
+prerequisites must already be valid.
+
+`jed do ...` records the destination and explicitly reports that
+routing cannot proceed without a genuine navigable track map and
+station stop marker. **This is not a working destination autopilot yet.**
+`zastav` requests controlled braking; `pokracuj` clears the stop
+request, subject to all route, ARS, live mode and speed restrictions.
+
+`ars` prints live data from the actual `train.ALS_ARS` system. The
+**ОЧ / OCh lamp is the "no ARS frequency" indicator**, NOT a button.
+When no frequency is reported, the safety envelope goes to **0 km/h**.
+The AI cannot fake illumination of OCh or another safety indication.
+`L_1` (saloon), `L_2` (cab), `L_3` (panel) and `L_4` (headlights)
+are real Metrostroi switch systems. Chat commands actuate the game's
+own `ButtonEvent` toggle; MEX never calls `SetPackedBool` to paint an
+artificial lamp state. The switch state may remain off if train power is
+unavailable. No human driver may be in the seat when AI uses switches.
+
+**Read-only freeform chat** not matching a direct command goes to
+Ollama over the existing TCP bridge (`chat_guide.md`), with its own
+JSON `say` reply. The model is not allowed to issue hardware orders
+through chat. After changing `chat_guide.md` in the repository,
+run the backend installation script again to install it.
+
+**Experimental ARS-only mode** lets the basic KV controller be tested
+on an unannotated map, using only known ARS signal values, at a hard cap
+of **15 km/h**. It cannot navigate to stations or see signs ahead.
+This mode is OFF by default and must be explicitly enabled, together
+with live control, on a private test server:
+
+```text
+mex_ai_ars_only 1
+mex_ai_live 1
+```
+
+The ARS/ALS systems must be enabled with a valid nonzero ARS speed limit,
+no OCh/no frequency, doors closed, and the cab prepared. If OCh or ARS
+0 occurs, the controller requests braking, rather than bypassing any
+interlock. Disable it after testing with `mex_ai_ars_only 0`.
+The KV electric braking model is not an assured emergency stop.
+Automatic route following and reliable station stops still require
+the track graph and brake testing.
+
