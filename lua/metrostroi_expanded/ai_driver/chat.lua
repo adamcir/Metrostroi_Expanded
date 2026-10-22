@@ -24,6 +24,10 @@ function Chat.Parse(text)
         or textLower == "stridani" or textLower == "prevezmi rizeni" then
         return {kind="TAKEOVER"}
     end
+    if textLower == "priprav" or textLower == "priprav kabinu"
+        or textLower == "nastartuj" then
+        return {kind="PREPARE"}
+    end
     if textLower == "zastav" or textLower == "stuj"
         or textLower == "stop" or textLower == "brzdi" then
         return {kind="STOP"}
