@@ -14,7 +14,8 @@ const config = Object.freeze({
   timeoutMs: integerEnv("MEX_AI_TIMEOUT_MS", 20000, 1000, 120000),
   maxActive: integerEnv("MEX_AI_MAX_ACTIVE", 2, 1, 16),
   maxBytes: 32768,
-  rulesFile: path.join(__dirname, "driver_guide.md")
+  rulesFile: path.join(__dirname, "driver_guide.md"),
+  chatGuideFile: path.join(__dirname, "chat_guide.md")
 });
 
 function integerEnv(key, fallback, min, max) {
@@ -194,7 +195,43 @@ async function askModel(input, cfg = config) {
   }
 }
 
-function createBackend(cfg = config, modelFn = askModel) {
+// Conversation mode cannot issue actuator commands. It is handled separately
+// from the structured high-level decision protocol.
+async function askChat(input, cfg = config) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), cfg.timeoutMs);
+  try {
+    const prompt = fs.readFileSync(cfg.chatGuideFile || config.chatGuideFile, "utf8");
+    const r = await fetch(`${cfg.ollamaUrl}/api/chat`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: cfg.model, stream: false, think: false, keep_alive: "30m",
+        format: {
+          type: "object", additionalProperties: false, required: ["say"],
+          properties: { say: { type: "string" } }
+        },
+        options: {temperature: 0.35, num_predict: 160},
+        messages: [
+          { role: "system", content: prompt },
+          { role: "user", content: JSON.stringify(input) }
+        ]
+      })
+    });
+    if (!r.ok) throw Error("Ollama HTTP " + r.status);
+    const data = await r.json();
+    const message = JSON.parse(data?.message?.content || "{}");
+    if (!message || typeof message.say !== "string" || !message.say.trim()) {
+      throw Error("empty chat reply");
+    }
+    return message.say.slice(0, 260);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function createBackend(cfg = config, modelFn = askModel, chatFn = askChat) {
   let active = 0;
   const server = net.createServer(socket => {
     socket.setEncoding("utf8");
@@ -221,6 +258,38 @@ function createBackend(cfg = config, modelFn = askModel) {
       try { message = JSON.parse(raw); } catch { reply({ type: "error", error: "invalid_json" }); return; }
       if (message?.v === 1 && message?.type === "ping") {
         reply({ v: 1, type: "pong", id: sanitizeText(message.id, 64), model: cfg.model });
+        return;
+      }
+      if (message?.v === 1 && message?.type === "chat") {
+        const chatId = sanitizeText(message.id, 64);
+        const text = sanitizeText(message.text, 240).trim();
+        if (!/^[a-zA-Z0-9:_-]{1,64}$/.test(chatId) || !text) {
+          reply({v:1, type:"error", id:chatId, error:"invalid_chat_request"});
+          return;
+        }
+        if (active >= cfg.maxActive) {
+          reply({v:1, type:"chat", id:chatId, status:"busy",
+            say:"Mam ted moc pozadavku. Zkus to prosim za chvili."});
+          return;
+        }
+        active++;
+        try {
+          const answer = await chatFn({
+            message: text,
+            train: {
+              speed_kmh: number(message.train?.speed_kmh,0,160),
+              ars_limit_kmh: optionalNumber(message.train?.ars_limit_kmh,0,120),
+              ars_no_frequency: message.train?.ars_no_frequency === true
+            },
+            route_known: message.route?.known === true,
+            destination: sanitizeText(message.destination,70)
+          }, cfg);
+          reply({v:1, type:"chat", id:chatId, status:"ok", say:sanitizeText(answer,260)});
+        } catch(e) {
+          console.warn("[MEX AI] chat: " + e.message);
+          reply({v:1, type:"chat", id:chatId, status:"ollama_error",
+            say:"Nyni nemam spojeni s AI. Zakladni povely presto funguji."});
+        } finally { active--; }
         return;
       }
       let input;
@@ -253,4 +322,4 @@ if (require.main === module) {
     console.log(`[MEX AI] rules ${config.rulesFile}`);
   });
 }
-module.exports = { createBackend, normalizeRequest, envelope, safeDecision, parseModelDecision, config };
+module.exports = { createBackend, normalizeRequest, envelope, safeDecision, parseModelDecision, askChat, config };
