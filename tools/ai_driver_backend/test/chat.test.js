@@ -11,7 +11,7 @@ function send(port, request) {
     client.on("connect",()=>{
       const msg=JSON.stringify(request)+"\n";
       client.write(msg.slice(0,8));
-      client.end(msg.slice(8));
+      client.write(msg.slice(8));
     });
     client.on("data",buf=>received+=buf);
     client.on("error",reject);
