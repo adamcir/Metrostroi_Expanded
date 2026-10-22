@@ -27,7 +27,7 @@ if (-not $Destination) {
     }
 }
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-$items = @("mex_ai_server.js","driver_guide.md","chat_guide.md","package.json","example_request.json","README.md","test/server.test.js")
+$items = @("mex_ai_server.js","driver_guide.md","chat_guide.md","package.json","example_request.json","README.md","test/server.test.js","test/chat.test.js")
 foreach ($item in $items) {
     $from = Join-Path $src $item
     $to = Join-Path $Destination $item
