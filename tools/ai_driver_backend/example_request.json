@@ -1,0 +1,23 @@
+{
+  "v": 1,
+  "type": "decision",
+  "id": "example1",
+  "train": {
+    "id": "12",
+    "class": "gmod_subway_81-717_mvm",
+    "speed_kmh": 60,
+    "ars_limit_kmh": 80,
+    "doors_closed": true,
+    "driver_present": false
+  },
+  "route": {
+    "known": true,
+    "current_limit_kmh": 80,
+    "traction_allowed": true,
+    "next_sign": {
+      "kind": "SPEED_LIMIT",
+      "distance_m": 135,
+      "value_kmh": 40
+    }
+  }
+}

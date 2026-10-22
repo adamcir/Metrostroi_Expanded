@@ -633,3 +633,7 @@ Replicated archived server ConVars:
   - detached parts, bogeys and couplers still require aiming at that exact part
 - **Admin Train Fixer** is admin-only: left click fully repairs one wagon, right click repairs its consist, Reload repairs every Metrostroi wagon on the map
 - `mex_damage_status` now reports failed control/relay/light/indicator counts and the last wear-related failure
+
+## AI Metro Driver (experimental)
+
+A dry-run-first AI driver for Metrostroi using LuaSocket and an independent Node.js/Ollama backend is available in this repository. The installer scripts are scripts/install_ai_backend.ps1 (Windows) and scripts/install_ai_backend.sh (Linux). Train control is server-side; model guidelines live in tools/ai_driver_backend/driver_guide.md. See docs/AI_DRIVER.md for integration and safety requirements. An accurate track-route provider is not yet included, so automatic sign detection and unattended driving are not yet functional.

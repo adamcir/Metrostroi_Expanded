@@ -1,0 +1,13 @@
+{
+  "name": "metrostroi-expanded-ai-driver-backend",
+  "version": "0.1.0",
+  "private": true,
+  "main": "mex_ai_server.js",
+  "scripts": {
+    "start": "node mex_ai_server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
