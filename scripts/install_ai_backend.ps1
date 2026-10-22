@@ -27,12 +27,12 @@ if (-not $Destination) {
     }
 }
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-$items = @("mex_ai_server.js","driver_guide.md","package.json","example_request.json","README.md","test/server.test.js")
+$items = @("mex_ai_server.js","driver_guide.md","chat_guide.md","package.json","example_request.json","README.md","test/server.test.js")
 foreach ($item in $items) {
     $from = Join-Path $src $item
     $to = Join-Path $Destination $item
     if (-not (Test-Path $from)) { throw "Missing: $from" }
-    if ($item -eq "driver_guide.md" -and (Test-Path $to) -and -not $ForceGuide) {
+    if (($item -eq "driver_guide.md" -or $item -eq "chat_guide.md") -and (Test-Path $to) -and -not $ForceGuide) {
         Write-Host "Preserving custom driver_guide.md"
         continue
     }
