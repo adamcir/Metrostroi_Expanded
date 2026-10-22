@@ -177,10 +177,19 @@ hook.Add("PlayerSay", "MEX_AI_DriverChat", function(ply, text, teamChat)
         return ""
     end
     if cmd.kind == "HELP" then
-        Inform(ply, "Commands: prevezmi | jed do NAME | zastav | pokracuj | ars | stav | svetla pult/kabina/salon/svetlomety zapni/vypni")
+        Inform(ply, "Commands: prevezmi | jed do NAME | zastav | pokracuj | priprav | ars | stav | svetla pult/kabina/salon/svetlomety zapni/vypni")
     elseif cmd.kind == "DESTINATION" then
         session.destination = cmd.name
         Inform(ply, "Destination noted: " .. cmd.name .. ". Automatic navigation requires a mapped rail route and destination stopping point; I will not invent one.")
+    elseif cmd.kind == "PREPARE" then
+        if not LIVE:GetBool() then
+            Inform(ply, "Turn on mex_ai_live 1 first; dry-run never touches the cab.")
+        elseif Controller.ReadTrain(train).driver_present then
+            Inform(ply, "A human is driving; I will not operate the controls.")
+        else
+            local ok, result = Cab.Prepare(train)
+            Inform(ply, (ok and "" or "Cannot prepare cab: ") .. tostring(result))
+        end
     elseif cmd.kind == "STOP" then
         session.paused = true
         Inform(ply, "Stopping command acknowledged. Service braking requested.")
