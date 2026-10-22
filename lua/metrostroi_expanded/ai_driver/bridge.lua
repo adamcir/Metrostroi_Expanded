@@ -10,7 +10,12 @@ function Bridge.PendingCount() return 0 end
 function Bridge.Reset() end
 
 local ok, socketLibrary = pcall(require, "socket")
-local socketLib = ok and socketLibrary or _G.socket
+local socketLib = ok and socketLibrary or nil
+-- Some GMod LuaSocket builds register _G.socket and return true instead of
+-- the module table. This is how the existing Mario bridge detects them.
+if type(socketLib) ~= "table" or type(socketLib.tcp) ~= "function" then
+    socketLib = _G.socket
+end
 if type(socketLib) ~= "table" or type(socketLib.tcp) ~= "function" then
     Bridge.Error = ok and "socket module returned no usable tcp() function" or tostring(socketLibrary)
     print("[MEX AI] LuaSocket not available in the SERVER realm: " .. Bridge.Error)
