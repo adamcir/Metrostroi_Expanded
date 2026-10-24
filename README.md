@@ -74,6 +74,22 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 - `mps_debug_seats 0` — hide debug positions
 
 
+## StormFox 2 train weather (optional)
+
+StormFox 2 support adds exterior rain/wetness with running glass droplets,
+freezing windows and iced passenger-door commands below 0 °C, snow settling
+on parked train roofs, lower bogey adhesion/braking in bad weather, increased
+long-term neglect and rare thunder strikes against exposed tall wagons.
+Effects work outdoors, have capped client rendering cost, and automatically
+disable when StormFox 2 is absent.
+
+Server options: `mex_weather_enabled`, `mex_weather_mechanics`,
+`mex_weather_visuals`, `mex_weather_lightning`. Use
+`mex_weather_status` to inspect detection. Clients can set
+`mex_weather_quality 0|1|2`.
+
+See [StormFox 2 integration documentation](docs/STORMFOX2.md).
+
 ## Damage System
 
 Current damage-system module version: **0.17.0**
