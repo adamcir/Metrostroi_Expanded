@@ -7,7 +7,7 @@ if SERVER then AddCSLuaFile() end
 
 MetrostroiExpandedWeather = MetrostroiExpandedWeather or {}
 local W = MetrostroiExpandedWeather
-W.Version = "1.0.1"
+W.Version = "1.0.2"
 
 local function Subway(ent)
     if not IsValid(ent) then return false end
@@ -122,7 +122,7 @@ if SERVER then
     local enabled = CreateConVar("mex_weather_enabled", "1", flags,
         "Enable StormFox2 train weather response", 0, 1)
     local visual = CreateConVar("mex_weather_visuals", "1", flags,
-        "Enable replicated train wetness, frost and snow visuals", 0, 1)
+        "Enable rain and wet-glass visual effects", 0, 1)
     local mechanics = CreateConVar("mex_weather_mechanics", "1", flags,
         "Enable weather battery wear and frozen passenger door commands", 0, 1)
     local lightning = CreateConVar("mex_weather_lightning", "1", flags,
@@ -197,7 +197,6 @@ if SERVER then
             local speed = train:GetVelocity():Length() * 0.06858
             local wet = train:GetNW2Float("MEX.Weather.Wet", 0)
             local frost = train:GetNW2Float("MEX.Weather.Frost", 0)
-            local snow = train:GetNW2Float("MEX.Weather.Snow", 0)
             local rain = exposed and data.rain or 0
             local snowfall = exposed and data.snow or 0
             local stopped = speed < 2
@@ -222,17 +221,10 @@ if SERVER then
                     0.006 + data.temp * 0.001 or 0.002) or 0)
             ), 0, 1)
 
-            -- Snow stays on the roof only if the vehicle is parked.
-            snow = math.Clamp(snow + dt * (
-                (stopped and train.MEXWeatherStationary > 12
-                    and data.temp < 2 and snowfall * 0.010 or 0)
-                - (not stopped and speed > 15 and 0.024 or 0)
-                - (data.temp > 0 and 0.003 + data.temp * 0.0009 or 0)
-                - (not exposed and 0.004 or 0)
-            ), 0, 1)
-
+            -- Snow still reduces adhesion, but no snow layer accumulates
+            -- on the carbody or roof.
             local adhesion = math.Clamp(1 - wet * 0.10
-                - frost * 0.13 - snow * 0.13, 0.64, 1)
+                - frost * 0.13 - snowfall * 0.13, 0.64, 1)
             train:SetNW2Bool("MEX.Weather.Active", true)
             train:SetNW2Bool("MEX.Weather.Exposed", exposed)
             train:SetNW2Float("MEX.Weather.Temperature", data.temp)
@@ -240,7 +232,7 @@ if SERVER then
             train:SetNW2Float("MEX.Weather.Rain", rain)
             train:SetNW2Float("MEX.Weather.Wet", wet)
             train:SetNW2Float("MEX.Weather.Frost", frost)
-            train:SetNW2Float("MEX.Weather.Snow", snow)
+            train:SetNW2Float("MEX.Weather.Snow", 0) -- Clear legacy deposits.
             train:SetNW2Float("MEX.Weather.Adhesion", adhesion)
             train:SetNW2Bool("MEX.Weather.Visuals", visual:GetBool())
 
@@ -395,26 +387,18 @@ if SERVER then
         end
     end)
 else
-    -- Source's own glass shader/normal map, rather than opaque white quads.
+    -- Rain only: Source water normal map, no frozen-glass material/overlay.
     -- Refract requires an updated framebuffer; do that only when needed.
-    local sourceFrost = Material("models/props_c17/frostedglass_01a")
-    local wetRefract = CreateMaterial("mex_weather_rain_refraction_v2", "Refract", {
+    local wetRefract = CreateMaterial("mex_weather_rain_refraction_v3", "Refract", {
         ["$model"] = "1",
-        ["$normalmap"] = "models/props_c17/frostedglass_01a_normal",
-        ["$dudvmap"] = "models/props_c17/frostedglass_01a_normal",
+        ["$normalmap"] = "dev/water_normal",
+        ["$dudvmap"] = "dev/water_dudv",
         ["$refractamount"] = "0.008",
         ["$bluramount"] = "0",
         ["$refracttint"] = "[0.94 0.97 1]",
         ["$nocull"] = "1",
         ["$vertexalpha"] = "1",
         ["$vertexcolor"] = "1"
-    })
-    local film = CreateMaterial("mex_weather_snow_film_v2", "UnlitGeneric", {
-        ["$basetexture"] = "models/debug/debugwhite",
-        ["$translucent"] = "1",
-        ["$vertexalpha"] = "1",
-        ["$vertexcolor"] = "1",
-        ["$nocull"] = "1"
     })
     local maxDistSq = 2800 * 2800
     local quality = CreateClientConVar("mex_weather_quality", "1", true, false,
@@ -516,29 +500,12 @@ else
         end
     end
 
-    local function WindowOverlay(train, panels, wet, frost, wind, highQuality)
+    local function WindowOverlay(train, panels, wet, wind, highQuality)
         if #panels == 0 then return end
         local dripCount = highQuality and 5 or 3
         for index, p in ipairs(panels) do
             local x0, x1 = p.x - p.w * 0.5, p.x + p.w * 0.5
             local z0, z1 = p.z - p.h * 0.5, p.z + p.h * 0.5
-            -- Actual Source 'frostedglass_01a' contains a rippled refractive
-            -- normal map, like the glazed building doors in HL2. Frost stays
-            -- translucent; there is no opaque white ice card.
-            if frost > 0.015 and not sourceFrost:IsError() then
-                render.SetMaterial(sourceFrost)
-                render.SetBlend(math.Clamp(frost * 0.32, 0, 0.32))
-                PaneQuad(train, p, x0, x1, z0, z1, 0.06)
-                -- Ice first grows around the edges; a stronger but still
-                -- translucent optical distortion leaves most of the pane clear.
-                local edge = math.Clamp(2 + frost * 6, 2, 8)
-                render.SetBlend(math.Clamp(frost * 0.53, 0, 0.53))
-                PaneQuad(train, p, x0, x1, z1 - edge, z1, 0.1)
-                PaneQuad(train, p, x0, x1, z0, z0 + edge * 0.65, 0.1)
-                PaneQuad(train, p, x0, x0 + edge * 0.8, z0, z1, 0.1)
-                PaneQuad(train, p, x1 - edge * 0.8, x1, z0, z1, 0.1)
-            end
-
             if wet > 0.03 and not wetRefract:IsError() then
                 render.SetMaterial(wetRefract)
                 -- Gentle distortion of the already-existing glass texture.
@@ -583,24 +550,6 @@ else
         render.SetBlend(1)
     end
 
-    local function RoofSnow(train, mins, maxs, amount)
-        if amount < 0.015 then return end
-        local z = maxs.z + 1.8
-        local length = maxs.x - mins.x
-        local width = maxs.y - mins.y
-        if length <= 0 or width <= 0 then return end
-        render.SetMaterial(film)
-        for i = 1, 7 do
-            local x = mins.x + length * (i - 0.5) / 7
-            local p = train:LocalToWorld(Vector(x, 0, z))
-            render.DrawQuadEasy(p, train:GetUp(),
-                length / 7 * 0.92, width * (0.60
-                    + math.abs(math.sin(i * 7.3)) * 0.25),
-                Color(235, 241, 247,
-                    math.floor((85 + (i % 3) * 12) * amount)), 90)
-        end
-    end
-
     hook.Add("PostDrawTranslucentRenderables",
         "MEX.Weather.TrainSurfaceEffects",
         function(depth, skybox)
@@ -621,22 +570,19 @@ else
                     or me:DistToSqr(train:WorldSpaceCenter()) > maxDistSq
                 then continue end
                 local wet = train:GetNW2Float("MEX.Weather.Wet", 0)
-                local frost = train:GetNW2Float("MEX.Weather.Frost", 0)
-                local snow = train:GetNW2Float("MEX.Weather.Snow", 0)
-                if wet + frost + snow < 0.02 then continue end
+                if wet <= 0.03 then continue end
                 local mins, maxs = train:OBBMins(), train:OBBMaxs()
                 local panels = GetWindowPanels(train, mins, maxs)
-                if #panels > 0 and (wet > 0.03 or frost > 0.015) then
+                if #panels > 0 then
                     -- Source Refract samples the scene and must be refreshed
                     -- before rendering the first pane in this 3-D pass.
                     if not refractTextureUpdated then
                         render.UpdateRefractTexture()
                         refractTextureUpdated = true
                     end
-                    WindowOverlay(train, panels, wet, frost,
+                    WindowOverlay(train, panels, wet,
                         train:GetNW2Float("MEX.Weather.Wind", 0), highQuality)
                 end
-                RoofSnow(train, mins, maxs, snow)
                 drawn = drawn + 1
                 if drawn >= (highQuality and 12 or 7) then break end
             end
