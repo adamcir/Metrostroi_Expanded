@@ -79,6 +79,13 @@ function API.TryRegister()
     end
 end
 
+-- Built-in languages are part of MEX, not the map content addons.
+for _,code in ipairs({"en","cs"}) do
+    local path="metrostroi_expanded/asnp/languages/"..code..".lua"
+    if SERVER then AddCSLuaFile(path) end
+    include(path)
+end
+
 -- Handle both load orders (MEX first or content addon first).
 timer.Create("MEXASNP_Register",1,0,API.TryRegister)
 
