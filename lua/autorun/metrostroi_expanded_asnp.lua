@@ -240,6 +240,38 @@ local function SelectedPack(train)
     end
 end
 
+-- Program II is optional. Stock 81-71 ASNP dereferences spec_wait without
+-- checking whether a custom announcer provides it, causing errors or noise.
+local function WrapProgramII(system)
+    if not system or not isfunction(system.Trigger) or system.MEXASNPProgramIIWrapped then return end
+    local original=system.Trigger
+    system.Trigger=function(self,name,value,...)
+        if value and (name=="R_Program2" or name=="R_Program2H") then
+            local train=self.Train
+            local pack=SelectedPack(train)
+            if pack then
+                local setup=Metrostroi and Metrostroi.ASNPSetup
+                local selected=setup and setup[train:GetNW2Int("Announcer",1)]
+                local line=selected and selected[self.Line]
+                -- No explicit Program II messages: do absolutely nothing.
+                -- Keep normal Program I and other ASNP controls unchanged.
+                if not line or (not line.spec_wait and not line.spec_last) then return end
+            end
+        end
+        return original(self,name,value,...)
+    end
+    system.MEXASNPProgramIIWrapped=true
+end
+
+timer.Create("MEXASNP_ProgramII",1,0,function()
+    if Metrostroi and Metrostroi.BaseSystems then
+        WrapProgramII(Metrostroi.BaseSystems["81_71_ASNP"])
+    end
+    for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+        if train.ASNP then WrapProgramII(train.ASNP) end
+    end
+end)
+
 if CLIENT then
     local function WrapPrinter(system)
         if not system or not isfunction(system.PrintText) or system.MEXASNPWrapped then return end
