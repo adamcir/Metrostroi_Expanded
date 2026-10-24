@@ -665,7 +665,7 @@ if SERVER then
         train.MEXDamageWearBlockedButtons =
             train.MEXDamageWearBlockedButtons or {}
 
-        local function blocked(self, button)
+        local function blocked(self, button, releasing)
             button = isstring(button)
                 and button:gsub("^.+:", "")
                 or button
@@ -676,6 +676,11 @@ if SERVER then
             ) or (
                 self.MEXDamageWearBlockedButtons
                 and self.MEXDamageWearBlockedButtons[button] == true
+            ) or (
+                not releasing
+                and istable(MetrostroiExpandedWeather)
+                and isfunction(MetrostroiExpandedWeather.IsControlFrozen)
+                and MetrostroiExpandedWeather.IsControlFrozen(self, button)
             )
         end
 
@@ -684,7 +689,7 @@ if SERVER then
                 and button:gsub("^.+:", "")
                 or button
 
-            if blocked(self, normalized) then
+            if blocked(self, normalized, not state) then
                 if state
                     and isfunction(
                         MEXD.OnDamagedControlActuated
@@ -759,7 +764,7 @@ if SERVER then
                     and button:gsub("^.+:", "")
                     or button
 
-                if blocked(self, normalized) then
+                if blocked(self, normalized, true) then
                     return true
                 end
 
@@ -11016,22 +11021,19 @@ if SERVER then
             return true
         end
 
-        -- StormFox 2 compatibility.
-        if istable(StormFox2)
-            and istable(StormFox2.DownFall)
-            and isfunction(
-                StormFox2.DownFall.GetAmount
-            )
-        then
-            local ok, amount =
-                pcall(
-                    StormFox2.DownFall.GetAmount
-                )
-
-            if ok
-                and tonumber(amount)
+        -- StormFox 2: use Weather.GetRainAmount (not DownFall.GetAmount),
+        -- and do not treat snow as liquid rain.
+        if istable(StormFox2) and istable(StormFox2.Weather) then
+            if istable(MetrostroiExpandedWeather)
+                and isfunction(MetrostroiExpandedWeather.IsRaining)
             then
-                return tonumber(amount) > 0.02
+                return MetrostroiExpandedWeather.IsRaining(train)
+            end
+            if isfunction(StormFox2.Weather.GetRainAmount) then
+                local ok, amount = pcall(StormFox2.Weather.GetRainAmount)
+                if ok and isnumber(amount) then
+                    return amount > 0.02
+                end
             end
         end
 
@@ -11795,13 +11797,17 @@ if SERVER then
             )
         local exposed =
             MEXD.IsTrainWeatherExposed(train)
-        local raining =
-            exposed
-            and MEXD.IsTrainInRain(train)
-        local weatheringActive =
-            freelyAbandoned
+        local raining = exposed and MEXD.IsTrainInRain(train)
+        local weatherWearFactor = raining and 1 or 0
+        if istable(MetrostroiExpandedWeather)
+            and isfunction(MetrostroiExpandedWeather.GetWearFactor)
             and exposed
-            and raining
+        then
+            weatherWearFactor = MetrostroiExpandedWeather.GetWearFactor(train)
+        end
+        local weatheringActive = exposed
+            and weatherWearFactor > 0.001
+            and not IsTrainPhysgunManipulated(train)
 
         train:SetNW2Bool(
             "MEX.Damage.NeglectAccumulating",
@@ -11835,9 +11841,10 @@ if SERVER then
             local scale =
                 MEXD.GetNeglectScale()
 
-            -- Neglect/overgrowth is intentionally strict: it accumulates only
-            -- on an unused, almost motionless wagon exposed to real rain and
-            -- open sky. Covered storage or a dry outdoor day does not grow it.
+            -- Abandoned wet trains weather fastest; active trains still
+            -- collect slow corrosion from rain, snow and freezing moisture.
+            -- No exterior weather damage in tunnels/roofed storage.
+            local usageFactor = freelyAbandoned and 1 or 0.018
             train.MEXDamageNeglectExposure =
                 math.Clamp(
                     (
@@ -11847,7 +11854,9 @@ if SERVER then
                     )
                     + dT
                         / (60 * 45)
-                        * scale,
+                        * scale
+                        * usageFactor
+                        * weatherWearFactor,
                     0,
                     1
                 )
