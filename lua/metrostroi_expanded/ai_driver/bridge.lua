@@ -9,16 +9,45 @@ local Bridge = {
 function Bridge.PendingCount() return 0 end
 function Bridge.Reset() end
 
-local ok, socketLibrary = pcall(require, "socket")
-local socketLib = ok and socketLibrary or nil
--- Some GMod LuaSocket builds register _G.socket and return true instead of
--- the module table. This is how the existing Mario bridge detects them.
-if type(socketLib) ~= "table" or type(socketLib.tcp) ~= "function" then
-    socketLib = _G.socket
+-- IMPORTANT: In GMod even pcall(require, "socket") prints "Couldn't include
+-- includes\\modules\\socket.lua" if the module is missing, and that error
+-- counts towards sv_kickerrornum. Check before invoking require().
+-- LuaSocket is an optional *server-side* module, not shipped with MEX.
+local function Usable(socket)
+    return type(socket) == "table" and type(socket.tcp) == "function"
+        and type(socket.select) == "function"
 end
-if type(socketLib) ~= "table" or type(socketLib.tcp) ~= "function" then
-    Bridge.Error = ok and "socket module returned no usable tcp() function" or tostring(socketLibrary)
-    print("[MEX AI] LuaSocket not available in the SERVER realm: " .. Bridge.Error)
+
+local socketLib = rawget(_G, "socket")
+if not Usable(socketLib) and package and package.loaded then
+    socketLib = package.loaded.socket
+end
+
+local triedRequire = false
+local requireError
+if not Usable(socketLib) then
+    local hasLuaLoader = file.Exists("includes/modules/socket.lua", "LUA")
+        or file.Exists("lua/includes/modules/socket.lua", "GAME")
+    if hasLuaLoader then
+        triedRequire = true
+        local ok, loaded = pcall(require, "socket")
+        if ok and Usable(loaded) then
+            socketLib = loaded
+        elseif Usable(rawget(_G, "socket")) then
+            -- Some LuaSocket builds export the API globally.
+            socketLib = rawget(_G, "socket")
+        else
+            requireError = ok and "socket module returned no TCP/select API" or tostring(loaded)
+        end
+    end
+end
+
+if not Usable(socketLib) then
+    Bridge.Error = triedRequire
+        and ("LuaSocket could not initialize: " .. tostring(requireError))
+        or "LuaSocket is not installed on the server (missing lua/includes/modules/socket.lua)"
+    print("[MEX AI] Driver network disabled: " .. Bridge.Error)
+    print("[MEX AI] Install both LuaSocket's includes/modules files and matching server binary in garrysmod/lua/bin. Run mex_ai_status to check.")
     function Bridge.Request(_, callback)
         if callback then callback(false, "luasocket_unavailable: " .. Bridge.Error) end
         return false
