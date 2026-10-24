@@ -71,7 +71,9 @@ function API.TryRegister()
             end
             local routes=isfunction(pack.routes) and pack.routes(pack) or pack.routes
             if not routes and istable(pack.stations) then
-                local line={Name=pack.lineName or pack.name,Loop=pack.loop or false,LED=pack.led or {5,10,5,5,5}}
+                local continuous = pack.loop == true and pack.continuousLoop == true
+                local line={Name=pack.lineName or pack.name,Loop=pack.loop or false,
+                    ContinuousLoop=continuous,LED=pack.led or {5,10,5,5,5}}
                 for index,station in ipairs(pack.stations) do
                     local prev=pack.stations[(index-2)%#pack.stations+1]
                     local nextStation=pack.stations[index%#pack.stations+1]
@@ -93,7 +95,10 @@ function API.TryRegister()
                     line[index]={station.id,station.name,station.name,
                         arr={arr,table.Copy(arr)},
                         dep={depNext,depPrev},
-                        arrlast={final,table.Copy(final)}
+                        -- Circular routes have no terminal or final-stop phrase.
+                        -- Metrostroi uses arrlast to offer a selectable endpoint,
+                        -- which otherwise silently skips the Depo stop on wrap.
+                        arrlast=not continuous and {final,table.Copy(final)} or nil
                     }
                 end
                 routes={line}
@@ -243,8 +248,13 @@ local function SelectedPack(train)
     local idx=train:GetNW2Int("Announcer",1)
     local setup=Metrostroi.ASNPSetup[idx]
     if not setup then return end
+    local map=string.lower(game.GetMap() or "")
     for _,pack in pairs(API.Packs) do
-        if pack.name==setup.name then return pack end
+        if pack.name==setup.name then
+            for _,prefix in ipairs(pack.maps or {}) do
+                if string.StartWith(map,string.lower(prefix)) then return pack end
+            end
+        end
     end
 end
 
@@ -254,8 +264,19 @@ local function WrapProgramII(system)
     if not system or not isfunction(system.Trigger) or system.MEXASNPProgramIIWrapped then return end
     local original=system.Trigger
     system.Trigger=function(self,name,value,...)
+        local train=self.Train
+        -- Even an already-configured train must never treat an intermediate
+        -- stop as the terminus of a continuous passenger circle.
+        if IsValid(train) and self.State==7 then
+            local all=Metrostroi and Metrostroi.ASNPSetup
+            local setup=all and all[train:GetNW2Int("Announcer",1)]
+            local line=setup and setup[self.Line]
+            if line and line.ContinuousLoop then
+                self.FirstStation=0
+                self.LastStation=0
+            end
+        end
         if value and (name=="R_Program2" or name=="R_Program2H") then
-            local train=self.Train
             local pack=SelectedPack(train)
             if pack then
                 local setup=Metrostroi and Metrostroi.ASNPSetup

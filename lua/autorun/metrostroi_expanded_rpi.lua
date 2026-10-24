@@ -91,10 +91,12 @@ local function BuildRoutes(id, pack)
     local stations = pack.stations
     if not istable(stations) or #stations < 2 then return end
 
+    local continuous = pack.loop == true and pack.continuousLoop == true
     local line = {
         Name = pack.lineName or pack.name or id,
         NameEn = pack.lineName or pack.name or id,
         Loop = pack.loop == true,
+        ContinuousLoop = continuous,
         LED = pack.led or {5, 10, 5, 5, 5},
         MEXRPIPackID = id
     }
@@ -114,7 +116,8 @@ local function BuildRoutes(id, pack)
             station.id, station.name, station.name,
             arr = {arrival, table.Copy(arrival)},
             dep = {forward, reverse},
-            arrlast = {terminal, table.Copy(terminal)}
+            -- No selectable terminal for a continuous circle (Depo is a stop).
+            arrlast = not continuous and {terminal, table.Copy(terminal)} or nil
         }
     end
     return {line}
