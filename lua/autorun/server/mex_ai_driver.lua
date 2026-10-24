@@ -42,6 +42,10 @@ end
 local function IsAdmin(ply) return not IsValid(ply) or ply:IsAdmin() end
 
 local function AttachTrain(ply, train)
+    if not Bridge.Available then
+        Inform(ply, "AI driver cannot attach: " .. tostring(Bridge.Error or "network bridge unavailable"))
+        return false
+    end
     if not Controller.Supported(train) then
         Inform(ply, "Aim at a supported 81-717 cab train (KV_70).")
         return false
@@ -327,4 +331,8 @@ timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
     end
 end)
 
-print("[MEX AI] Driver loaded; use mex_ai_attach / mex_ai_status / mex_ai_visual_refresh. LIVE is disabled by default.")
+if Bridge.Available then
+    print("[MEX AI] Driver ready; use mex_ai_attach / mex_ai_status / mex_ai_visual_refresh. LIVE is disabled by default.")
+else
+    print("[MEX AI] Driver controls disabled until the server LuaSocket dependency is installed; use mex_ai_status.")
+end
