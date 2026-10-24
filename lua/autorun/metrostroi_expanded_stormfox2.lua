@@ -612,6 +612,7 @@ else
             end
             local me = EyePos()
             local drawn = 0
+            local refractTextureUpdated = false
             local highQuality = quality:GetInt() >= 2
             for _, train in ipairs(cachedTrains) do
                 if not Subway(train)
@@ -628,7 +629,10 @@ else
                 if #panels > 0 and (wet > 0.03 or frost > 0.015) then
                     -- Source Refract samples the scene and must be refreshed
                     -- before rendering the first pane in this 3-D pass.
-                    render.UpdateRefractTexture()
+                    if not refractTextureUpdated then
+                        render.UpdateRefractTexture()
+                        refractTextureUpdated = true
+                    end
                     WindowOverlay(train, panels, wet, frost,
                         train:GetNW2Float("MEX.Weather.Wind", 0), highQuality)
                 end
