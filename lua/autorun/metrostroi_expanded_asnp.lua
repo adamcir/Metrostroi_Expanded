@@ -68,11 +68,24 @@ function API.TryRegister()
                     local prev=pack.stations[(index-2)%#pack.stations+1]
                     local nextStation=pack.stations[index%#pack.stations+1]
                     local current="station_"..station.id
+                    local function Sequence(keys,stationKey)
+                        local seq={}
+                        if pack.sounds.gong_1 then seq[#seq+1]="gong_1" end
+                        for _,key in ipairs(keys) do
+                            if pack.sounds[key] then seq[#seq+1]=key end
+                        end
+                        if stationKey and pack.sounds[stationKey] then seq[#seq+1]=stationKey end
+                        return seq
+                    end
+                    local arr=Sequence({"arr"},current)
+                    local depNext=Sequence({"doors_closing","next"},"station_"..nextStation.id)
+                    local depPrev=Sequence({"doors_closing","next"},"station_"..prev.id)
+                    local final=Sequence({"arr"},current)
+                    if pack.sounds.last then final[#final+1]="last" end
                     line[index]={station.id,station.name,station.name,
-                        arr={{"gong_1","arr",current},{"gong_1","arr",current}},
-                        dep={{"gong_1","doors_closing","next","station_"..nextStation.id},
-                             {"gong_1","doors_closing","next","station_"..prev.id}},
-                        arrlast={{"gong_1","arr",current,"last"},{"gong_1","arr",current,"last"}}
+                        arr={arr,table.Copy(arr)},
+                        dep={depNext,depPrev},
+                        arrlast={final,table.Copy(final)}
                     }
                 end
                 routes={line}
