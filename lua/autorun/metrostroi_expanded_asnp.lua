@@ -256,6 +256,7 @@ local function WrapProgramII(system)
                 -- No explicit Program II messages: do absolutely nothing.
                 -- Keep normal Program I and other ASNP controls unchanged.
                 if not line or (not line.spec_wait and not line.spec_last) then return end
+                if self.State==7 and not line.spec_wait then return end
             end
         end
         return original(self,name,value,...)
