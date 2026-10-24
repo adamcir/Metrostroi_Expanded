@@ -58,7 +58,15 @@ function API.TryRegister()
                 if file.Exists("sound/"..path,"GAME") then
                     sounds[key]={path,API.AudioDuration(path,sound[2] or 2)+0.25}
                 else
-                    print("[MEX ASNP] Missing sound: "..path)
+                    -- An unavailable sound must never be queued as a missing key.
+                    -- Metrostroi's Announcer accepts a numeric silent delay.
+                    sounds[key]=0.01
+                    API.MissingSoundWarnings=API.MissingSoundWarnings or {}
+                    if not API.MissingSoundWarnings[path] then
+                        API.MissingSoundWarnings[path]=true
+                        print("[MEX ASNP] Missing sound: "..path..
+                            " (muted; install the WAV in sound/)")
+                    end
                 end
             end
             local routes=isfunction(pack.routes) and pack.routes(pack) or pack.routes
