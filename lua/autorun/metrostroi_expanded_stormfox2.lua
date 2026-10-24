@@ -296,6 +296,45 @@ if SERVER then
         end
     end)
 
+    -- Metrostroi bogeys calculate traction and pneumatic braking from their
+    -- MotorForce/PneumaticBrakeForce each Think. Scale only *during* that
+    -- calculation, then restore the values: no cumulative multiplication,
+    -- altered pressure gauges, network hacks or direct velocity teleporting.
+    local function AttachBogeyGrip(bogey)
+        if not IsValid(bogey) or bogey:GetClass() ~= "gmod_train_bogey"
+            or bogey.MEXWeatherGripWrapped or not isfunction(bogey.Think)
+        then return end
+        local original = bogey.Think
+        bogey.MEXWeatherGripWrapped = true
+        bogey.Think = function(self, ...)
+            local train = self:GetNW2Entity("TrainEntity")
+            local grip = IsValid(train)
+                and train:GetNW2Float("MEX.Weather.Adhesion", 1) or 1
+            if not mechanics:GetBool() or grip >= 0.999 then
+                return original(self, ...)
+            end
+            local oldMotor = self.MotorForce
+            local oldBrake = self.PneumaticBrakeForce
+            if isnumber(oldMotor) then self.MotorForce = oldMotor * grip end
+            if isnumber(oldBrake) then self.PneumaticBrakeForce = oldBrake * grip end
+            local ok, result = pcall(original, self, ...)
+            self.MotorForce = oldMotor
+            self.PneumaticBrakeForce = oldBrake
+            if not ok then error(result) end
+            return result
+        end
+    end
+
+    hook.Add("OnEntityCreated", "MEX.Weather.BogeyCreated", function(ent)
+        if not IsValid(ent) or ent:GetClass() ~= "gmod_train_bogey" then return end
+        timer.Simple(0, function() AttachBogeyGrip(ent) end)
+    end)
+    timer.Simple(1, function()
+        for _, bogey in ipairs(ents.FindByClass("gmod_train_bogey")) do
+            AttachBogeyGrip(bogey)
+        end
+    end)
+
     -- The full Train Fixer/reset also clears local removable weather deposits.
     timer.Simple(0, function()
         local damage = MetrostroiExpandedDamage
