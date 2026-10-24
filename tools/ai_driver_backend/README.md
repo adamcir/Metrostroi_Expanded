@@ -5,6 +5,20 @@ No npm dependencies. Ollama makes high-level decisions; train actuation stays in
 
 ## Install
 
+### Required server-side LuaSocket module
+
+The Lua bridge uses `require("socket")` to connect to the Node.js TCP backend. **LuaSocket is not included in GMod or in the MEX addon.** The addon now checks for it before calling `require`, so a missing module is handled without the engine's `Couldn't include file 'includes\\modules\\socket.lua'` error. AI attachment stays disabled until the dependency is usable; other MEX features remain available.
+
+Install [gmod_luasocket](https://github.com/danielga/gmod_luasocket) into the **Garry\'s Mod server instance** (for singleplayer, this is your local Garry\'s Mod installation):
+
+- Copy its `includes/modules/` Lua files to `garrysmod/lua/includes/modules/`, including `socket.lua`.
+- Install the matching **server-side** LuaSocket binary modules (including `socket.core`) in `garrysmod/lua/bin/`. You need a build matching the actual server OS and architecture (`gmsv_` prefix), not a client-only `gmcl_` build.
+- Restart GMod or the dedicated server. Check from the **server** console with `mex_ai_status`: it must show `LuaSocket=OK` before attaching an AI driver.
+
+Placing `socket.lua` under an addon or copying only the Lua part is not enough; the native `socket.core` module is also required. An installed Node.js backend does not provide the in-game LuaSocket module by itself. When MEX prints `LuaSocket is not installed on the server`, check the paths above. A failed `require("socket")` is not a Metrostroi train or ASNP/RPI error.
+
+### Install Node.js backend
+
 From repository root on Windows (PowerShell):
   powershell -ExecutionPolicy Bypass -File .\scripts\install_ai_backend.ps1
 
