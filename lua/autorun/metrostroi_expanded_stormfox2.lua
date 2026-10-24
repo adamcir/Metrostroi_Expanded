@@ -76,7 +76,15 @@ end
 function W.GetWearFactor(train)
     if not Subway(train) then return 0 end
     local d = W._sample
-    if not d then return 0 end
+    if not d then
+        -- Preserve old MEX precipitation / func_precipitation weathering when
+        -- StormFox2 is absent, rather than silently disabling that feature.
+        local damage = MetrostroiExpandedDamage
+        if istable(damage) and isfunction(damage.IsTrainInRain) then
+            return damage.IsTrainInRain(train) and 1 or 0
+        end
+        return 0
+    end
     local wet = train:GetNW2Float("MEX.Weather.Wet", 0)
     return math.Clamp(d.rain * 1.15 + d.snow * 0.38
         + (d.temp < 0 and wet or 0) * 0.12
@@ -272,8 +280,8 @@ if SERVER then
                 and isfunction(StormFox2.Thunder.Strike)
             then
                 local train = candidates[math.random(#candidates)]
-                local ok = pcall(StormFox2.Thunder.Strike, train, false)
-                if ok and IsValid(train) then
+                local ok, struck = pcall(StormFox2.Thunder.Strike, train, false)
+                if ok and struck ~= false and IsValid(train) then
                     local damage = MetrostroiExpandedDamage
                     if mechanics:GetBool() and istable(damage)
                         and isfunction(damage.IsElectricalDamageEnabled)
@@ -329,10 +337,40 @@ if SERVER then
         if not IsValid(ent) or ent:GetClass() ~= "gmod_train_bogey" then return end
         timer.Simple(0, function() AttachBogeyGrip(ent) end)
     end)
+    timer.Create("MEX.Weather.BogeyRefresh", 15, 0, function()
+        for _, bogey in ipairs(ents.FindByClass("gmod_train_bogey")) do
+            AttachBogeyGrip(bogey)
+        end
+    end)
     timer.Simple(1, function()
         for _, bogey in ipairs(ents.FindByClass("gmod_train_bogey")) do
             AttachBogeyGrip(bogey)
         end
+    end)
+
+    concommand.Add("mex_weather_status", function(ply)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        local data = W._sample
+        local count, outside, iced = 0, 0, 0
+        for _, train in ipairs(ents.FindByClass("gmod_subway_*")) do
+            if Subway(train) then
+                count = count + 1
+                if train:GetNW2Bool("MEX.Weather.Exposed", false) then
+                    outside = outside + 1
+                end
+                if train:GetNW2Bool("MEX.Weather.DoorsIced", false) then
+                    iced = iced + 1
+                end
+            end
+        end
+        local line = string.format(
+            "[MEX Weather] SF2: %s | temp %.1f C | rain %.2f | snow %.2f | wind %.1f m/s | thunder %s | wagons %d (outside %d, iced %d)",
+            data and "active" or "unavailable/disabled",
+            data and data.temp or 0, data and data.rain or 0,
+            data and data.snow or 0, data and data.wind or 0,
+            data and tostring(data.thunder) or "false", count, outside, iced)
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTCONSOLE, line .. "\\n")
+        else print(line) end
     end)
 
     -- The full Train Fixer/reset also clears local removable weather deposits.
