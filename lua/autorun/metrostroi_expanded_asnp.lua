@@ -62,6 +62,21 @@ function API.TryRegister()
                 end
             end
             local routes=isfunction(pack.routes) and pack.routes(pack) or pack.routes
+            if not routes and istable(pack.stations) then
+                local line={Name=pack.lineName or pack.name,Loop=pack.loop or false,LED=pack.led or {5,10,5,5,5}}
+                for index,station in ipairs(pack.stations) do
+                    local prev=pack.stations[(index-2)%#pack.stations+1]
+                    local nextStation=pack.stations[index%#pack.stations+1]
+                    local current="station_"..station.id
+                    line[index]={station.id,station.name,station.name,
+                        arr={{"gong_1","arr",current},{"gong_1","arr",current}},
+                        dep={{"gong_1","doors_closing","next","station_"..nextStation.id},
+                             {"gong_1","doors_closing","next","station_"..prev.id}},
+                        arrlast={{"gong_1","arr",current,"last"},{"gong_1","arr",current,"last"}}
+                    }
+                end
+                routes={line}
+            end
             if istable(routes) then
                 local present
                 for index,data in ipairs(Metrostroi.ASNPSetup) do
@@ -90,6 +105,143 @@ for _,code in ipairs({"en","cs"}) do
     if SERVER then AddCSLuaFile(path) end
     include(path)
 end
+
+
+-- Canonical UI marks. Only this file knows Metrostroi's source-language strings.
+-- Long phrases are matched before fragments, so route numbers remain intact.
+API.Marks = {
+    ["Карта не поддерживается"]="error.map",
+    ["Нажмите \"MENU\""]="action.menu",
+    ["нажмите \"МЕНЮ\""]="action.menu",
+    ["нажмите \"MENU\""]="action.menu",
+    ["для начала настройки"]="action.setup",
+    ["Выбор N маршрута"]="route.number",
+    ["Номер маршрута:"]="route.number",
+    ["Номер маршрута"]="route.number",
+    ["Выбор линии (кол)"]="line.loop",
+    ["Выбор линии   -"]="line.choose",
+    ["Выбор пути"]="track.choose",
+    ["Выбор ст. оборота -"]="station.terminal",
+    ["Текущая станция   -"]="station.current",
+    ["Выбор приб / отпр"]="arrival.departure",
+    ["ПЕРЕД ОТПРАВЛЕНИЕМ"]="departure.before",
+    ["НАЖМИ КНОПКУ   ОБЪЯВИТЬ"]="action.announce",
+    ["<<<  ИДЕТ ОБЪЯВЛЕНИЕ >>>"]="announcement.playing",
+    ["<<<  ИДЕТ ОБЪЯВЛЕНИЕ  >>>"]="announcement.playing",
+    ["<<< ИДЕТ ОБЪЯВЛЕНИЕ >>>"]="announcement.playing",
+    ["Кольцевой"]="line.circular",
+    ["Нет названия"]="error.unnamed",
+    ["Отпр."]="departure.short",
+    ["Приб."]="arrival.short",
+    ["От:"]="from",
+    ["До:"]="to",
+    ["следующей инфе"]="info.next",
+    ["предыдущей инфе"]="info.previous",
+    ["Для ввода номера"]="action.number",
+    ["Для перехода к"]="action.go",
+    ["Для выбора +"]="action.plus",
+    ["Для выбора -"]="action.minus",
+    ["Для настройки выбора"]="action.choose",
+    ["Для подтверждения"]="action.confirm",
+    ["Для отмены"]="action.cancel",
+    ["Для подтверждения выбора"]="action.confirm",
+    ["Бл.Л"]="door.left",
+    ["Бл.П"]="door.right",
+    ["Выбор"]="choose",
+    ["станция"]="station",
+    ["Станция"]="station",
+    ["Меню"]="menu",
+    ["МЕНЮ"]="menu",
+    ["Client error"]="error.client",
+    ["No announcer at client"]="error.announcer",
+    ["No line at client"]="error.line"
+}
+API.MarkList = {}
+for original,mark in pairs(API.Marks) do
+    API.MarkList[#API.MarkList+1]={original,mark}
+end
+table.sort(API.MarkList,function(a,b) return #a[1]>#b[1] end)
+
+function API.ResolveLanguage(code,mark)
+    local language=API.Languages[code] or API.Languages.en or {}
+    local fallback=API.Languages.en or {}
+    return language[mark] or fallback[mark] or mark
+end
+
+function API.ParseDisplay(text)
+    if not isstring(text) then return text end
+    local mark=API.Marks[text]
+    if mark then return mark end
+    -- Dynamic data is preserved; known fragments become marks in place.
+    local replacements={}
+    local count=0
+    local result=text
+    for _,pair in ipairs(API.MarkList) do
+        if result:find(pair[1],1,true) then
+            count=count+1
+            local token=string.format("\1MEX%d\2",count)
+            result=string.Replace(result,pair[1],token)
+            replacements[token]=pair[2]
+        end
+    end
+    return result,replacements
+end
+
+function API.LocalizeDisplay(code,value)
+    if not isstring(value) then return value end
+    local parsed,tokens=API.ParseDisplay(value)
+    if not tokens then return API.ResolveLanguage(code,parsed) end
+    for token,mark in pairs(tokens) do
+        parsed=string.Replace(parsed,token,API.ResolveLanguage(code,mark))
+    end
+    return parsed
+end
+
+local function SelectedPack(train)
+    if not IsValid(train) or not Metrostroi or not Metrostroi.ASNPSetup then return end
+    local idx=train:GetNW2Int("Announcer",1)
+    local setup=Metrostroi.ASNPSetup[idx]
+    if not setup then return end
+    for _,pack in pairs(API.Packs) do
+        if pack.name==setup.name then return pack end
+    end
+end
+
+if CLIENT then
+    local function WrapPrinter(system)
+        if not system or not isfunction(system.PrintText) or system.MEXASNPWrapped then return end
+        local original=system.PrintText
+        system.PrintText=function(self,x,y,value,inverse)
+            local pack=SelectedPack(self.Train)
+            if pack then value=API.LocalizeDisplay(pack.language or "en",value) end
+            return original(self,x,y,value,inverse)
+        end
+        system.MEXASNPWrapped=true
+    end
+    timer.Create("MEXASNP_Localize",1,0,function()
+        if Metrostroi and Metrostroi.BaseSystems then WrapPrinter(Metrostroi.BaseSystems["81_71_ASNP"]) end
+        for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+            if train.ASNP then WrapPrinter(train.ASNP) end
+        end
+    end)
+end
+
+-- Content discovery is run by MEX; external addons need only provide files.
+API.LoadedFiles=API.LoadedFiles or {}
+timer.Create("MEXASNP_Discover",1,0,function()
+    for _,kind in ipairs({"languages","lines"}) do
+        local files=file.Find("mex_asnp/"..kind.."/*.lua","LUA")
+        for _,name in ipairs(files or {}) do
+            local path="mex_asnp/"..kind.."/"..name
+            if not API.LoadedFiles[path] then
+                if SERVER then AddCSLuaFile(path) end
+                local ok,err=pcall(include,path)
+                if ok then API.LoadedFiles[path]=true
+                else ErrorNoHalt("[MEX ASNP] "..path..": "..tostring(err).."\n") end
+            end
+        end
+    end
+end)
 
 -- Handle both load orders (MEX first or content addon first).
 timer.Create("MEXASNP_Register",1,0,API.TryRegister)
