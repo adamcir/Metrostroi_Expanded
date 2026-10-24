@@ -124,6 +124,16 @@ end
 -- Long phrases are matched before fragments, so route numbers remain intact.
 API.Marks = {
     ["Карта не поддерживается"]="error.map",
+    ["следующей цифре"]="digit.next",
+    ["предыдущей цифре"]="digit.previous",
+    ["нажмите \"+\" или \"-\""]="action.plusminus",
+    ["Нажмите \"+\" или \"-\""]="action.plusminus",
+    ["Для возврата к"]="action.back",
+    ["Маршрут"]="route.label",
+    ["Путь"]="track.label",
+    ["первый"]="ordinal.first",
+    ["Конечная станция"]="station.terminal",
+    ["Проверьте данные"]="action.verify",
     ["Нажмите \"MENU\""]="action.menu",
     ["нажмите \"МЕНЮ\""]="action.menu",
     ["нажмите \"MENU\""]="action.menu",
