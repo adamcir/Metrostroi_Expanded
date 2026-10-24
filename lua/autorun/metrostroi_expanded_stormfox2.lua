@@ -7,7 +7,7 @@ if SERVER then AddCSLuaFile() end
 
 MetrostroiExpandedWeather = MetrostroiExpandedWeather or {}
 local W = MetrostroiExpandedWeather
-W.Version = "1.0.0"
+W.Version = "1.0.1"
 
 local function Subway(ent)
     if not IsValid(ent) then return false end
@@ -395,98 +395,192 @@ if SERVER then
         end
     end)
 else
-    local film = CreateMaterial("mex_weather_translucent_film_v1", "UnlitGeneric", {
+    -- Source's own glass shader/normal map, rather than opaque white quads.
+    -- Refract requires an updated framebuffer; do that only when needed.
+    local sourceFrost = Material("models/props_c17/frostedglass_01a")
+    local wetRefract = CreateMaterial("mex_weather_rain_refraction_v2", "Refract", {
+        ["$model"] = "1",
+        ["$normalmap"] = "models/props_c17/frostedglass_01a_normal",
+        ["$dudvmap"] = "models/props_c17/frostedglass_01a_normal",
+        ["$refractamount"] = "0.008",
+        ["$bluramount"] = "0",
+        ["$refracttint"] = "[0.94 0.97 1]",
+        ["$nocull"] = "1",
+        ["$vertexalpha"] = "1",
+        ["$vertexcolor"] = "1"
+    })
+    local film = CreateMaterial("mex_weather_snow_film_v2", "UnlitGeneric", {
         ["$basetexture"] = "models/debug/debugwhite",
         ["$translucent"] = "1",
         ["$vertexalpha"] = "1",
         ["$vertexcolor"] = "1",
         ["$nocull"] = "1"
     })
-    local streak = Material("effects/beam_generic01")
     local maxDistSq = 2800 * 2800
     local quality = CreateClientConVar("mex_weather_quality", "1", true, false,
         "Client-side weather detail: 0=off, 1=standard, 2=high", 0, 2)
     local cachedTrains = {}
     local refreshAt = 0
 
-    local function WindowOverlay(train, mins, maxs, wet, frost, wind, highQuality)
-        local length = maxs.x - mins.x
-        local height = maxs.z - mins.z
-        if length < 160 or height < 70 then return end
-        local y = math.max(math.abs(mins.y), math.abs(maxs.y)) + 1.5
-        local glassZ = mins.z + height * 0.67
-        local paneWidth = math.min(105, length / 9)
-        local paneHeight = math.min(54, height * 0.26)
-        local count = math.Clamp(math.floor(length / (highQuality and 110 or 155)),
-            2, highQuality and 12 or 9)
-        for side = -1, 1, 2 do
-            local normal = train:LocalToWorldAngles(
-                Angle(0, side > 0 and 90 or -90, 0)):Forward()
-            for i = 1, count do
-                local x = mins.x + length * (i - 0.5) / count
-                local center = train:LocalToWorld(Vector(x, side * y, glassZ))
-                if frost > 0.01 then
-                    render.SetMaterial(film)
-                    render.DrawQuadEasy(center, normal, paneWidth,
-                        paneHeight, Color(212, 232, 244,
-                            math.floor(42 * frost)), 0)
-                    -- Uneven frozen edges leave the centre relatively clear.
-                    render.DrawQuadEasy(train:LocalToWorld(Vector(
-                        x, side * (y + 0.15), glassZ + paneHeight * 0.44)),
-                        normal, paneWidth, paneHeight * 0.12,
-                        Color(238, 247, 252, math.floor(105 * frost)), 0)
+    -- Locate passenger windows from the *actual* door spacing of each train.
+    -- Never paint equally spaced rectangles over door leaves or car bodywork.
+    -- Third-party trains can provide explicit panel measurements using
+    -- train.MEXWeatherWindowPanels = {{x=..., y=..., z=..., w=..., h=..., side=1},...}
+    local function GetWindowPanels(train, mins, maxs)
+        local cached = train.MEXWeatherPanelCache
+        local model = train:GetModel()
+        if cached and cached.model == model and cached.untilTime > CurTime() then
+            return cached.panels
+        end
+
+        local panels = {}
+        if istable(train.MEXWeatherWindowPanels) then
+            for _, entry in ipairs(train.MEXWeatherWindowPanels) do
+                if istable(entry) and isnumber(entry.x) and isnumber(entry.y)
+                    and isnumber(entry.z) and isnumber(entry.w)
+                    and isnumber(entry.h) and (entry.side == 1 or entry.side == -1)
+                    and entry.w > 8 and entry.h > 8
+                then
+                    panels[#panels + 1] = {
+                        x = entry.x, y = math.abs(entry.y), z = entry.z,
+                        w = entry.w, h = entry.h, side = entry.side
+                    }
                 end
-                if wet > 0.02 then
-                    render.SetMaterial(film)
-                    render.DrawQuadEasy(center, normal, paneWidth,
-                        paneHeight, Color(145, 172, 198,
-                            math.floor(15 * wet)), 0)
-                    render.SetMaterial(streak)
-                    local n = math.floor(1 + wet * (highQuality and 6 or 3))
-                    for j = 1, n do
-                        local seed = i * 13.37 + j * 5.71 + side * 9
-                        local shift = math.sin(seed * 13.17) * 0.45
-                        local localX = x + shift * paneWidth
-                        local phase = (CurTime() * (0.35 + wet * 0.85)
-                            + seed * 0.31) % 1
-                        local zTop = glassZ + paneHeight * (0.5 - phase)
-                        local drop = paneHeight * (0.10
-                            + (0.10 + math.abs(math.sin(seed))) * wet)
-                        local drift = math.Clamp(wind * 0.25, -10, 10)
-                        local start = train:LocalToWorld(Vector(
-                            localX, side * (y + 0.5), zTop))
-                        local finish = train:LocalToWorld(Vector(
-                            localX - drift * drop / paneHeight,
-                            side * (y + 0.5), zTop - drop))
-                        render.DrawBeam(start, finish, 0.55 + wet * 0.9,
-                            0, 1, Color(194, 222, 242,
-                                math.floor(55 + wet * 95)))
+            end
+        else
+            local doorSides = {[1] = {}, [-1] = {}}
+            -- The original Metrostroi door0x1 / door1x0 ClientProps expose
+            -- useful, class-specific coordinates without guessing train length.
+            for name, prop in pairs(train.ClientProps or {}) do
+                if isstring(name) and string.match(string.lower(name),
+                    "^door%d+x[01]") and istable(prop) and isvector(prop.pos)
+                    and math.abs(prop.pos.y) > 35
+                then
+                    local side = prop.pos.y > 0 and 1 or -1
+                    doorSides[side][#doorSides[side] + 1] = prop.pos
+                end
+            end
+
+            local height = maxs.z - mins.z
+            for _, side in ipairs({-1, 1}) do
+                local doors = doorSides[side]
+                table.sort(doors, function(a, b) return a.x < b.x end)
+                local unique = {}
+                for _, pos in ipairs(doors) do
+                    -- Left/right door halves may be separate props.
+                    if #unique == 0 or pos.x - unique[#unique].x > 75 then
+                        unique[#unique + 1] = Vector(pos.x, pos.y, pos.z)
+                    end
+                end
+                for index = 2, #unique do
+                    local a, b = unique[index - 1], unique[index]
+                    local gap = b.x - a.x
+                    -- 81-717 has approximately 230 SU between doorway centres.
+                    -- Skip extraordinary intervals rather than covering a wall.
+                    if gap >= 160 and gap < 350 and height > 80 then
+                        local w = math.Clamp(gap - 122, 35, 112)
+                        local h = math.Clamp(height * 0.26, 27, 46)
+                        local z = math.Clamp((a.z + b.z) * 0.5
+                            + height * 0.43, mins.z + height * 0.52,
+                            maxs.z - h * 0.55 - 9)
+                        panels[#panels + 1] = {
+                            x = (a.x + b.x) * 0.5,
+                            y = (math.abs(a.y) + math.abs(b.y)) * 0.5 + 1.1,
+                            z = z, w = w, h = h, side = side
+                        }
                     end
                 end
             end
         end
+
+        train.MEXWeatherPanelCache = {
+            model = model, panels = panels, untilTime = CurTime() + 8
+        }
+        return panels
     end
 
-    local function BodyDrips(train, mins, maxs, amount)
-        if amount < 0.12 then return end
-        local span = maxs.x - mins.x
-        local top = mins.z + (maxs.z - mins.z) * 0.90
-        local y = math.max(math.abs(mins.y), math.abs(maxs.y)) + 1.75
-        render.SetMaterial(streak)
-        for side = -1, 1, 2 do
-            for i = 1, 9 do
-                local seed = i * 1.83 + side * 3.33
-                local x = mins.x + span * (i - 0.5) / 9
-                local phase = (CurTime() * 0.72 + seed) % 1
-                local startZ = top - phase * 18
-                local length = 6 + amount * (10 + 14 * math.abs(math.sin(seed)))
-                local start = train:LocalToWorld(Vector(x, side * y, startZ))
-                local finish = train:LocalToWorld(Vector(
-                    x - amount * 2.5, side * y, startZ - length))
-                render.DrawBeam(start, finish, 0.5 + amount * 0.6,
-                    0, 1, Color(175, 203, 224, math.floor(amount * 75)))
+    -- All geometry is in the wagon coordinate frame so glass effect follows
+    -- moving/rotating wagons. Explicit quadrilaterals keep correct orientation
+    -- independent of render.DrawQuadEasy's automatic basis.
+    local white = Color(255, 255, 255)
+    local function PaneQuad(train, panel, x0, x1, z0, z1, depth)
+        local y = panel.side * (panel.y + (depth or 0))
+        local tl = train:LocalToWorld(Vector(x0, y, z1))
+        local tr = train:LocalToWorld(Vector(x1, y, z1))
+        local br = train:LocalToWorld(Vector(x1, y, z0))
+        local bl = train:LocalToWorld(Vector(x0, y, z0))
+        if panel.side > 0 then
+            render.DrawQuad(tl, tr, br, bl, white)
+        else
+            render.DrawQuad(bl, br, tr, tl, white)
+        end
+    end
+
+    local function WindowOverlay(train, panels, wet, frost, wind, highQuality)
+        if #panels == 0 then return end
+        local dripCount = highQuality and 5 or 3
+        for index, p in ipairs(panels) do
+            local x0, x1 = p.x - p.w * 0.5, p.x + p.w * 0.5
+            local z0, z1 = p.z - p.h * 0.5, p.z + p.h * 0.5
+            -- Actual Source 'frostedglass_01a' contains a rippled refractive
+            -- normal map, like the glazed building doors in HL2. Frost stays
+            -- translucent; there is no opaque white ice card.
+            if frost > 0.015 and not sourceFrost:IsError() then
+                render.SetMaterial(sourceFrost)
+                render.SetBlend(math.Clamp(frost * 0.32, 0, 0.32))
+                PaneQuad(train, p, x0, x1, z0, z1, 0.06)
+                -- Ice first grows around the edges; a stronger but still
+                -- translucent optical distortion leaves most of the pane clear.
+                local edge = math.Clamp(2 + frost * 6, 2, 8)
+                render.SetBlend(math.Clamp(frost * 0.53, 0, 0.53))
+                PaneQuad(train, p, x0, x1, z1 - edge, z1, 0.1)
+                PaneQuad(train, p, x0, x1, z0, z0 + edge * 0.65, 0.1)
+                PaneQuad(train, p, x0, x0 + edge * 0.8, z0, z1, 0.1)
+                PaneQuad(train, p, x1 - edge * 0.8, x1, z0, z1, 0.1)
+            end
+
+            if wet > 0.03 and not wetRefract:IsError() then
+                render.SetMaterial(wetRefract)
+                -- Gentle distortion of the already-existing glass texture.
+                render.SetBlend(math.Clamp(wet * 0.20, 0, 0.20))
+                PaneQuad(train, p, x0, x1, z0, z1, 0.16)
+                -- Actual surface-hugging refractive rivulets, not glowing
+                -- camera-facing beams. Deterministic timing per window avoids
+                -- random popping and limits their positions to the glass.
+                for i = 1, dripCount do
+                    local seed = (index + 3) * 21.37 + i * 5.63
+                        + p.side * 1.31
+                    local u = 0.08 + ((math.sin(seed) * 9371.3) % 1) * 0.84
+                    local x = x0 + p.w * u
+                    local phase = (CurTime() * (0.13 + wet * 0.36)
+                        + seed * 0.37) % 1
+                    local length = p.h * (0.06 + wet * 0.18)
+                    local head = z1 + length - phase * (p.h + length * 2)
+                    local tail = head - length
+                    if head > z0 and tail < z1 then
+                        head = math.min(head, z1 - 0.6)
+                        tail = math.max(tail, z0 + 0.6)
+                        if head > tail + 0.5 then
+                            local slices = 3
+                            render.SetBlend(math.Clamp(wet * 0.30, 0, 0.30))
+                            for j = 1, slices do
+                                local top = Lerp((j - 1) / slices, head, tail)
+                                local bottom = Lerp(j / slices, head, tail)
+                                local curve = math.sin(seed * 2.7
+                                    + j * 1.6) * 0.9
+                                    + wind * 0.025 * phase
+                                local rx = math.Clamp(x + curve,
+                                    x0 + 1.5, x1 - 1.5)
+                                local thickness = 0.5 + wet * 0.6
+                                PaneQuad(train, p, rx - thickness,
+                                    rx + thickness, bottom, top, 0.25)
+                            end
+                        end
+                    end
+                end
             end
         end
+        render.SetBlend(1)
     end
 
     local function RoofSnow(train, mins, maxs, amount)
@@ -530,9 +624,14 @@ else
                 local snow = train:GetNW2Float("MEX.Weather.Snow", 0)
                 if wet + frost + snow < 0.02 then continue end
                 local mins, maxs = train:OBBMins(), train:OBBMaxs()
-                WindowOverlay(train, mins, maxs, wet, frost,
-                    train:GetNW2Float("MEX.Weather.Wind", 0), highQuality)
-                BodyDrips(train, mins, maxs, wet)
+                local panels = GetWindowPanels(train, mins, maxs)
+                if #panels > 0 and (wet > 0.03 or frost > 0.015) then
+                    -- Source Refract samples the scene and must be refreshed
+                    -- before rendering the first pane in this 3-D pass.
+                    render.UpdateRefractTexture()
+                    WindowOverlay(train, panels, wet, frost,
+                        train:GetNW2Float("MEX.Weather.Wind", 0), highQuality)
+                end
                 RoofSnow(train, mins, maxs, snow)
                 drawn = drawn + 1
                 if drawn >= (highQuality and 12 or 7) then break end
