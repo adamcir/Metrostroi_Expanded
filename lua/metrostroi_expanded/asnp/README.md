@@ -1,39 +1,57 @@
-# MEX universal ASNP loader
+# MEX Custom ASNP
 
-MEX registers ASNP announcers provided by other GMod addons. Install MEX and Metrostroi; content addons can register languages and line packs without editing MEX itself.
+MEX owns all announcer initialization, Metrostroi registration, compatibility with train spawners, and train display localization. Content addons contain only a line file and optionally one language file.
 
-## API
+## Content addon structure
+
+```text
+lua/mex_asnp/
+  lines/loopline.lua
+  languages/ad.lua
+sound/your_asnp/...
+```
+
+MEX discovers all `lua/mex_asnp/languages/*.lua` and `lua/mex_asnp/lines/*.lua` files and loads them on both realms. No autorun script or include/initialization code is required in the content addon.
+
+## Line file
 
 ```lua
-MEXASNP.RegisterLanguage("xx", {
-    next = "Next station",
-    arr = "Arriving at"
-})
-
-MEXASNP.RegisterPack("my_city_line", {
-    name = "My city ASNP",
-    language = "xx",
-    maps = {"gm_mycity_"},
-    soundRoot = "my_city_asnp",
+MEXASNP.RegisterPack("my_line", {
+    name = "My ASNP",
+    language = "en", -- en/cs built in; AD supplied by content addon
+    maps = {"gm_my_map_"},
+    lineName = "Line A",
+    loop = false,
+    soundRoot = "my_asnp",
     sounds = {
-        next = {"common/next.wav", 2.5},
-        arr = {"common/arr.wav", 2.5},
-        station_101 = {"line1/101.wav", 2.0}
+        next = {"common/next.wav", 2.0},
+        arr = {"common/arr.wav", 2.0},
+        station_101 = {"stations/101.wav", 2.0},
+        station_102 = {"stations/102.wav", 2.0}
     },
-    routes = function(pack)
-        return {{
-            Name = "Line 1", Loop = false,
-            {101, "Central", "Central",
-             arr = {{"arr","station_101"},{"arr","station_101"}}}
-        }}
-    end
+    stations = {
+        {id=101,name="Central"},
+        {id=102,name="Terminal"}
+    }
 })
 ```
 
-Register on **both server and client**. `maps` are prefixes of `game.GetMap()`. `soundRoot` is relative to `garrysmod/sound/`, and the numeric sound duration is only used when the WAV header cannot be read. The framework automatically adds silent click keys, adds a small gap after files, retries registration as Metrostroi starts, and exposes each registered pack in legacy train spawners. English (`en`) and Czech (`cs`) are bundled.
+Station order is the array order; MEX generates Metrostroi arrival/departure announcements, direction-specific next stations and circular wraparound when `loop=true`. Specify gong, last, and doors_closing sounds as needed.
 
-`MEXASNP.Translate(language, key)` resolves a phrase from the registered language dictionary, with an English fallback. Packages can use it for their own UI; they remain responsible for any special display hooks or other train-specific behavior.
+## Optional language file
 
-For independent addons, register using a retry timer if MEXASNP has not loaded yet. Do not edit the built-in English/Czech dictionaries to add your own language.
+```lua
+MEXASNP.RegisterLanguage("xx", {
+    ["route.number"]="Route",
+    ["station.current"]="Current station",
+    ["arrival.short"]="Arr:",
+    ["departure.short"]="Dep:",
+    ["error.unknown"]="Unknown phrase"
+})
+```
 
-Adamovian Metro includes an example: `adamovsky-asnp/languages/ad.lua` and `adamovsky-asnp/maps/loopline_pack.lua`.
+EN and CS live in MEX. MEX maps known original Metrostroi display strings to **semantic marks** in `API.Marks`, then looks up selected pack language. Unknown Cyrillic is logged and shown with `error.unknown`; add a new mapping in MEX's parser to support it. It does not transliterate Russian into another language. Display localization applies only to trains using a registered custom ASNP.
+
+Other optional `MEXASNP.RegisterPack` fields: `routes` for advanced custom Metrostroi route structures and `led` for line LED configuration. WAV lengths are read from their headers with the configured duration as a fallback. Existing click1/click2/click3 messages are replaced with silent delays.
+
+Install MEX alongside Metrostroi and the content addon; test in GMod after updating.
