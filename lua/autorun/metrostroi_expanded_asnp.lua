@@ -194,6 +194,16 @@ function API.LocalizeDisplay(code,value)
     for token,mark in pairs(tokens) do
         parsed=string.Replace(parsed,token,API.ResolveLanguage(code,mark))
     end
+    -- Unsupported Cyrillic texts are never shown as Russian on custom ASNP.
+    -- Warn once so each new phrase can be assigned a stable semantic mark.
+    if parsed:find("[\208-\211][\128-\191]") then
+        API.UnknownPhrases=API.UnknownPhrases or {}
+        if not API.UnknownPhrases[value] then
+            API.UnknownPhrases[value]=true
+            print("[MEX ASNP] Unmapped source text: "..value)
+        end
+        return API.ResolveLanguage(code,"error.unknown")
+    end
     return parsed
 end
 
