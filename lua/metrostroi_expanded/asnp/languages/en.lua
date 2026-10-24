@@ -1,4 +1,5 @@
 MEXASNP.RegisterLanguage("en", {
+    ["error.unknown"] = "Unknown message",
     ["error.map"] = "Map unsupported",
     ["action.menu"] = "Press MENU",
     ["action.setup"] = "To configure",
