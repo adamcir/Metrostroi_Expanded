@@ -77,9 +77,10 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 ## StormFox 2 train weather (optional)
 
 StormFox 2 support adds exterior rain/wetness with running glass droplets,
-freezing windows and iced passenger-door commands below 0 °C, snow settling
-on parked train roofs, lower bogey adhesion/braking in bad weather, increased
-long-term neglect and rare thunder strikes against exposed tall wagons.
+weather-related iced passenger-door commands below 0 °C, lower bogey
+adhesion/braking in bad weather, increased long-term neglect and rare thunder
+strikes against exposed tall wagons. Snow accumulation and frozen-glass
+visuals are disabled; snow and cold can still affect train mechanics.
 Effects work outdoors, have capped client rendering cost, and automatically
 disable when StormFox 2 is absent.
 
