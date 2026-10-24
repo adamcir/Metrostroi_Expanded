@@ -38,6 +38,8 @@ function W.Sample()
     end
 
     local weather = sf.Weather
+    -- StormFox2.GetRainAmount deliberately returns zero for snow at <= -2 C.
+    -- Snow must be read using the native IsSnowing / GetPercent pair.
     local amount = math.Clamp(SafeNumber(weather.GetRainAmount, 0), 0, 1)
     local name = ""
     if isfunction(weather.GetCurrent) then
@@ -55,9 +57,13 @@ function W.Sample()
         if ok then name = tostring(desc or "") end
     end
 
-    local snow = string.find(string.lower(name), "snow", 1, true) ~= nil
+    local snow = SafeBool(weather.IsSnowing)
+        or string.find(string.lower(name), "snow", 1, true) ~= nil
     if istable(CWI) and isfunction(CWI.IsSnowing) then
         snow = snow or SafeBool(CWI.IsSnowing)
+    end
+    if snow then
+        amount = math.Clamp(SafeNumber(weather.GetPercent, amount), 0, 1)
     end
 
     local temp = math.Clamp(SafeNumber(sf.Temperature.Get, 15), -70, 60)
@@ -280,7 +286,9 @@ if SERVER then
                 and isfunction(StormFox2.Thunder.Strike)
             then
                 local train = candidates[math.random(#candidates)]
-                local ok, struck = pcall(StormFox2.Thunder.Strike, train, false)
+                local roof = train:LocalToWorld(Vector(0, 0,
+                    train:OBBMaxs().z + 12))
+                local ok, struck = pcall(StormFox2.Thunder.Strike, roof, false)
                 if ok and struck ~= false and IsValid(train) then
                     local damage = MetrostroiExpandedDamage
                     if mechanics:GetBool() and istable(damage)
