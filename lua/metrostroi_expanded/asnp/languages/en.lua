@@ -1,4 +1,12 @@
 MEXASNP.RegisterLanguage("en", {
+    ["digit.next"] = "Next digit",
+    ["digit.previous"] = "Previous digit",
+    ["action.plusminus"] = "Press + or -",
+    ["action.back"] = "To return to",
+    ["route.label"] = "Route",
+    ["track.label"] = "Track",
+    ["ordinal.first"] = "first",
+    ["action.verify"] = "Check data",
     ["error.unknown"] = "Unknown message",
     ["error.map"] = "Map unsupported",
     ["action.menu"] = "Press MENU",
