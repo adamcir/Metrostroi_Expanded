@@ -312,32 +312,45 @@ end)
 -- Handle both load orders (MEX first or content addon first).
 timer.Create("MEXASNP_Register",1,0,API.TryRegister)
 
+-- Every Metrostroi train with an Announcer spawner option gets custom packs.
+-- The Ezh3 / 81-710 spawner filters asnp=true entries and uses a +1 UI offset
+-- for its legacy RRI option. Keep its original on-spawn conversion intact.
 if CLIENT then
-    timer.Create("MEXASNP_Spawners",2,0,function()
-        for _,pack in pairs(API.Packs) do
-            if pack.registeredID then
-                for class,record in pairs(scripted_ents.GetList() or {}) do
-                    if not string.StartWith(class,"gmod_subway_") then continue end
-                    local train=record.t
-                    if not train or not istable(train.Spawner) then continue end
-                    for _,setting in ipairs(train.Spawner) do
-                        if setting[1]~="Announcer" or setting[3]~="List" then continue end
-                        if not setting.MEXASNPOriginal then
-                            local original=setting[4]
-                            if not istable(original) and not isfunction(original) then continue end
-                            setting.MEXASNPOriginal=original
-                            setting[4]=function(...)
-                                local base=isfunction(original) and original(...) or original
-                                local list=table.Copy(istable(base) and base or {})
-                                for _,p in pairs(API.Packs) do
-                                    if p.registeredID then list[p.registeredID]=p.name end
-                                end
-                                return list
+    local function SpawnerIndex(class,id)
+        if class=="gmod_subway_ezh3" or class:find("81%-710") then
+            return id+1
+        end
+        return id
+    end
+
+    function API.PatchTrainSpawners()
+        local count=0
+        for class,record in pairs(scripted_ents.GetList() or {}) do
+            if not string.StartWith(class,"gmod_subway_") then continue end
+            local train=record.t
+            if not train or not istable(train.Spawner) then continue end
+            for _,setting in ipairs(train.Spawner) do
+                if setting[1]~="Announcer" or setting[3]~="List" then continue end
+                if not setting.MEXASNPOriginal then
+                    local original=setting[4]
+                    if not istable(original) and not isfunction(original) then continue end
+                    setting.MEXASNPOriginal=original
+                    setting[4]=function(...)
+                        local base=isfunction(original) and original(...) or original
+                        local options=table.Copy(istable(base) and base or {})
+                        for _,pack in pairs(API.Packs) do
+                            if pack.registeredID then
+                                options[SpawnerIndex(class,pack.registeredID)]=pack.name
                             end
                         end
+                        return options
                     end
+                    count=count+1
                 end
             end
         end
-    end)
+        return count
+    end
+
+    timer.Create("MEXASNP_Spawners",2,0,API.PatchTrainSpawners)
 end
