@@ -369,7 +369,7 @@ if SERVER then
             data and data.temp or 0, data and data.rain or 0,
             data and data.snow or 0, data and data.wind or 0,
             data and tostring(data.thunder) or "false", count, outside, iced)
-        if IsValid(ply) then ply:PrintMessage(HUD_PRINTCONSOLE, line .. "\\n")
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTCONSOLE, line .. "\n")
         else print(line) end
     end)
 
@@ -387,11 +387,21 @@ if SERVER then
         end
     end)
 else
-    local film = Material("models/debug/debugwhite")
+    local film = CreateMaterial("mex_weather_translucent_film_v1", "UnlitGeneric", {
+        ["$basetexture"] = "models/debug/debugwhite",
+        ["$translucent"] = "1",
+        ["$vertexalpha"] = "1",
+        ["$vertexcolor"] = "1",
+        ["$nocull"] = "1"
+    })
     local streak = Material("effects/beam_generic01")
     local maxDistSq = 2800 * 2800
+    local quality = CreateClientConVar("mex_weather_quality", "1", true, false,
+        "Client-side weather detail: 0=off, 1=standard, 2=high", 0, 2)
+    local cachedTrains = {}
+    local refreshAt = 0
 
-    local function WindowOverlay(train, mins, maxs, wet, frost, wind)
+    local function WindowOverlay(train, mins, maxs, wet, frost, wind, highQuality)
         local length = maxs.x - mins.x
         local height = maxs.z - mins.z
         if length < 160 or height < 70 then return end
@@ -399,7 +409,8 @@ else
         local glassZ = mins.z + height * 0.67
         local paneWidth = math.min(105, length / 9)
         local paneHeight = math.min(54, height * 0.26)
-        local count = math.Clamp(math.floor(length / 110), 2, 12)
+        local count = math.Clamp(math.floor(length / (highQuality and 110 or 155)),
+            2, highQuality and 12 or 9)
         for side = -1, 1, 2 do
             local normal = train:LocalToWorldAngles(
                 Angle(0, side > 0 and 90 or -90, 0)):Forward()
@@ -423,7 +434,7 @@ else
                         paneHeight, Color(145, 172, 198,
                             math.floor(15 * wet)), 0)
                     render.SetMaterial(streak)
-                    local n = math.floor(2 + wet * 6)
+                    local n = math.floor(1 + wet * (highQuality and 6 or 3))
                     for j = 1, n do
                         local seed = i * 13.37 + j * 5.71 + side * 9
                         local shift = math.sin(seed * 13.17) * 0.45
@@ -444,6 +455,28 @@ else
                                 math.floor(55 + wet * 95)))
                     end
                 end
+            end
+        end
+    end
+
+    local function BodyDrips(train, mins, maxs, amount)
+        if amount < 0.12 then return end
+        local span = maxs.x - mins.x
+        local top = mins.z + (maxs.z - mins.z) * 0.90
+        local y = math.max(math.abs(mins.y), math.abs(maxs.y)) + 1.75
+        render.SetMaterial(streak)
+        for side = -1, 1, 2 do
+            for i = 1, 9 do
+                local seed = i * 1.83 + side * 3.33
+                local x = mins.x + span * (i - 0.5) / 9
+                local phase = (CurTime() * 0.72 + seed) % 1
+                local startZ = top - phase * 18
+                local length = 6 + amount * (10 + 14 * math.abs(math.sin(seed)))
+                local start = train:LocalToWorld(Vector(x, side * y, startZ))
+                local finish = train:LocalToWorld(Vector(
+                    x - amount * 2.5, side * y, startZ - length))
+                render.DrawBeam(start, finish, 0.5 + amount * 0.6,
+                    0, 1, Color(175, 203, 224, math.floor(amount * 75)))
             end
         end
     end
@@ -469,9 +502,16 @@ else
     hook.Add("PostDrawTranslucentRenderables",
         "MEX.Weather.TrainSurfaceEffects",
         function(depth, skybox)
-            if depth or skybox then return end
+            if depth or skybox or quality:GetInt() <= 0 then return end
+            local now = CurTime()
+            if now >= refreshAt then
+                refreshAt = now + 0.75
+                cachedTrains = ents.FindByClass("gmod_subway_*")
+            end
             local me = EyePos()
-            for _, train in ipairs(ents.FindByClass("gmod_subway_*")) do
+            local drawn = 0
+            local highQuality = quality:GetInt() >= 2
+            for _, train in ipairs(cachedTrains) do
                 if not Subway(train)
                     or not train:GetNW2Bool("MEX.Weather.Active", false)
                     or not train:GetNW2Bool("MEX.Weather.Visuals", true)
@@ -483,8 +523,11 @@ else
                 if wet + frost + snow < 0.02 then continue end
                 local mins, maxs = train:OBBMins(), train:OBBMaxs()
                 WindowOverlay(train, mins, maxs, wet, frost,
-                    train:GetNW2Float("MEX.Weather.Wind", 0))
+                    train:GetNW2Float("MEX.Weather.Wind", 0), highQuality)
+                BodyDrips(train, mins, maxs, wet)
                 RoofSnow(train, mins, maxs, snow)
+                drawn = drawn + 1
+                if drawn >= (highQuality and 12 or 7) then break end
             end
         end)
 end
