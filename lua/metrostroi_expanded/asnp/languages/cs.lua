@@ -1,4 +1,12 @@
 MEXASNP.RegisterLanguage("cs", {
+    ["digit.next"] = "Dalsi cislice",
+    ["digit.previous"] = "Predchozi cislice",
+    ["action.plusminus"] = "Stisknete + nebo -",
+    ["action.back"] = "Pro navrat na",
+    ["route.label"] = "Trasa",
+    ["track.label"] = "Kolej",
+    ["ordinal.first"] = "prvni",
+    ["action.verify"] = "Zkontrolujte udaje",
     ["error.unknown"] = "Neznamy text",
     ["error.map"] = "Mapa nepodporovana",
     ["action.menu"] = "Stisknete MENU",
