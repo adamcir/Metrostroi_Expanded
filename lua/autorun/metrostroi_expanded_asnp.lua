@@ -67,7 +67,12 @@ function API.TryRegister()
                 for index,data in ipairs(Metrostroi.ASNPSetup) do
                     if data.name==pack.name then present=index break end
                 end
-                if not present then Metrostroi.AddANSPAnnouncer(pack.name,sounds,routes) end
+                if not pack._applied then
+                    -- Replace an older registration with the canonical pack data.
+                    -- AddANSPAnnouncer supports changing an existing named announcer.
+                    Metrostroi.AddANSPAnnouncer(pack.name,sounds,routes)
+                    pack._applied=true
+                end
                 for index,data in ipairs(Metrostroi.ASNPSetup) do
                     if data.name==pack.name then
                         pack.registeredID=index
