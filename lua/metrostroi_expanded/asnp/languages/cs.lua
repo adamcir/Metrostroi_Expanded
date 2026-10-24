@@ -1,4 +1,5 @@
 MEXASNP.RegisterLanguage("cs", {
+    ["error.unknown"] = "Neznamy text",
     ["error.map"] = "Mapa nepodporovana",
     ["action.menu"] = "Stisknete MENU",
     ["action.setup"] = "Pro nastaveni",
