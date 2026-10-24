@@ -128,17 +128,39 @@ function API.TryRegister()
     local id, pack = API.CurrentPack()
     if not id then return end
 
-    local current = Metrostroi.RRISetup
-    -- Metrostroi's RRI is one cassette per map, not a selectable ASNP list.
-    -- Avoid re-registering every second unless a map script replaces it.
-    if istable(current) and istable(current[1])
-        and current[1].MEXRPIPackID == id then
-        API.ActivePack = id
-        return
-    end
-
     local routes = BuildRoutes(id, pack)
     if not istable(routes) or not istable(routes[1]) then return end
+
+    -- Do not trust only the pack ID: a previous map/session may still have
+    -- the old non-continuous route that ended at Luka and skipped Depo.
+    local current = Metrostroi.RRISetup
+    local old = istable(current) and current[1]
+    local new = routes[1]
+    local same = istable(old) and old.MEXRPIPackID == id
+        and old.Loop == new.Loop
+        and old.ContinuousLoop == new.ContinuousLoop and #old == #new
+    if same then
+        for i=1,#new do
+            if not old[i] or old[i][1] ~= new[i][1] then
+                same=false
+                break
+            end
+            for direction=1,2 do
+                local a=old[i].dep and old[i].dep[direction]
+                local b=new[i].dep and new[i].dep[direction]
+                if not istable(a) or not istable(b)
+                    or table.concat(a,"|") ~= table.concat(b,"|") then
+                    same=false
+                    break
+                end
+            end
+            if not same then break end
+        end
+    end
+    if same then
+        API.ActivePack=id
+        return
+    end
     routes[1].MEXRPIPackID = id
     Metrostroi.SetRRIAnnouncer(SoundTable(pack), routes)
     API.ActivePack = id
@@ -164,6 +186,30 @@ function API.PrintStatus()
 end
 
 concommand.Add("mex_rpi_status", API.PrintStatus)
+
+-- Inspect what the *installed* Metrostroi cassette would play, not merely
+-- the content addon definition. Useful when an old map config skips Depo.
+concommand.Add("mex_rpi_route_status", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local id,pack=API.CurrentPack()
+    local route=Metrostroi and Metrostroi.RRISetup and Metrostroi.RRISetup[1]
+    if not id or not istable(route) then
+        print("[MEX RPI] No registered route on this map")
+        return
+    end
+    print("[MEX RPI] "..id.." loop="..tostring(route.Loop)
+        .." continuous="..tostring(route.ContinuousLoop))
+    for i,station in ipairs(route) do
+        local forward=station.dep and station.dep[1] or {}
+        local arrive=station.arr and station.arr[1] or {}
+        local wave=pack.soundRoot.."/"..tostring(pack.sounds
+            and pack.sounds["station_"..tostring(station[1])]
+            and pack.sounds["station_"..tostring(station[1])][1] or "")
+        print(string.format("[MEX RPI] %d %s (%d) arr=%s dep=%s wav=%s",
+            i,tostring(station[2]),station[1],table.concat(arrive,","),
+            table.concat(forward,","),tostring(file.Exists("sound/"..wave,"GAME"))))
+    end
+end)
 
 -- The addon supplies only lua/mex_rpi/lines/*.lua, like MEX ASNP packs.
 timer.Create("MEXRPI_Discover", 1, 0, function()

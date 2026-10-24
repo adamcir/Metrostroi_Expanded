@@ -108,9 +108,56 @@ function API.TryRegister()
                 for index,data in ipairs(Metrostroi.ASNPSetup) do
                     if data.name==pack.name then present=index break end
                 end
-                if not pack._applied then
-                    -- Replace an older registration with the canonical pack data.
-                    -- AddANSPAnnouncer supports changing an existing named announcer.
+                -- Hot reload and saved spawner indexes may keep an older ASNP
+                -- route even after pack files were updated. Always compare the
+                -- actual registered route rather than trusting pack._applied.
+                local oldSetup=present and Metrostroi.ASNPSetup[present]
+                local oldRoute=oldSetup and oldSetup[1]
+                local newRoute=routes[1]
+                local matches=oldRoute and newRoute
+                    and oldRoute.Loop==newRoute.Loop
+                    and oldRoute.ContinuousLoop==newRoute.ContinuousLoop
+                    and #oldRoute==#newRoute
+                if matches then
+                    for n=1,#newRoute do
+                        if not oldRoute[n] or oldRoute[n][1]~=newRoute[n][1]
+                            or not oldRoute[n].arr or not oldRoute[n].dep then
+                            matches=false
+                            break
+                        end
+                        local a=oldRoute[n]
+                        local b=newRoute[n]
+                        for direction=1,2 do
+                            if not istable(a.arr[direction]) or not istable(a.dep[direction])
+                                or table.concat(a.arr[direction],"|")~=table.concat(b.arr[direction],"|")
+                                or table.concat(a.dep[direction],"|")~=table.concat(b.dep[direction],"|") then
+                                matches=false
+                                break
+                            end
+                        end
+                        if not matches then break end
+                    end
+                end
+                if matches then
+                    local oldSounds=Metrostroi.AnnouncementsASNP and Metrostroi.AnnouncementsASNP[present]
+                    if not oldSounds then
+                        matches=false
+                    else
+                        for key,sound in pairs(sounds) do
+                            local registered=oldSounds[key]
+                            if istable(sound) then
+                                if not istable(registered) or registered[1]~=sound[1] then
+                                    matches=false
+                                    break
+                                end
+                            elseif sound~=registered then
+                                matches=false
+                                break
+                            end
+                        end
+                    end
+                end
+                if not pack._applied or not matches then
                     Metrostroi.AddANSPAnnouncer(pack.name,sounds,routes)
                     pack._applied=true
                 end
@@ -124,6 +171,56 @@ function API.TryRegister()
         end
     end
 end
+
+-- Show the actual registered route and station WAVs. This reveals stale
+-- Metrostroi configs and files that exist in Git but not in installed addons.
+concommand.Add("mex_asnp_route_status", function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local map=string.lower(game.GetMap() or "")
+    for id,pack in pairs(API.Packs) do
+        local relevant=false
+        for _,prefix in ipairs(pack.maps or {}) do
+            if string.StartWith(map,string.lower(prefix)) then relevant=true break end
+        end
+        if relevant then
+            local index
+            for i,setup in ipairs(Metrostroi and Metrostroi.ASNPSetup or {}) do
+                if setup.name==pack.name then index=i break end
+            end
+            local setup=index and Metrostroi.ASNPSetup[index]
+            local line=setup and setup[1]
+            print("[MEX ASNP] pack="..id.." index="..tostring(index)
+                .." loop="..tostring(line and line.Loop)
+                .." continuous="..tostring(line and line.ContinuousLoop))
+            if istable(line) then
+                for i,station in ipairs(line) do
+                    local arrive=station.arr and station.arr[1] or {}
+                    local depart=station.dep and station.dep[1] or {}
+                    local entry=pack.sounds and pack.sounds["station_"..tostring(station[1])]
+                    local wav=entry and (pack.soundRoot.."/"..entry[1])
+                    local soundIndex=Metrostroi.AnnouncementsASNP[index]
+                    local registered=soundIndex and soundIndex["station_"..tostring(station[1])]
+                    print(string.format("[MEX ASNP] %d %s (%d) arr=%s dep=%s wav=%s registered=%s",
+                        i,tostring(station[2]),station[1],table.concat(arrive,","),
+                        table.concat(depart,","),tostring(wav and file.Exists("sound/"..wav,"GAME")),
+                        tostring(istable(registered) and registered[1] or registered)))
+                end
+            end
+            for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+                local sys=train.ASNP
+                if sys and train:GetNW2Int("Announcer",1)==index then
+                    print("[MEX ASNP] train="..train:EntIndex()
+                        .." stationIndex="..tostring(sys.Station)
+                        .." arrived="..tostring(sys.Arrived)
+                        .." pathReverse="..tostring(sys.Path)
+                        .." first="..tostring(sys.FirstStation)
+                        .." last="..tostring(sys.LastStation)
+                        .." state="..tostring(sys.State))
+                end
+            end
+        end
+    end
+end)
 
 -- Built-in languages are part of MEX, not the map content addons.
 for _,code in ipairs({"en","cs"}) do
@@ -260,45 +357,93 @@ end
 
 -- Program II is optional. Stock 81-71 ASNP dereferences spec_wait without
 -- checking whether a custom announcer provides it, causing errors or noise.
+local function GetContinuousLine(system)
+    local train=system and system.Train
+    if not IsValid(train) or not Metrostroi or not Metrostroi.ASNPSetup then return end
+    local setup=Metrostroi.ASNPSetup[train:GetNW2Int("Announcer",1)]
+    local line=setup and setup[system.Line]
+    if line and line.Loop and line.ContinuousLoop and #line>1 then return line end
+end
+
 local function WrapProgramII(system)
     if not system or not isfunction(system.Trigger) or system.MEXASNPProgramIIWrapped then return end
     local original=system.Trigger
     system.Trigger=function(self,name,value,...)
         local train=self.Train
-        -- Even an already-configured train must never treat an intermediate
-        -- stop as the terminus of a continuous passenger circle.
-        if IsValid(train) and self.State==7 then
-            local all=Metrostroi and Metrostroi.ASNPSetup
-            local setup=all and all[train:GetNW2Int("Announcer",1)]
-            local line=setup and setup[self.Line]
-            if line and line.ContinuousLoop then
-                self.FirstStation=0
-                self.LastStation=0
-            end
+        local line=GetContinuousLine(self)
+        if line and self.State==7 then
+            self.FirstStation=0
+            self.LastStation=0
         end
+
         if value and (name=="R_Program2" or name=="R_Program2H") then
             local pack=SelectedPack(train)
             if pack then
                 local setup=Metrostroi and Metrostroi.ASNPSetup
                 local selected=setup and setup[train:GetNW2Int("Announcer",1)]
-                local line=selected and selected[self.Line]
-                -- No explicit Program II messages: do absolutely nothing.
-                -- Keep normal Program I and other ASNP controls unchanged.
-                if not line or (not line.spec_wait and not line.spec_last) then return end
-                if self.State==7 and not line.spec_wait then return end
+                local selectedLine=selected and selected[self.Line]
+                if not selectedLine or (not selectedLine.spec_wait and not selectedLine.spec_last) then return end
+                if self.State==7 and not selectedLine.spec_wait then return end
             end
         end
-        return original(self,name,value,...)
+
+        local result=original(self,name,value,...)
+        -- Stock Metrostroi's R_ASNPPath resets FirstStation/LastStation
+        -- AFTER our pre-check. Repair those flags after ANY button as well.
+        if GetContinuousLine(self) and self.State==7 then
+            self.FirstStation=0
+            self.LastStation=0
+            self.AnnounceLast=false
+        end
+        return result
     end
     system.MEXASNPProgramIIWrapped=true
 end
 
+-- Validate the actual station advance after each finished announcement.
+-- Preserve both arrival and departure at the first station when wrapping
+-- across the end of a circular line (104 Luka -> 101 Depo -> 102 Centrum).
+local function WrapContinuousNext(system)
+    if not system or not isfunction(system.Next)
+        or system.MEXASNPContinuousNextWrapped then return end
+    local original=system.Next
+    system.Next=function(self,...)
+        local line=GetContinuousLine(self)
+        if not line or self.State~=7 then return original(self,...) end
+
+        local previous=self.Station
+        local wasArrived=self.Arrived
+        local expected=previous
+        if wasArrived and type(previous)=="number" and previous>=1 and previous<=#line then
+            expected=previous+(self.Path and -1 or 1)
+            if expected<1 then expected=#line end
+            if expected>#line then expected=1 end
+        end
+        local result=original(self,...)
+        if type(expected)=="number" and previous>=1 and previous<=#line
+            and (self.Station~=expected or self.Arrived==wasArrived) then
+            print("[MEX ASNP] Corrected continuous-loop step "
+                ..tostring(previous).." -> "..tostring(expected))
+            self.Station=expected
+            self.Arrived=not wasArrived
+            if isfunction(self.UpdateBoards) then self:UpdateBoards() end
+        end
+        return result
+    end
+    system.MEXASNPContinuousNextWrapped=true
+end
+
 timer.Create("MEXASNP_ProgramII",1,0,function()
     if Metrostroi and Metrostroi.BaseSystems then
-        WrapProgramII(Metrostroi.BaseSystems["81_71_ASNP"])
+        local base=Metrostroi.BaseSystems["81_71_ASNP"]
+        WrapProgramII(base)
+        WrapContinuousNext(base)
     end
     for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
-        if train.ASNP then WrapProgramII(train.ASNP) end
+        if train.ASNP then
+            WrapProgramII(train.ASNP)
+            WrapContinuousNext(train.ASNP)
+        end
     end
 end)
 
