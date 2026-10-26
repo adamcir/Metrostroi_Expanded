@@ -441,6 +441,7 @@ API.Marks = {
     ["Маршрут"]="route.label",
     ["Путь"]="track.label",
     ["первый"]="ordinal.first",
+    ["второй"]="ordinal.second",
     ["Конечная станция"]="station.terminal",
     ["Проверьте данные"]="action.verify",
     ["Нажмите \"MENU\""]="action.menu",
