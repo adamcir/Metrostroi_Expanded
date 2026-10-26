@@ -123,6 +123,75 @@ local function BuildRoutes(id, pack)
     return {line}
 end
 
+-- RRI stores a reference to the map-wide route table when the train first
+-- initializes. SetRRIAnnouncer replaces that table, so existing trains otherwise
+-- keep playing old routes (e.g. Luka -> Centrum, skipping Depo).
+function API.RefreshTrainTables()
+    if not Metrostroi or not istable(Metrostroi.RRISetup) then return end
+    local route=Metrostroi.RRISetup[1]
+    if not istable(route) or not route.MEXRPIPackID then return end
+    for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+        local rri=train.RRI
+        -- A train with its own AnnTable is not using map-wide RRI cassettes.
+        if rri and not rri.AnnTable and rri.CurrentTable ~= Metrostroi.RRISetup then
+            rri.CurrentTable=Metrostroi.RRISetup
+            rri.Line=math.Clamp(tonumber(rri.Line) or 1,1,#Metrostroi.RRISetup)
+            local line=rri.CurrentTable[rri.Line]
+            if line and (not isnumber(rri.Station) or rri.Station<1 or rri.Station>#line) then
+                rri.Station=1
+                rri.Arrived=true
+            end
+        end
+    end
+end
+
+-- Stock RRI advances on button presses, not on a map station detector. Its
+-- end-of-line handling differs across Metrostroi versions. For continuous
+-- circles the state must always alternate departure -> arrival, wrapping
+-- modulo the station count with no terminal or jump over station 1 (Depo).
+local function PatchCircularRRI(system)
+    if not system or not isfunction(system.Trigger) or system.MEXRPICircularWrapped then return end
+    local original=system.Trigger
+    system.Trigger=function(self,name,value,...)
+        local train=self.Train
+        local line=self.CurrentTable and self.CurrentTable[self.Line]
+        if not line or not line.Loop or not line.ContinuousLoop
+            or not line.MEXRPIPackID or not IsValid(train) then
+            return original(self,name,value,...)
+        end
+        local press=value and value>0 and self.Power
+            and (name=="R_Program1" or name=="R_Program1H"
+                or name=="SB10" or name=="SB20")
+        if not press then return original(self,name,value,...) end
+        local before=self.Station
+        local arrived=self.Arrived
+        if not isnumber(before) or before<1 or before>#line then
+            self.Station=1
+            self.Arrived=true
+            before=1
+            arrived=true
+        end
+        local expected=arrived
+            and (before+(self.Path and -1 or 1)-1)%#line+1 or before
+        local result=original(self,name,value,...)
+        if self.Station~=expected or self.Arrived==arrived then
+            self.Station=expected
+            self.Arrived=not arrived
+            print("[MEX RPI] Fixed circular step "..before.." -> "..expected)
+        end
+        return result
+    end
+    system.MEXRPICircularWrapped=true
+end
+
+timer.Create("MEXRPI_CircularTrains",1,0,function()
+    if not Metrostroi or not Metrostroi.RRISetup then return end
+    if Metrostroi.BaseSystems then PatchCircularRRI(Metrostroi.BaseSystems["81_71_RRI"]) end
+    for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+        if train.RRI then PatchCircularRRI(train.RRI) end
+    end
+end)
+
 function API.TryRegister()
     if not Metrostroi or not isfunction(Metrostroi.SetRRIAnnouncer) then return end
     local id, pack = API.CurrentPack()
@@ -148,8 +217,11 @@ function API.TryRegister()
             for direction=1,2 do
                 local a=old[i].dep and old[i].dep[direction]
                 local b=new[i].dep and new[i].dep[direction]
-                if not istable(a) or not istable(b)
-                    or table.concat(a,"|") ~= table.concat(b,"|") then
+                local aa=old[i].arr and old[i].arr[direction]
+                local bb=new[i].arr and new[i].arr[direction]
+                if not istable(a) or not istable(b) or not istable(aa) or not istable(bb)
+                    or table.concat(a,"|") ~= table.concat(b,"|")
+                    or table.concat(aa,"|") ~= table.concat(bb,"|") then
                     same=false
                     break
                 end
@@ -159,11 +231,13 @@ function API.TryRegister()
     end
     if same then
         API.ActivePack=id
+        API.RefreshTrainTables()
         return
     end
     routes[1].MEXRPIPackID = id
     Metrostroi.SetRRIAnnouncer(SoundTable(pack), routes)
     API.ActivePack = id
+    API.RefreshTrainTables()
     print("[MEX RPI] Registered " .. id .. " (" .. #routes[1]
         .. " stations) on " .. game.GetMap())
 end
