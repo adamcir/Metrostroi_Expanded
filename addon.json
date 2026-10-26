@@ -1,12 +1,20 @@
 {
   "title": "Metrostroi Expanded",
   "type": "servercontent",
-  "tags": ["roleplay", "fun"],
+  "tags": [
+    "roleplay",
+    "fun"
+  ],
   "ignore": [
     "README.md",
     "LICENSE",
     "tools/*",
     ".git/*",
-    ".github/*"
+    ".github/*",
+    "docs/*",
+    "build/*",
+    "scripts/*",
+    "lua/metrostroi_expanded/asnp/README.md",
+    "lua/metrostroi_expanded/rpi/README.md"
   ]
 }
