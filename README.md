@@ -4,6 +4,36 @@
 
 The project is intended to grow into a larger realism/gameplay layer for Metrostroi. The first implemented module is the passenger-seat system.
 
+## Steam Workshop publishing (MEX only)
+
+The Git repository is the **development source**, not a Workshop-ready GMA
+folder. GMad/gmpublisher reject Markdown files inside `lua/` and PowerShell /
+shell installers inside `scripts/`. Do not delete them from Git: they are
+project documentation and optional standalone AI backend installers.
+
+On Windows, run:
+
+```powershell
+git pull
+.\tools\build_workshop.bat
+```
+
+In gmpublisher, select the folder printed by this script:
+
+```text
+<repository>\build\workshop\metrostroi-expanded
+```
+
+It contains only `addon.json` and allowable mounted game files (including all
+MEX Lua modules), and excludes README/Markdown files, external backend scripts,
+Git metadata and installer tools. Do **not** select the entire Git repository
+or any private Adamovian Metro addon. This builder leaves your working source
+and installed addon untouched and recreates only the staging folder.
+
+An optional external AI backend must be downloaded/installed separately; it
+cannot ship as a PowerShell or shell executable in a Garry's Mod GMA. Test the
+built addon in Garry's Mod before making a public Workshop release.
+
 ## Metrostroi / Track Pack Railway Model Catalog & Track Builder
 
 Open **Q → Tools → Metrostroi Expanded → Track Builder → OPEN TRACK MODEL CATALOG**.
