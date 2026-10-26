@@ -267,6 +267,7 @@ concommand.Add("mex_asnp_route_status", function(ply)
             local setup=index and Metrostroi.ASNPSetup[index]
             local line=setup and setup[1]
             print("[MEX ASNP] pack="..id.." index="..tostring(index)
+                .." serverIndex="..tostring(API.ServerIndices[id] or (SERVER and pack.registeredID) or "?")
                 .." loop="..tostring(line and line.Loop)
                 .." continuous="..tostring(line and line.ContinuousLoop))
             if istable(line) then
@@ -295,6 +296,38 @@ concommand.Add("mex_asnp_route_status", function(ply)
                         .." state="..tostring(sys.State))
                 end
             end
+        end
+    end
+end)
+
+-- The same command works in a listen server, on a dedicated server
+-- console, and on a connected client (whose ID may have been reconciled).
+concommand.Add("mex_announcer_mp_status",function(ply)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    print("[MEX AUDIO] realm="..(SERVER and "server" or "client")
+        .." map="..tostring(game.GetMap()))
+    for id,pack in pairs(API.Packs) do
+        if pack.registeredID then
+            print("[MEX AUDIO] pack="..id.." localIndex="..pack.registeredID
+                .." serverIndex="..tostring(API.ServerIndices[id] or (SERVER and pack.registeredID) or "?"))
+        end
+    end
+    local count=0
+    for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+        if train.ASNP or train.RRI then
+            count=count+1
+            if count>12 then print("[MEX AUDIO] ...");break end
+            local asnp=train.ASNP
+            local rri=train.RRI
+            print("[MEX AUDIO] train="..train:EntIndex()
+                .." class="..train:GetClass()
+                .." announcer="..train:GetNW2Int("Announcer",-1)
+                .." ASNP="..tostring(asnp and asnp.Station)
+                .." arrived="..tostring(asnp and asnp.Arrived)
+                .." RRI="..tostring(rri and rri.Station)
+                .." arrived="..tostring(rri and rri.Arrived)
+                .." routeCurrent="..tostring(rri and Metrostroi
+                    and rri.CurrentTable==Metrostroi.RRISetup))
         end
     end
 end)
