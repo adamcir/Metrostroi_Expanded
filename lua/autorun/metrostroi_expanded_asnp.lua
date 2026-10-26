@@ -538,6 +538,59 @@ if CLIENT then
     end)
 end
 
+-- Stock 81_71_Announcer broadcasts speech via an unreliable net message.
+-- Small packet loss on a busy multiplayer server can skip an entire station.
+-- Keep Metrostroi's native playback protocol, but send MEX speech and _STOP
+-- reliably. Vanilla announcers still use their original WriteMessage method.
+if SERVER then
+    local function IsCustomPlayback(train)
+        local device=train and train.Announcer
+        if not device then return false end
+        if device.AnnTable=="AnnouncementsASNP" then
+            local setup=Metrostroi and Metrostroi.ASNPSetup
+                and Metrostroi.ASNPSetup[train:GetNW2Int("Announcer",1)]
+            if not setup then return false end
+            for _,pack in pairs(API.Packs) do
+                if pack.name==setup.name then return true end
+            end
+        elseif device.AnnTable=="AnnouncementsRRI" then
+            local line=Metrostroi and Metrostroi.RRISetup and Metrostroi.RRISetup[1]
+            return line and line.MEXRPIPackID~=nil or false
+        end
+        return false
+    end
+    local function PatchReliablePlayback(system)
+        if not system or not isfunction(system.WriteMessage)
+            or system.MEXReliablePlaybackWrapped then return end
+        local original=system.WriteMessage
+        system.WriteMessage=function(self,msg,...)
+            local train=self.Train
+            if not IsValid(train) or not IsCustomPlayback(train)
+                or not isstring(msg) or not istable(train.WagonList) then
+                return original(self,msg,...)
+            end
+            -- Same entity+string packet as stock Metrostroi, but reliable.
+            for _,wagon in ipairs(train.WagonList) do
+                if IsValid(wagon) then
+                    net.Start("metrostroi_announcer")
+                    net.WriteEntity(wagon)
+                    net.WriteString(msg)
+                    net.Broadcast()
+                end
+            end
+        end
+        system.MEXReliablePlaybackWrapped=true
+    end
+    timer.Create("MEXASNP_ReliableAudio",1,0,function()
+        if Metrostroi and Metrostroi.BaseSystems then
+            PatchReliablePlayback(Metrostroi.BaseSystems["81_71_Announcer"])
+        end
+        for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+            if train.Announcer then PatchReliablePlayback(train.Announcer) end
+        end
+    end)
+end
+
 -- Content discovery is run by MEX; external addons need only provide files.
 API.LoadedFiles=API.LoadedFiles or {}
 timer.Create("MEXASNP_Discover",1,0,function()
