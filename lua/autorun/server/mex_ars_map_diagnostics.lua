@@ -201,8 +201,16 @@ hook.Add("Think", "MEX_ARS_MapPassiveWatch", function()
     local pos = positions and positions[1]
     local signal, prev
     if pos and pos.node1 then
-        local ok, a, b = pcall(m.GetARSJoint, pos.node1, pos.x, m.TrainDirections[train], train)
-        if ok then signal, prev = a, b end
+        -- Intentionally omit 'train': GetARSJoint(train=...) mutates the
+        -- train-specific ARS lookup cache and can influence actual ARS polling.
+        -- Watch mode must not do this, even for diagnostics.
+        local direction = m.TrainDirections and m.TrainDirections[train]
+        if type(direction) == "boolean" then
+            local ok, a = pcall(m.GetARSJoint, pos.node1, pos.x, direction)
+            if ok then signal = a end
+            local okPrev, b = pcall(m.GetARSJoint, pos.node1, pos.x, not direction)
+            if okPrev then prev = b end
+        end
     end
     local name = IsValid(signal) and signal.Name or "NONE/OC"
     local code = IsValid(signal) and tostring(signal.ARSSpeedLimit or "?") or "NO SIGNAL"
