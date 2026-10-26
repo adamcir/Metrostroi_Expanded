@@ -57,9 +57,34 @@ foreach ($folder in $allowed.Keys) {
         $copied++
     }
 }
-if ($copied -eq 0 -or -not (Test-Path -LiteralPath (Join-Path $workshopRoot "lua\autorun\metrostroi_expanded_asnp.lua"))) {
-    throw "Workshop build failed: main MEX Lua files were not staged."
+# Fail early if an essential Lua module was omitted. Previously the builder
+# checked only the ASNP autorun, so a partial Workshop upload could start the
+# AI autorun but fail to include bridge.lua/controller.lua and crash at startup.
+$requiredLua = @(
+    "lua/autorun/metrostroi_expanded_asnp.lua",
+    "lua/autorun/metrostroi_expanded_rpi.lua",
+    "lua/autorun/metrostroi_expanded_damage.lua",
+    "lua/autorun/metrostroi_expanded_station_builder.lua",
+    "lua/autorun/metrostroi_expanded_track_builder.lua",
+    "lua/autorun/server/mex_ai_driver.lua",
+    "lua/metrostroi_expanded/ai_driver/bridge.lua",
+    "lua/metrostroi_expanded/ai_driver/controller.lua",
+    "lua/metrostroi_expanded/ai_driver/cab.lua",
+    "lua/metrostroi_expanded/ai_driver/chat.lua",
+    "lua/metrostroi_expanded/ai_driver/visual.lua"
+)
+if ($copied -eq 0) {
+    throw "Workshop build failed: no game files were copied."
 }
+foreach ($relative in $requiredLua) {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot $relative) -PathType Leaf)) {
+        throw "Workshop build failed: required MEX source is missing: $relative"
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $workshopRoot $relative) -PathType Leaf)) {
+        throw "Workshop build failed: required Lua file was not packaged: $relative"
+    }
+}
+Write-Host ("Validated essential Lua modules: " + $requiredLua.Count)
 Write-Host ""
 Write-Host "Metrostroi Expanded Workshop build ready." -ForegroundColor Green
 Write-Host ("Included game files: " + $copied + "; skipped non-Workshop files: " + $skipped)
