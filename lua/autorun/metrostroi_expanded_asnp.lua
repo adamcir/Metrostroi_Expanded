@@ -84,6 +84,7 @@ end
 
 if SERVER then
     util.AddNetworkString("MEXASNP_IndexSync")
+    util.AddNetworkString("MEXASNP_RequestSync")
     API.SentResources=API.SentResources or {}
     local function SendIndexSync(ply)
         if not Metrostroi then return end
@@ -104,6 +105,11 @@ if SERVER then
                 net.WriteTable(sounds)
                 net.WriteString(pack.name or id)
                 net.WriteString(pack.language or "en")
+                -- Content-only packs (including Adamovian Metro) may not
+                -- have their Lua files on remote clients. The translated UI
+                -- needs the server's actual language dictionary too.
+                local dictionary=API.Languages[pack.language or "en"]
+                net.WriteTable(istable(dictionary) and dictionary or {})
                 if IsValid(ply) then net.Send(ply) else net.Broadcast() end
             end
         end
@@ -112,6 +118,15 @@ if SERVER then
     -- receive a fresh mapping. No player action or manual reload required.
     hook.Add("PlayerInitialSpawn","MEXASNP_SendIndexOnJoin",function(ply)
         timer.Simple(3,function() if IsValid(ply) then SendIndexSync(ply) end end)
+    end)
+    -- A client may initialize MEX after PlayerInitialSpawn. Allow an explicit
+    -- late request instead of depending on a long repeating broadcast.
+    net.Receive("MEXASNP_RequestSync",function(_,ply)
+        if not IsValid(ply) then return end
+        local now=CurTime()
+        if (ply.MEXASNPNextSync or 0)>now then return end
+        ply.MEXASNPNextSync=now+2
+        SendIndexSync(ply)
     end)
     timer.Create("MEXASNP_IndexBroadcast",8,0,function() SendIndexSync() end)
 else
@@ -128,17 +143,37 @@ else
         local sounds=net.ReadTable()
         local name=net.ReadString()
         local language=net.ReadString()
+        local dictionary={}
+        if net.BytesLeft()>0 then dictionary=net.ReadTable() end
         if index<1 or not istable(setup) or not istable(sounds) then return end
         API.ServerIndices[id]=index
         API.ServerDefinitions[id]={routes=setup,sounds=sounds}
+        if isstring(language) and language~="" and istable(dictionary)
+            and next(dictionary)~=nil then
+            API.RegisterLanguage(language,dictionary)
+        end
         local pack=API.Packs[id]
         if not pack then
             -- The pack's Lua may exist only on the dedicated server. The
             -- server advertises it directly to every connected player's UI.
-            pack={name=name,language=language,maps={game.GetMap()}}
+            pack={name=name,maps={game.GetMap()}}
             API.Packs[id]=pack
         end
+        -- Do not retain an old 'en' fallback from a previous map/session.
+        pack.name=name
+        pack.language=language
         PinServerIndex(id,pack)
+    end)
+    local attempts=0
+    timer.Create("MEXASNP_RequestServerState",3,0,function()
+        if next(API.ServerDefinitions)~=nil then
+            timer.Remove("MEXASNP_RequestServerState")
+            return
+        end
+        attempts=attempts+1
+        if attempts>30 then timer.Remove("MEXASNP_RequestServerState");return end
+        net.Start("MEXASNP_RequestSync")
+        net.SendToServer()
     end)
 end
 
