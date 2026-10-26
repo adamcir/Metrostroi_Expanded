@@ -1,4 +1,4 @@
-# Metrostroi Expanded — AI Driver integration and train-driving rules
+# Metrostroi Expanded — AI Driver [ALPHA] integration and train-driving rules
 
 ## Architecture: where the Markdown belongs
 
@@ -11,6 +11,14 @@
   latency or correctness to apply emergency precautions.
 
 ## Installation
+
+**ALPHA / EXPERIMENTAL:** This module is unfinished and optional.
+LuaSocket and the independent backend are not bundled with the Steam Workshop
+upload. MEX can run without them. If bundled AI Driver Lua sources are missing
+from an outdated/incomplete upload, the AI module is disabled without a Lua
+nil-value crash and `mex_ai_status` reports which files are missing. Rebuild
+the Workshop staging folder with `tools/build_workshop.bat` and update the
+published addon rather than manually copying one AI file.
 
 Install the Metrostroi Expanded addon from this repository. The AI Driver Lua files
 are already part of the addon; no manual copying is needed. Install/start the
