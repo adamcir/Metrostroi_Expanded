@@ -349,7 +349,7 @@ concommand.Add("mex_rpi_status", API.PrintStatus)
 -- Inspect what the *installed* Metrostroi cassette would play, not merely
 -- the content addon definition. Useful when an old map config skips Depo.
 concommand.Add("mex_rpi_route_status", function(ply)
-    if IsValid(ply) and not ply:IsAdmin() then return end
+    if SERVER and IsValid(ply) and not ply:IsAdmin() then return end
     local id,pack=API.CurrentPack()
     local route=Metrostroi and Metrostroi.RRISetup and Metrostroi.RRISetup[1]
     if not id or not istable(route) then
@@ -357,7 +357,8 @@ concommand.Add("mex_rpi_route_status", function(ply)
         return
     end
     print("[MEX RPI] "..id.." loop="..tostring(route.Loop)
-        .." continuous="..tostring(route.ContinuousLoop))
+        .." continuous="..tostring(route.ContinuousLoop)
+        .." clientSynced="..tostring(SERVER or API.ServerCassette~=nil))
     for i,station in ipairs(route) do
         local forward=station.dep and station.dep[1] or {}
         local arrive=station.arr and station.arr[1] or {}
