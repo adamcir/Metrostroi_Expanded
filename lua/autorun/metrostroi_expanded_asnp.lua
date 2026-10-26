@@ -743,22 +743,41 @@ if SERVER then
     end)
 end
 
--- Content discovery is run by MEX; external addons need only provide files.
+-- Content packs are *server-owned*. External addons may be installed
+-- only on a dedicated server; Garry's Mod can enumerate their Lua filenames
+-- on a client even when those actual files were never sent there. Calling
+-- include() clientside then produces endless "Couldn't include file" errors.
+-- Instead the server loads the packs and sends route, sound index, and language
+-- definitions to clients through MEXASNP_IndexSync.
 API.LoadedFiles=API.LoadedFiles or {}
-timer.Create("MEXASNP_Discover",1,0,function()
-    for _,kind in ipairs({"languages","lines"}) do
-        local files=file.Find("mex_asnp/"..kind.."/*.lua","LUA")
-        for _,name in ipairs(files or {}) do
-            local path="mex_asnp/"..kind.."/"..name
-            if not API.LoadedFiles[path] then
-                if SERVER then AddCSLuaFile(path) end
-                local ok,err=pcall(include,path)
-                if ok then API.LoadedFiles[path]=true
-                else ErrorNoHalt("[MEX ASNP] "..path..": "..tostring(err).."\n") end
+if SERVER then
+    timer.Create("MEXASNP_Discover",1,0,function()
+        for _,kind in ipairs({"languages","lines"}) do
+            local files=file.Find("mex_asnp/"..kind.."/*.lua","LUA") or {}
+            table.sort(files)
+            for _,name in ipairs(files) do
+                local path="mex_asnp/"..kind.."/"..name
+                if not API.LoadedFiles[path] then
+                    -- Only try genuinely mounted Lua. Do not call
+                    -- AddCSLuaFile here: late dynamic transfers are not
+                    -- reliable, and our server->client sync replaces them.
+                    if file.Exists(path,"LUA") then
+                        local ok,err=pcall(include,path)
+                        if ok then
+                            API.LoadedFiles[path]=true
+                        else
+                            API.LoadedFiles[path]="failed"
+                            ErrorNoHalt("[MEX ASNP] Cannot load "..path..
+                                ": "..tostring(err).."\n")
+                        end
+                    end
+                end
             end
         end
-    end
-end)
+    end)
+else
+    timer.Remove("MEXASNP_Discover") -- clear a previous hot-reload timer
+end
 
 -- Handle both load orders (MEX first or content addon first).
 timer.Create("MEXASNP_Register",1,0,API.TryRegister)
