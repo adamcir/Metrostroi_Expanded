@@ -7,7 +7,7 @@ if SERVER then AddCSLuaFile() end
 
 MetrostroiExpandedWeather = MetrostroiExpandedWeather or {}
 local W = MetrostroiExpandedWeather
-W.Version = "1.0.2"
+W.Version = "1.0.3"
 
 local function Subway(ent)
     if not IsValid(ent) then return false end
@@ -121,8 +121,6 @@ if SERVER then
     local flags = bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED)
     local enabled = CreateConVar("mex_weather_enabled", "1", flags,
         "Enable StormFox2 train weather response", 0, 1)
-    local visual = CreateConVar("mex_weather_visuals", "1", flags,
-        "Enable rain and wet-glass visual effects", 0, 1)
     local mechanics = CreateConVar("mex_weather_mechanics", "1", flags,
         "Enable weather battery wear and frozen passenger door commands", 0, 1)
     local lightning = CreateConVar("mex_weather_lightning", "1", flags,
@@ -151,6 +149,8 @@ if SERVER then
         train:SetNW2Float("MEX.Weather.Adhesion", 1)
         train:SetNW2Bool("MEX.Weather.DoorsIced", false)
         train:SetNW2Bool("MEX.Weather.Exposed", false)
+        -- Disable old weather-glass renderers on clients still running MEX 1.0.2.
+        train:SetNW2Bool("MEX.Weather.Visuals", false)
     end
 
     local function IsHighest(train, roof)
@@ -185,6 +185,9 @@ if SERVER then
 
         for _, train in ipairs(ents.FindByClass("gmod_subway_*")) do
             if not Subway(train) then continue end
+            -- Glass never reacts to weather. Force legacy clients to stop
+            -- drawing old rain droplets/refraction as well.
+            train:SetNW2Bool("MEX.Weather.Visuals", false)
             if not data then
                 if train:GetNW2Bool("MEX.Weather.Active", false) then
                     W.Clear(train)
@@ -234,7 +237,6 @@ if SERVER then
             train:SetNW2Float("MEX.Weather.Frost", frost)
             train:SetNW2Float("MEX.Weather.Snow", 0) -- Clear legacy deposits.
             train:SetNW2Float("MEX.Weather.Adhesion", adhesion)
-            train:SetNW2Bool("MEX.Weather.Visuals", visual:GetBool())
 
             local iced = mechanics:GetBool() and exposed and stopped
                 and train.MEXWeatherStationary > 75
@@ -387,204 +389,9 @@ if SERVER then
         end
     end)
 else
-    -- Rain only: Source water normal map, no frozen-glass material/overlay.
-    -- Refract requires an updated framebuffer; do that only when needed.
-    local wetRefract = CreateMaterial("mex_weather_rain_refraction_v3", "Refract", {
-        ["$model"] = "1",
-        ["$normalmap"] = "dev/water_normal",
-        ["$dudvmap"] = "dev/water_dudv",
-        ["$refractamount"] = "0.008",
-        ["$bluramount"] = "0",
-        ["$refracttint"] = "[0.94 0.97 1]",
-        ["$nocull"] = "1",
-        ["$vertexalpha"] = "1",
-        ["$vertexcolor"] = "1"
-    })
-    local maxDistSq = 2800 * 2800
-    local quality = CreateClientConVar("mex_weather_quality", "1", true, false,
-        "Client-side weather detail: 0=off, 1=standard, 2=high", 0, 2)
-    local cachedTrains = {}
-    local refreshAt = 0
-
-    -- Locate passenger windows from the *actual* door spacing of each train.
-    -- Never paint equally spaced rectangles over door leaves or car bodywork.
-    -- Third-party trains can provide explicit panel measurements using
-    -- train.MEXWeatherWindowPanels = {{x=..., y=..., z=..., w=..., h=..., side=1},...}
-    local function GetWindowPanels(train, mins, maxs)
-        local cached = train.MEXWeatherPanelCache
-        local model = train:GetModel()
-        if cached and cached.model == model and cached.untilTime > CurTime() then
-            return cached.panels
-        end
-
-        local panels = {}
-        if istable(train.MEXWeatherWindowPanels) then
-            for _, entry in ipairs(train.MEXWeatherWindowPanels) do
-                if istable(entry) and isnumber(entry.x) and isnumber(entry.y)
-                    and isnumber(entry.z) and isnumber(entry.w)
-                    and isnumber(entry.h) and (entry.side == 1 or entry.side == -1)
-                    and entry.w > 8 and entry.h > 8
-                then
-                    panels[#panels + 1] = {
-                        x = entry.x, y = math.abs(entry.y), z = entry.z,
-                        w = entry.w, h = entry.h, side = entry.side
-                    }
-                end
-            end
-        else
-            local doorSides = {[1] = {}, [-1] = {}}
-            -- The original Metrostroi door0x1 / door1x0 ClientProps expose
-            -- useful, class-specific coordinates without guessing train length.
-            for name, prop in pairs(train.ClientProps or {}) do
-                if isstring(name) and string.match(string.lower(name),
-                    "^door%d+x[01]") and istable(prop) and isvector(prop.pos)
-                    and math.abs(prop.pos.y) > 35
-                then
-                    local side = prop.pos.y > 0 and 1 or -1
-                    doorSides[side][#doorSides[side] + 1] = prop.pos
-                end
-            end
-
-            local height = maxs.z - mins.z
-            for _, side in ipairs({-1, 1}) do
-                local doors = doorSides[side]
-                table.sort(doors, function(a, b) return a.x < b.x end)
-                local unique = {}
-                for _, pos in ipairs(doors) do
-                    -- Left/right door halves may be separate props.
-                    if #unique == 0 or pos.x - unique[#unique].x > 75 then
-                        unique[#unique + 1] = Vector(pos.x, pos.y, pos.z)
-                    end
-                end
-                for index = 2, #unique do
-                    local a, b = unique[index - 1], unique[index]
-                    local gap = b.x - a.x
-                    -- 81-717 has approximately 230 SU between doorway centres.
-                    -- Skip extraordinary intervals rather than covering a wall.
-                    if gap >= 160 and gap < 350 and height > 80 then
-                        local w = math.Clamp(gap - 122, 35, 112)
-                        local h = math.Clamp(height * 0.26, 27, 46)
-                        local z = math.Clamp((a.z + b.z) * 0.5
-                            + height * 0.43, mins.z + height * 0.52,
-                            maxs.z - h * 0.55 - 9)
-                        panels[#panels + 1] = {
-                            x = (a.x + b.x) * 0.5,
-                            y = (math.abs(a.y) + math.abs(b.y)) * 0.5 + 1.1,
-                            z = z, w = w, h = h, side = side
-                        }
-                    end
-                end
-            end
-        end
-
-        train.MEXWeatherPanelCache = {
-            model = model, panels = panels, untilTime = CurTime() + 8
-        }
-        return panels
-    end
-
-    -- All geometry is in the wagon coordinate frame so glass effect follows
-    -- moving/rotating wagons. Explicit quadrilaterals keep correct orientation
-    -- independent of render.DrawQuadEasy's automatic basis.
-    local white = Color(255, 255, 255)
-    local function PaneQuad(train, panel, x0, x1, z0, z1, depth)
-        local y = panel.side * (panel.y + (depth or 0))
-        local tl = train:LocalToWorld(Vector(x0, y, z1))
-        local tr = train:LocalToWorld(Vector(x1, y, z1))
-        local br = train:LocalToWorld(Vector(x1, y, z0))
-        local bl = train:LocalToWorld(Vector(x0, y, z0))
-        if panel.side > 0 then
-            render.DrawQuad(tl, tr, br, bl, white)
-        else
-            render.DrawQuad(bl, br, tr, tl, white)
-        end
-    end
-
-    local function WindowOverlay(train, panels, wet, wind, highQuality)
-        if #panels == 0 then return end
-        local dripCount = highQuality and 5 or 3
-        for index, p in ipairs(panels) do
-            local x0, x1 = p.x - p.w * 0.5, p.x + p.w * 0.5
-            local z0, z1 = p.z - p.h * 0.5, p.z + p.h * 0.5
-            if wet > 0.03 and not wetRefract:IsError() then
-                render.SetMaterial(wetRefract)
-                -- Gentle distortion of the already-existing glass texture.
-                render.SetBlend(math.Clamp(wet * 0.20, 0, 0.20))
-                PaneQuad(train, p, x0, x1, z0, z1, 0.16)
-                -- Actual surface-hugging refractive rivulets, not glowing
-                -- camera-facing beams. Deterministic timing per window avoids
-                -- random popping and limits their positions to the glass.
-                for i = 1, dripCount do
-                    local seed = (index + 3) * 21.37 + i * 5.63
-                        + p.side * 1.31
-                    local u = 0.08 + ((math.sin(seed) * 9371.3) % 1) * 0.84
-                    local x = x0 + p.w * u
-                    local phase = (CurTime() * (0.13 + wet * 0.36)
-                        + seed * 0.37) % 1
-                    local length = p.h * (0.06 + wet * 0.18)
-                    local head = z1 + length - phase * (p.h + length * 2)
-                    local tail = head - length
-                    if head > z0 and tail < z1 then
-                        head = math.min(head, z1 - 0.6)
-                        tail = math.max(tail, z0 + 0.6)
-                        if head > tail + 0.5 then
-                            local slices = 3
-                            render.SetBlend(math.Clamp(wet * 0.30, 0, 0.30))
-                            for j = 1, slices do
-                                local top = Lerp((j - 1) / slices, head, tail)
-                                local bottom = Lerp(j / slices, head, tail)
-                                local curve = math.sin(seed * 2.7
-                                    + j * 1.6) * 0.9
-                                    + wind * 0.025 * phase
-                                local rx = math.Clamp(x + curve,
-                                    x0 + 1.5, x1 - 1.5)
-                                local thickness = 0.5 + wet * 0.6
-                                PaneQuad(train, p, rx - thickness,
-                                    rx + thickness, bottom, top, 0.25)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        render.SetBlend(1)
-    end
-
-    hook.Add("PostDrawTranslucentRenderables",
-        "MEX.Weather.TrainSurfaceEffects",
-        function(depth, skybox)
-            if depth or skybox or quality:GetInt() <= 0 then return end
-            local now = CurTime()
-            if now >= refreshAt then
-                refreshAt = now + 0.75
-                cachedTrains = ents.FindByClass("gmod_subway_*")
-            end
-            local me = EyePos()
-            local drawn = 0
-            local refractTextureUpdated = false
-            local highQuality = quality:GetInt() >= 2
-            for _, train in ipairs(cachedTrains) do
-                if not Subway(train)
-                    or not train:GetNW2Bool("MEX.Weather.Active", false)
-                    or not train:GetNW2Bool("MEX.Weather.Visuals", true)
-                    or me:DistToSqr(train:WorldSpaceCenter()) > maxDistSq
-                then continue end
-                local wet = train:GetNW2Float("MEX.Weather.Wet", 0)
-                if wet <= 0.03 then continue end
-                local mins, maxs = train:OBBMins(), train:OBBMaxs()
-                local panels = GetWindowPanels(train, mins, maxs)
-                if #panels > 0 then
-                    -- Source Refract samples the scene and must be refreshed
-                    -- before rendering the first pane in this 3-D pass.
-                    if not refractTextureUpdated then
-                        render.UpdateRefractTexture()
-                        refractTextureUpdated = true
-                    end
-                    WindowOverlay(train, panels, wet,
-                        train:GetNW2Float("MEX.Weather.Wind", 0), highQuality)
-                end
-                drawn = drawn + 1
-                if drawn >= (highQuality and 12 or 7) then break end
-            end
-        end)
+    -- Do not render or modify glass in response to rain, snow, frost or wind.
+    -- Remove the previous client hook too, so Lua auto-refresh cannot leave
+    -- an old refraction/droplet renderer running in an existing GMod session.
+    hook.Remove("PostDrawTranslucentRenderables",
+        "MEX.Weather.TrainSurfaceEffects")
 end
