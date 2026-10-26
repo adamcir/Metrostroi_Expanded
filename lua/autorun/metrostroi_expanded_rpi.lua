@@ -199,10 +199,63 @@ timer.Create("MEXRPI_CircularTrains",1,0,function()
     end
 end)
 
+-- Network the installed cassette to joining clients. Stock Metrostroi keeps
+-- RRISetup in realm-local Lua memory; it does NOT replicate map scripts/data.
+-- Without this a dedicated server plays our WAVs while the client display
+-- says "No cassete", even though R_Program1 works.
+if SERVER then
+    util.AddNetworkString("MEXRPI_CassetteSync")
+    local function SendCassette(ply)
+        local id=API.ActivePack
+        local setup=Metrostroi and Metrostroi.RRISetup
+        local sounds=Metrostroi and Metrostroi.AnnouncementsRRI
+        if not id or not istable(setup) or not istable(setup[1])
+            or setup[1].MEXRPIPackID~=id or not istable(sounds) then return end
+        net.Start("MEXRPI_CassetteSync")
+        net.WriteString(game.GetMap())
+        net.WriteString(id)
+        net.WriteTable(setup)
+        net.WriteTable(sounds)
+        if IsValid(ply) then net.Send(ply) else net.Broadcast() end
+    end
+    hook.Add("PlayerInitialSpawn","MEXRPI_SyncOnJoin",function(ply)
+        timer.Simple(3,function() if IsValid(ply) then SendCassette(ply) end end)
+    end)
+    timer.Create("MEXRPI_CassetteBroadcast",10,0,function() SendCassette() end)
+else
+    local function ApplyCassette()
+        local info=API.ServerCassette
+        if not info or not Metrostroi or not istable(info.setup)
+            or not istable(info.setup[1]) then return end
+        local installed=Metrostroi.RRISetup
+        if installed~=info.setup then
+            Metrostroi.RRISetup=info.setup
+            Metrostroi.AnnouncementsRRI=info.sounds
+        end
+        API.ActivePack=info.id
+        API.RefreshTrainTables()
+    end
+    net.Receive("MEXRPI_CassetteSync",function()
+        local map=net.ReadString()
+        local id=net.ReadString()
+        local setup=net.ReadTable()
+        local sounds=net.ReadTable()
+        if string.lower(map)~=string.lower(game.GetMap() or "") then return end
+        if not istable(setup) or not istable(setup[1])
+            or not istable(sounds) then return end
+        API.ServerCassette={id=id,setup=setup,sounds=sounds}
+        ApplyCassette()
+    end)
+    timer.Create("MEXRPI_ApplyClientCassette",1,0,ApplyCassette)
+end
+
 function API.TryRegister()
     if not Metrostroi or not isfunction(Metrostroi.SetRRIAnnouncer) then return end
     local id, pack = API.CurrentPack()
     if not id then return end
+    -- Remote clients must use the actual server cassette, never replace it
+    -- with a locally discovered/stale pack after a successful network sync.
+    if CLIENT and API.ServerCassette and API.ServerCassette.id==id then return end
 
     local routes = BuildRoutes(id, pack)
     if not istable(routes) or not istable(routes[1]) then return end
