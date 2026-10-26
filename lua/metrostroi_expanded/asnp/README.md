@@ -72,10 +72,12 @@ index directly. The stock server-side spawner callbacks and ASNP/RRI mode
 selection are retained. Classes running RRI, UPO or Sarmat UPO *without* ASNP
 are not modified, even if they have a similarly named Announcer option.
 
-If a class initially lacked an announcer selector, spawning one verified
-ASNP-equipped instance allows MEX to expose an announcer choice for subsequent
-spawns. Close and reopen the Train Spawner after new packs sync or new classes
-are detected, as its option list is built when the UI opens.
+Known stock ASNP-equipped train classes expose the announcer selector **before
+spawning their first train**, including Metrostroi variants whose spawner omits
+the Announcer menu entirely. Third-party classes without a known ASNP system
+can be detected after a real compatible train spawns, or registered explicitly.
+Close and reopen the Train Spawner after new packs sync or new classes are
+detected, as its option list is built when the UI opens.
 
 On a multiplayer client, use `mex_asnp_spawner_status` to inspect Ezh3, or
 `mex_asnp_spawner_status gmod_subway_81-717_mvm` (replace the argument with
@@ -86,3 +88,11 @@ Install/update the MEX core on both the dedicated server and clients. The
 custom content addon (e.g. Adamovian Metro) must be installed on the server
 with the sound WAVs. On joining, clients receive the matching route, announcer
 ID and translation dictionary from the server.
+
+**Map dependency:** Train support does not create a route on every map. A voice
+appears only when a compatible custom ASNP line pack matches the current map;
+Adamovian Metro currently supplies its own line packs for its configured maps.
+Use `mex_asnp_spawner_status gmod_subway_81-717_mvm` to see whether the missing
+menu comes from train compatibility, server synchronization, or an unsupported
+map. Do not force a mismatched route onto another map: station announcements
+would be wrong.
