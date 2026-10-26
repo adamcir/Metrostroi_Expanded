@@ -1,45 +1,42 @@
-# Custom suburb map: ARS showing 40 where OC is expected
+# Custom suburb map: ARS code and EPK diagnosis
 
-Map: `gm_suburb_construct_metrostroi_v1`. This is a **map-data issue**, not a reason to disable ARS safety globally.
+Map: `gm_suburb_construct_metrostroi_v1`. The supplied signal definitions are not formatted like the known working `gm_mustox_neocrimson_line_a` set.
 
-## Verified against Metrostroi beta source
+## Confirmed from the supplied files and Metrostroi code
 
-- `gmod_track_signal/init.lua`: `ENT:GetARS(ARSID)` returns the signal whose `ARSSpeedLimit` matches the ARS ID. `ARSLogic` selects `ARSCodes[FreeBS+1]`, or the last code with `metrostroi_ars_independent 1`.
-- `sys_als_ars.lua`: `GetARS(4)` is 40 km/h; `GetARS(0)` indicates 0; `GetARS(1)` is no frequency (ОЧ). Train ARS also treats a missing joint as a lost frequency. EPK has multiple other activation conditions (braking confirmation, disabled ARS, timers and overspeed).
-- `sv_railnetwork.lua`: the two tracks are separate path arrays and the loader uses `GetPositionOnTrack(..., {ignore_path=path})` when discovering joins. Thus it cannot directly join an endpoint back into the SAME path.
-- The provided custom-map signs have **26 one-item arrays**, `["4"]` or `["6"]`, never `"0"` or `"1"`. With a one-item array and a 4/6 maximum, its signal cannot modulate from occupied (0) through speed limits as blocks free. It cannot emit ОЧ by configuration.
-- The provided two long custom tracks were traced in order: path 1 ends 186 Source units beyond its own start, path 2 ends 287 units beyond its own start, in their respective directions. Both form **overlapping ends**, not true graph closures. Explicit `NextSignal` names do not repair this underlying topology.
-- The independent speed-profile mode forces the last profile character: ensure **server** `metrostroi_ars_independent 0`.
+**1) Speed profiles.** All 26 custom map signals use one-element JSON tables (`["4"]` or `["6"]`) for `ARSCodes`. In `gmod_track_signal/init.lua`, `ARSLogic` evaluates `ARSCodes[FreeBS+1]` and `ARSCodes[#ARSCodes]`. With one element, a section never has a lower-speed code to select as block occupancy changes: 40 stays 40 and 60 stays 60. The working map instead uses string profiles such as `"04"` and `"046"`. The GMod signaling tool also expects a string.
 
-The working `gm_mustox_neocrimson_line_a` definitions use **string** ARS profiles (e.g. `"04"`, `"046"`, `"0"`, `"1"`), automated next-signal lookup `"*"` where track topology supports it, and many more explicit graph paths.
+**2) No-frequency indicator (ОЧ).** No custom map section is assigned speed code `1`. `sys_als_ars.lua` treats `GetARS(1)` or a missing detectable ARS signal as no frequency. Code `0` means ARS 0, **not** no frequency. For intentionally no-frequency sections, explicitly set `ARSCodes: "1"` on the selected signal(s). Never blanket-convert ordinary stations to code 1: no frequency is a restrictive safety condition.
 
-## Tools, no edits to the base Metrostroi addon
+**3) Server convar.** `metrostroi_ars_independent 1` forces the LAST code of any profile, making even a correct `"04"` profile stick at 40. For block-dependent signals, use `metrostroi_ars_independent 0` in the **server** console.
+
+**4) Loop topology needs separate verification.** The two main original track paths overlap their own starts at their ends by approximately 186 and 287 Source units and are not trivially represented as graph rings. In `sv_railnetwork.lua`, `GetPositionOnTrack(..., {ignore_path=path})` excludes self-connections when finding path joins. More importantly, `Metrostroi.ScanTrack("ars", ...)` **does not scan branch links**, only `node.next`/`node.prev`. Therefore simply adding a tiny connector path is **not a fix for ARS continuity**. No automatic track rewrite is included; verify runtime `GetARSJoint` results and then repair track graph using a tested topology-specific solution.
+
+**5) EPK is separate from the visible speed code.** `sys_als_ars.lua` can set `EmergencyValveEPK` because of unconfirmed brakes (`LKT`), disabled ARS, expired timers, etc. A visible 40 code alone does not prove the reason for EPK. Observe the live server event via the MEX ARS monitor.
+
+## Correct only the proven signal-profile formatting
 
 ```bash
 python3 tools/fix_suburb_ars_signals.py \
-  signs_gm_suburb_construct_metrostroi_v1.txt signs_fixed.txt
-
-python3 tools/fix_suburb_track_loops.py \
-  track_gm_suburb_construct_metrostroi_v1.txt track_fixed.txt
+  signs_gm_suburb_construct_metrostroi_v1.txt \
+  signs_fixed.txt
 ```
 
-**Signals:** converts `["4"]` to `"04"` and `["6"]` to `"046"`, keeping signal locations and configured `NextSignal` links. This enables occupancy-dependent profiles, **not** automatic ОЧ. To designate an explicitly intended no-frequency section, use `--oc ARSxxx` on exactly the intended signal. A no-frequency section is a real restrictive condition and may require driver vigilance, not a cosmetic indicator.
+This makes `["4"]` into `"04"` and `["6"]` into `"046"` while retaining signal locations and configured next-signal names. It does **not** assign ОЧ to unnamed stations. When the precise intentional no-frequency block has been identified, specify its name explicitly as `--oc ARSxxx`.
 
-**Track:** trims each overlapping loop end and adds one ~60-unit connector path, preserving original path indices 1/2. The restored graph connection is **experimental** until tested on the actual server. It must only be run on the original, unmodified, two-path file.
+Make a backup before installing a new `garrysmod/data/metrostroi_data/signs_gm_suburb_construct_metrostroi_v1.txt`. Reload the map, then check the live train.
 
-Place the resulting files under `garrysmod/data/metrostroi_data/` using the active map filenames, after backing up the originals. Reload the map and inspect the actual signal graph. This is preferable to an unconditional global override of EPK.
-
-## In-game diagnosis
+## In-game read-only diagnostics
 
 ```text
 metrostroi_ars_independent 0
 mex_ars_map_check
-mex_ars_map_train <train_id>
-mex_ars_status <train_id>
+mex_ars_map_train <train_entity_id>
+mex_ars_status <train_entity_id>
 ```
 
-The first command must run on the **server**. `mex_ars_map_check` prints every active signal's code profile, `TrackDir`, detected path, `NextSignalLink`, `ARSSpeedLimit`, occupancy and loop-end graph connections. `mex_ars_map_train` shows the current next/previous signal as selected by Metrostroi and the actual ARS/EPK fields.
+`mex_ars_map_check` reports every signal's route codes, type, track position/path, direction, `NextSignalLink`, occupancy and current effective ARS code. `mex_ars_map_train` calls the original `GetARSJoint` for the train and reports the next and previous signal it actually reads.
 
-Do not infer that a pneumatic hissing sound is specifically an EPK application. Verify `Pneumatic.EmergencyValveEPK` and the `[MEX ARS] EPK ACTIVATED` server log.
+A very high brake cylinder pressure or active `PneumaticNo2` is not sufficient proof of an EPK vent. Confirm `EmergencyValveEPK` and an event beginning `[MEX ARS] EPK ACTIVATED` in the **server** log.
 
-**Important:** We do not know which precise platform section(s) the user wants to emit ОЧ, so the default converter does not insert code 1 arbitrarily; forcing no-frequency into a normal passenger loop could cause genuine EPK protection.
+References: `metrostroi-repo/metrostroi_beta`: `gmod_track_signal/init.lua`, `sys_als_ars.lua`, `sv_railnetwork.lua`.
