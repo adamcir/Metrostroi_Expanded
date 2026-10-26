@@ -866,7 +866,11 @@ local function PatchOneSpawner(class,record)
             end
         end
     end
-    if not found and API.ASNPHardwareClasses[class] then
+    if not found and SupportsASNP(class) then
+        -- Compatible stock classes must get the selector immediately, even
+        -- before their first instance has spawned (e.g. 81-717 MVM). The old
+        -- check looked only at dynamically detected classes and silently
+        -- skipped all known stock ASNP-equipped trains without a menu.
         -- For trains with a permanently fitted ASNP but no announcer menu,
         -- install an ordinary NW2 'Announcer' selection on both realms.
         -- Only do this after an actual spawned train confirms ASNP hardware.
@@ -898,8 +902,20 @@ function API.PatchTrainSpawners()
     local count=0
     for class,record in pairs(scripted_ents.GetList() or {}) do
         if isstring(class) and string.StartWith(class,"gmod_subway_")
-            and istable(record) and istable(record.t) then
-            count=count+PatchOneSpawner(class,record.t)
+            and istable(record) and istable(record.t)
+            and SupportsASNP(class) then
+            -- Different Metrostroi forks may use the stored entity definition
+            -- or the resolved (inherited) Get() definition for the UI. Patch
+            -- both when they are distinct, without touching non-ASNP trains.
+            local stored=record.t
+            local resolved=scripted_ents.Get(class)
+            local patched={}
+            for _,definition in ipairs({stored,resolved}) do
+                if istable(definition) and not patched[definition] then
+                    patched[definition]=true
+                    count=count+PatchOneSpawner(class,definition)
+                end
+            end
         end
     end
     return count
