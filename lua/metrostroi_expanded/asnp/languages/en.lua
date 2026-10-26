@@ -6,6 +6,7 @@ MEXASNP.RegisterLanguage("en", {
     ["route.label"] = "Route",
     ["track.label"] = "Track",
     ["ordinal.first"] = "first",
+    ["ordinal.second"] = "second",
     ["action.verify"] = "Check data",
     ["error.unknown"] = "Unknown message",
     ["error.map"] = "Map unsupported",
