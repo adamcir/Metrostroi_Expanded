@@ -76,18 +76,18 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ## StormFox 2 train weather (optional)
 
-StormFox 2 support adds exterior rain/wetness with running glass droplets,
-weather-related iced passenger-door commands below 0 °C, lower bogey
-adhesion/braking in bad weather, increased long-term neglect and rare thunder
-strikes against exposed tall wagons. Snow accumulation and frozen-glass
-visuals are disabled; snow and cold can still affect train mechanics.
-Effects work outdoors, have capped client rendering cost, and automatically
-disable when StormFox 2 is absent.
+StormFox 2 support simulates outdoor rain/wetness, icy passenger-door
+commands below 0 °C, lower bogey adhesion/braking, increased long-term
+neglect and rare lightning strikes against exposed trains. **Train glass
+never reacts visually to weather:** no rain droplets, water trails,
+refraction, snow or frost. The former client-side weather-glass renderer
+has been removed; snow and cold can still affect train mechanics.
+Weather simulation disables automatically if StormFox 2 is absent.
 
 Server options: `mex_weather_enabled`, `mex_weather_mechanics`,
-`mex_weather_visuals`, `mex_weather_lightning`. Use
-`mex_weather_status` to inspect detection. Clients can set
-`mex_weather_quality 0|1|2`.
+`mex_weather_lightning`. Use `mex_weather_status` to inspect detection.
+The obsolete `mex_weather_visuals` / `mex_weather_quality` settings
+are no longer used.
 
 See [StormFox 2 integration documentation](docs/STORMFOX2.md).
 
