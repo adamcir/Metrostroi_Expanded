@@ -42,16 +42,87 @@ function API.AudioDuration(path, fallback)
     return rate and rate>0 and bytes and (bytes/rate) or fallback
 end
 
+-- A client can have a different set/order of legacy Metrostroi announcers
+-- than a dedicated server. The server's Announcer NW2 index is authoritative.
+API.ServerIndices=API.ServerIndices or {}
+local function PinServerIndex(id,pack)
+    if not CLIENT then return end
+    local expected=API.ServerIndices[id]
+    if not expected or expected<1 or not pack.registeredID
+        or not Metrostroi or not istable(Metrostroi.ASNPSetup)
+        or not istable(Metrostroi.AnnouncementsASNP) then return end
+    local current=pack.registeredID
+    local route=Metrostroi.ASNPSetup[current]
+    local sounds=Metrostroi.AnnouncementsASNP[current]
+    if not route or route.name~=pack.name or not sounds then return end
+    if expected~=current then
+        Metrostroi.ASNPSetup[expected]=route
+        Metrostroi.AnnouncementsASNP[expected]=sounds
+    end
+    pack.registeredID=expected
+end
+
+if SERVER then
+    util.AddNetworkString("MEXASNP_IndexSync")
+    API.SentResources=API.SentResources or {}
+    local function SendIndexSync(ply)
+        if not Metrostroi then return end
+        local map=string.lower(game.GetMap() or "")
+        for id,pack in pairs(API.Packs) do
+            local matching=false
+            for _,prefix in ipairs(pack.maps or {}) do
+                if string.StartWith(map,string.lower(prefix)) then matching=true break end
+            end
+            if matching and pack.registeredID then
+                net.Start("MEXASNP_IndexSync")
+                net.WriteString(id)
+                net.WriteUInt(pack.registeredID,16)
+                if IsValid(ply) then net.Send(ply) else net.Broadcast() end
+            end
+        end
+    end
+    -- Players who connect later and clients whose Lua loads slowly both
+    -- receive a fresh mapping. No player action or manual reload required.
+    hook.Add("PlayerInitialSpawn","MEXASNP_SendIndexOnJoin",function(ply)
+        timer.Simple(3,function() if IsValid(ply) then SendIndexSync(ply) end end)
+    end)
+    timer.Create("MEXASNP_IndexBroadcast",8,0,function() SendIndexSync() end)
+else
+    net.Receive("MEXASNP_IndexSync",function()
+        local id=net.ReadString()
+        local index=net.ReadUInt(16)
+        API.ServerIndices[id]=index
+        local pack=API.Packs[id]
+        if pack then PinServerIndex(id,pack) end
+    end)
+end
+
 function API.TryRegister()
     if not Metrostroi or not isfunction(Metrostroi.AddANSPAnnouncer)
         or not istable(Metrostroi.ASNPSetup) or not istable(Metrostroi.AnnouncementsASNP) then return end
     local map=game.GetMap():lower()
-    for id,pack in pairs(API.Packs) do
+    local ids=table.GetKeys(API.Packs)
+    table.sort(ids) -- Stable ordering of custom IDs on server and all clients.
+    for _,id in ipairs(ids) do
+        local pack=API.Packs[id]
         local matches=(not pack.maps) or false
         for _,prefix in ipairs(pack.maps or {}) do
             if string.StartWith(map,prefix:lower()) then matches=true break end
         end
         if matches then
+            -- Workshop content is not automatically transmitted when an addon
+            -- was manually installed on a dedicated server. Send the WAVs too.
+            if SERVER and isstring(pack.soundRoot) then
+                for _,entry in pairs(pack.sounds or {}) do
+                    if istable(entry) and isstring(entry[1]) then
+                        local wav="sound/"..pack.soundRoot.."/"..entry[1]
+                        if not API.SentResources[wav] and file.Exists(wav,"GAME") then
+                            resource.AddFile(wav)
+                            API.SentResources[wav]=true
+                        end
+                    end
+                end
+            end
             local sounds={click1=0.01,click2=0.01,click3=0.01}
             for key,sound in pairs(pack.sounds or {}) do
                 local path=pack.soundRoot.."/"..sound[1]
@@ -167,6 +238,7 @@ function API.TryRegister()
                         break
                     end
                 end
+                PinServerIndex(id,pack)
             end
         end
     end
