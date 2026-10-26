@@ -82,11 +82,31 @@ local function reportTrain(ply, train)
     end
     local p = train.Pneumatic
     if p then
+        -- Brake-line reduction applies the distributor even when PN2 and EPK are OFF.
+        -- For the Ezh3 013 valve, position 4 targets ~4 atm in BL (service braking).
+        local reduced = p.TrainToBrakeReducedPressure
+        local targetBC = type(reduced) == "number" and type(p.BrakeLinePressure) == "number"
+            and math.max(0, math.min(5.2, 1.5*(math.min(5.1, reduced) - p.BrakeLinePressure))) or nil
         emit(ply, "pneumatic EPK=" .. fmt(p.EmergencyValveEPK)
             .. " emergency=" .. fmt(p.EmergencyValve)
             .. " BC=" .. fmt(p.BrakeCylinderPressure)
             .. " BL=" .. fmt(p.BrakeLinePressure)
+            .. " TL=" .. fmt(p.TrainLinePressure)
+            .. " valveType=" .. fmt(p.ValveType)
+            .. " valvePosition=" .. fmt(p.DriverValvePosition)
+            .. " valveConnected=" .. fmt(train.DriverValveDisconnect and train.DriverValveDisconnect.Value)
+            .. " distributorConnected=" .. fmt(train.AirDistributorDisconnect and train.AirDistributorDisconnect.Value)
+            .. " targetBC=" .. fmt(targetBC)
+            .. " PN1=" .. fmt(train.PneumaticNo1 and train.PneumaticNo1.Value)
             .. " PN2=" .. fmt(train.PneumaticNo2 and train.PneumaticNo2.Value))
+        if p.EmergencyValveEPK == false and p.EmergencyValve == false
+           and train.PneumaticNo2 and train.PneumaticNo2.Value == 0
+           and type(p.BrakeLinePressure) == "number" and p.BrakeLinePressure < 4.7 then
+            emit(ply, "BRAKING DIAGNOSIS: BL reduced below 4.7 atm with EPK OFF and PN2 OFF; "
+                .. "the distributor can hold the brake cylinders. "
+                .. "Check driver valve position; Ezh3 type-013 position 4 targets ~4.0 atm. "
+                .. "Position 2 targets ~5.1 atm for release.")
+        end
     end
 end
 
@@ -146,4 +166,67 @@ concommand.Add("mex_ars_map_train", function(ply, _, args)
     end
     reportTrain(ply, Entity(id))
 end)
-print("[MEX MAP ARS] Diagnostics ready: mex_ars_map_check [train ID], mex_ars_map_train <ID>")
+-- Read-only live tracking of brief NO-FREQUENCY transitions and EPK states.
+local watchId = nil
+local lastWatch = nil
+local watchTime = 0
+concommand.Add("mex_ars_map_watch", function(ply, _, args)
+    if IsValid(ply) and not ply:IsAdmin() then return end
+    local id = tonumber(args[1] or "")
+    if id == 0 then
+        watchId, lastWatch = nil, nil
+        emit(ply, "Live watch disabled.")
+    elseif id and validTrain(Entity(id)) then
+        watchId, lastWatch, watchTime = id, nil, 0
+        emit(ply, "Live watch started for train #" .. id ..
+            "; prints only when received joint, brake state, or EPK state changes.")
+    else
+        emit(ply, "Usage: mex_ars_map_watch <train entity ID | 0>")
+    end
+end)
+
+hook.Add("Think", "MEX_ARS_MapPassiveWatch", function()
+    if not watchId or CurTime() < watchTime then return end
+    watchTime = CurTime() + 0.25
+    local train = Entity(watchId)
+    if not validTrain(train) then
+        watchId, lastWatch = nil, nil
+        print("[MEX MAP ARS] Watched train was removed.")
+        return
+    end
+    local p = train.Pneumatic
+    local m = Metrostroi
+    if not p or not m or not m.GetARSJoint or not m.TrainPositions then return end
+    local positions = m.TrainPositions[train]
+    local pos = positions and positions[1]
+    local signal, prev
+    if pos and pos.node1 then
+        local ok, a, b = pcall(m.GetARSJoint, pos.node1, pos.x, m.TrainDirections[train], train)
+        if ok then signal, prev = a, b end
+    end
+    local name = IsValid(signal) and signal.Name or "NONE/OC"
+    local code = IsValid(signal) and tostring(signal.ARSSpeedLimit or "?") or "NO SIGNAL"
+    local epk = p.EmergencyValveEPK == true
+    local ev = p.EmergencyValve == true
+    local pn2 = train.PneumaticNo2 and train.PneumaticNo2.Value or "?"
+    local valve = p.DriverValvePosition or "?"
+    local state = table.concat({name, code, tostring(epk), tostring(ev),
+        tostring(pn2), tostring(valve)}, "/")
+    if state ~= lastWatch then
+        print("[MEX MAP ARS] WATCH train=" .. train:EntIndex()
+            .. " speed=" .. fmt(math.Round(train.Speed or 0, 2))
+            .. " next=" .. name
+            .. " prev=" .. (IsValid(prev) and fmt(prev.Name) or "NONE")
+            .. " ARSCode=" .. code
+            .. " EPK=" .. fmt(epk)
+            .. " emergency=" .. fmt(ev)
+            .. " PN2=" .. fmt(pn2)
+            .. " valvePos=" .. fmt(valve)
+            .. " BL=" .. fmt(math.Round(p.BrakeLinePressure or 0, 3))
+            .. " BC=" .. fmt(math.Round(p.BrakeCylinderPressure or 0, 3))
+            .. " path=" .. (pos and fmt(pos.node1.path and pos.node1.path.id) or "nil"))
+        lastWatch = state
+    end
+end)
+
+print("[MEX MAP ARS] Diagnostics ready: mex_ars_map_check [train ID], mex_ars_map_train <ID>, mex_ars_map_watch <ID|0>")
