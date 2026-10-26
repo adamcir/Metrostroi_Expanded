@@ -55,3 +55,34 @@ EN and CS live in MEX. MEX maps known original Metrostroi display strings to **s
 Other optional `MEXASNP.RegisterPack` fields: `routes` for advanced custom Metrostroi route structures and `led` for line LED configuration. WAV lengths are read from their headers with the configured duration as a fallback. Existing click1/click2/click3 messages are replaced with silent delays.
 
 Install MEX alongside Metrostroi and the content addon; test in GMod after updating.
+
+## Universal ASNP train support
+
+MEX exposes custom ASNP voices in the original Metrostroi Train Spawner for
+**every compatible ASNP-equipped train**, not only Ezh3. Native 81-71 ASNP
+devices in Ezh, Ezh3 (81-710), 81-717 MVM and 81-720 are supported; subclasses
+of these are supported as well. More third-party train classes are detected
+automatically after a live train demonstrates an ASNP device using
+`AnnouncementsASNP`. A third-party addon may register its compatible train
+class earlier with `MEXASNP.RegisterASNPTrainClass("gmod_subway_example")`.
+
+MEX preserves the native option values: Ezh3 reserves UI option 1 for its RRI
+cassette (ASNP IDs are offset by one), while other train classes use the ASNP
+index directly. The stock server-side spawner callbacks and ASNP/RRI mode
+selection are retained. Classes running RRI, UPO or Sarmat UPO *without* ASNP
+are not modified, even if they have a similarly named Announcer option.
+
+If a class initially lacked an announcer selector, spawning one verified
+ASNP-equipped instance allows MEX to expose an announcer choice for subsequent
+spawns. Close and reopen the Train Spawner after new packs sync or new classes
+are detected, as its option list is built when the UI opens.
+
+On a multiplayer client, use `mex_asnp_spawner_status` to inspect Ezh3, or
+`mex_asnp_spawner_status gmod_subway_81-717_mvm` (replace the argument with
+the train class). It prints each available voice ID, whether the server's ASNP
+data arrived and whether the Adamovian language dictionary was loaded.
+
+Install/update the MEX core on both the dedicated server and clients. The
+custom content addon (e.g. Adamovian Metro) must be installed on the server
+with the sound WAVs. On joining, clients receive the matching route, announcer
+ID and translation dictionary from the server.
