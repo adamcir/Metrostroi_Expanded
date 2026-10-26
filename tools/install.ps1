@@ -185,6 +185,25 @@ foreach ($directory in $directories) {
     }
 }
 
+# Never report success if the install omitted dependencies referenced by
+# autorun/server/mex_ai_driver.lua. These files are optional at runtime, but
+# they must ship together with the main MEX addon in a complete installation.
+$required = @(
+    "lua/autorun/metrostroi_expanded_asnp.lua",
+    "lua/autorun/metrostroi_expanded_rpi.lua",
+    "lua/autorun/server/mex_ai_driver.lua",
+    "lua/metrostroi_expanded/ai_driver/bridge.lua",
+    "lua/metrostroi_expanded/ai_driver/controller.lua",
+    "lua/metrostroi_expanded/ai_driver/cab.lua",
+    "lua/metrostroi_expanded/ai_driver/chat.lua",
+    "lua/metrostroi_expanded/ai_driver/visual.lua"
+)
+foreach ($relative in $required) {
+    if (-not (Test-Path -LiteralPath (Join-Path $Dest $relative) -PathType Leaf)) {
+        throw "Incomplete Metrostroi Expanded installation: missing $relative"
+    }
+}
+
 Write-Host ""
 Write-Host "Installed successfully." -ForegroundColor Green
 Write-Host "Restart Garry's Mod or change/restart the map before testing."
