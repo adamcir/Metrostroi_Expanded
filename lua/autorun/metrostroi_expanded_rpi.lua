@@ -410,23 +410,31 @@ concommand.Add("mex_rpi_route_status", function(ply)
     end
 end)
 
--- The addon supplies only lua/mex_rpi/lines/*.lua, like MEX ASNP packs.
-timer.Create("MEXRPI_Discover", 1, 0, function()
-    local files = file.Find("mex_rpi/lines/*.lua", "LUA") or {}
-    table.sort(files)
-    for _, name in ipairs(files) do
-        local path = "mex_rpi/lines/" .. name
-        if not API.LoadedFiles[path] then
-            if SERVER then AddCSLuaFile(path) end
-            local ok, err = pcall(include, path)
-            if ok then
-                API.LoadedFiles[path] = true
-            else
-                ErrorNoHalt("[MEX RPI] " .. path .. ": " .. tostring(err) .. "\n")
+-- As with ASNP, the server alone loads external content Lua. RRI setup
+-- and cassette sounds are replicated to clients via MEXRPI_CassetteSync.
+-- Client-side include() of server-only addon files produces missing-file
+-- warnings even though a valid server-side cassette is playing correctly.
+if SERVER then
+    timer.Create("MEXRPI_Discover", 1, 0, function()
+        local files = file.Find("mex_rpi/lines/*.lua", "LUA") or {}
+        table.sort(files)
+        for _, name in ipairs(files) do
+            local path = "mex_rpi/lines/" .. name
+            if not API.LoadedFiles[path] and file.Exists(path,"LUA") then
+                local ok, err = pcall(include, path)
+                if ok then
+                    API.LoadedFiles[path] = true
+                else
+                    API.LoadedFiles[path] = "failed"
+                    ErrorNoHalt("[MEX RPI] Cannot load " .. path ..
+                        ": " .. tostring(err) .. "\n")
+                end
             end
         end
-    end
-end)
+    end)
+else
+    timer.Remove("MEXRPI_Discover") -- stop any old hot-reload timer
+end
 
 timer.Create("MEXRPI_Register", 1, 0, API.TryRegister)
 hook.Add("InitPostEntity", "MEXRPI_Init", function()
