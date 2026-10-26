@@ -1,15 +1,60 @@
--- MEX AI Driver - opt-in, server-side train pilot (dry-run by default).
-local Bridge = include("metrostroi_expanded/ai_driver/bridge.lua")
-local Controller = include("metrostroi_expanded/ai_driver/controller.lua")
-local Cab = include("metrostroi_expanded/ai_driver/cab.lua")
-local Chat = include("metrostroi_expanded/ai_driver/chat.lua")
--- A Lua reload must not leave an orphaned operator in the old seat.
+-- MEX AI Driver [ALPHA] - experimental server-only train pilot.
+-- Dry-run by default. LuaSocket and the external Node.js backend are optional.
+-- A Workshop upload missing these Lua sources must NEVER break server autorun.
 MEXAIDriver = MEXAIDriver or {}
+MEXAIDriver.IsAlpha = true
 if MEXAIDriver.Visuals and type(MEXAIDriver.Visuals.RemoveAll) == "function" then
     MEXAIDriver.Visuals.RemoveAll()
 end
-local Visual = include("metrostroi_expanded/ai_driver/visual.lua")
-MEXAIDriver.Visuals = Visual
+
+local function LoadAIModule(name)
+    local path="metrostroi_expanded/ai_driver/"..name..".lua"
+    if not file.Exists(path,"LUA") then
+        return nil, "missing "..path
+    end
+    local ok,module=pcall(include,path)
+    if not ok or not istable(module) then
+        return nil, "failed "..path..": "..tostring(module)
+    end
+    return module
+end
+
+local modules={}
+local issues={}
+for _,name in ipairs({"bridge","controller","cab","chat","visual"}) do
+    local result,err=LoadAIModule(name)
+    if result then modules[name]=result
+    else issues[#issues+1]=err end
+end
+if #issues>0 then
+    local problem=table.concat(issues,"; ")
+    MEXAIDriver.Available=false
+    MEXAIDriver.Error=problem
+    MEXAIDriver.Controller=nil
+    MEXAIDriver.Cab=nil
+    MEXAIDriver.Visuals=nil
+    -- GMod can hot-reload autorun while the old AI timer still exists.
+    timer.Remove("MEX_AI_DriverTick")
+    hook.Remove("PlayerSay","MEX_AI_DriverChat")
+    ErrorNoHalt("[MEX AI Driver ALPHA] Module files are missing or broken: "..
+        problem..". AI disabled; reinstall or rebuild the COMPLETE MEX addon.\n")
+    concommand.Add("mex_ai_status",function(ply)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        local msg="[MEX AI Driver ALPHA] DISABLED: "..problem
+        if IsValid(ply) then ply:PrintMessage(HUD_PRINTCONSOLE,msg.."\n")
+        else print(msg) end
+    end)
+    return
+end
+
+local Bridge=modules.bridge
+local Controller=modules.controller
+local Cab=modules.cab
+local Chat=modules.chat
+local Visual=modules.visual
+MEXAIDriver.Available=Bridge.Available==true
+MEXAIDriver.Error=Bridge.Error
+MEXAIDriver.Visuals=Visual
 local LIVE = CreateConVar("mex_ai_live", "0", FCVAR_ARCHIVE, "Allow MEX AI to actuate compatible train KV (0=dry-run)")
 local sessions = {}
 local takeoverQueue = {}
@@ -21,9 +66,9 @@ local function Inform(ply, text)
     -- ChatPrint may also be mirrored to the local console. Send one message
     -- per invocation instead of printing it twice for player commands.
     if IsValid(ply) then
-        ply:ChatPrint("[MEX AI] " .. text)
+        ply:ChatPrint("[MEX AI Driver ALPHA] " .. text)
     else
-        print("[MEX AI] " .. text)
+        print("[MEX AI Driver ALPHA] " .. text)
     end
 end
 
@@ -96,7 +141,8 @@ concommand.Add("mex_ai_status", function(ply)
     if not IsAdmin(ply) then return end
     local pendingCount = type(Bridge.PendingCount) == "function" and Bridge.PendingCount() or 0
     local socketStatus = Bridge.Available and "OK" or ("UNAVAILABLE (" .. tostring(Bridge.Error or "module not loaded") .. ")")
-    Inform(ply, "LuaSocket=" .. socketStatus .. " LIVE=" .. LIVE:GetInt() .. " pending=" .. pendingCount)
+    Inform(ply, "ALPHA (experimental, incomplete). LuaSocket=" .. socketStatus ..
+        " LIVE=" .. LIVE:GetInt() .. " pending=" .. pendingCount)
     for train, session in pairs(sessions) do
         if IsValid(train) then
             local state = {train = Controller.ReadTrain(train), route = Controller.ReadRoute(train)}
@@ -332,7 +378,7 @@ timer.Create("MEX_AI_DriverTick", 0.1, 0, function()
 end)
 
 if Bridge.Available then
-    print("[MEX AI] Driver ready; use mex_ai_attach / mex_ai_status / mex_ai_visual_refresh. LIVE is disabled by default.")
+    print("[MEX AI Driver ALPHA] Experimental driver initialized. Use mex_ai_attach / mex_ai_status / mex_ai_visual_refresh. LIVE is disabled by default.")
 else
-    print("[MEX AI] Driver controls disabled until the server LuaSocket dependency is installed; use mex_ai_status.")
+    print("[MEX AI Driver ALPHA] AI control unavailable until server LuaSocket is installed. MEX itself remains functional; use mex_ai_status.")
 end
