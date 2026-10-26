@@ -936,6 +936,8 @@ if CLIENT then
                 istable(API.Languages.ad) and table.Count(API.Languages.ad) or 0))
         local ent=scripted_ents.Get(class)
         local found=false
+        local packCount=0
+        print("[MEX ASNP SPAWNER] compatible="..tostring(SupportsASNP(class)))
         for _,setting in ipairs(ent and ent.Spawner or {}) do
             if setting[1]=="Announcer" and setting[3]=="List" then
                 found=true
@@ -952,11 +954,16 @@ if CLIENT then
         end
         for id,pack in SortedPairs(API.Packs) do
             if IsActivePack(pack) then
+                packCount=packCount+1
                 print("[MEX ASNP SPAWNER] pack "..id
                     .." localID="..tostring(pack.registeredID)
                     .." serverID="..tostring(API.ServerIndices[id])
                     .." validID="..tostring(PackIndex(id,pack)))
             end
+        end
+        if packCount==0 then
+            print("[MEX ASNP SPAWNER] No ASNP line pack matches this map. "
+                .."Compatible train hardware alone cannot supply station announcements.")
         end
     end)
 end
