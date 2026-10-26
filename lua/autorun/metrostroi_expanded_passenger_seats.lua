@@ -367,13 +367,13 @@ if SERVER then
         end
     end)
 
-    concommand.Add("mps_rescan", function(ply)
+    concommand.Add("mex_passanger_seats_rescan", function(ply)
         if IsValid(ply) and not ply:IsAdmin() then return end
         ScanExistingTrains()
         print("[Metrostroi Expanded/Passenger Seats] rescan requested")
     end)
 
-    concommand.Add("mps_status", function(ply)
+    concommand.Add("mex_passanger_seats_status", function(ply)
         if IsValid(ply) and not ply:IsAdmin() then return end
 
         local trains, seats, auto = 0, 0, 0
@@ -398,7 +398,7 @@ end
 
 if CLIENT then
     local debugSeats = CreateClientConVar(
-        "mps_debug_seats",
+        "mex_passanger_seats_debug_seats",
         "0",
         true,
         false,
