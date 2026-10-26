@@ -738,82 +738,183 @@ end)
 -- Handle both load orders (MEX first or content addon first).
 timer.Create("MEXASNP_Register",1,0,API.TryRegister)
 
--- Every Metrostroi train with an Announcer spawner option gets custom packs.
--- The Ezh3 / 81-710 spawner filters asnp=true entries and uses a +1 UI offset
--- for its legacy RRI option. Keep its original on-spawn conversion intact.
-if CLIENT then
-    local function SpawnerIndex(class,id)
-        if class=="gmod_subway_ezh3" or class:find("81%-710") then
-            return id+1
-        end
-        return id
-    end
+-- Universal ASNP support for Metrostroi trains (not Ezh3-specific).
+-- The stock spawner reads ENT.Spawner separately in the client and server
+-- realms. Only touch classes with an Announcer selector or proven 81_71_ASNP
+-- hardware; do not offer ASNP on UPO/RRI-only or otherwise incompatible cabs.
+API.ASNPHardwareClasses = API.ASNPHardwareClasses or {}
 
-    function API.PatchTrainSpawners()
-        local count=0
-        for class,record in pairs(scripted_ents.GetList() or {}) do
-            if not string.StartWith(class,"gmod_subway_") then continue end
-            local train=record.t
-            if not train or not istable(train.Spawner) then continue end
-            for _,setting in ipairs(train.Spawner) do
-                if setting[1]~="Announcer" or setting[3]~="List" then continue end
-                if not setting.MEXASNPOriginal then
-                    local original=setting[4]
-                    if not istable(original) and not isfunction(original) then continue end
+local function IsActivePack(pack)
+    if not istable(pack) then return false end
+    local map = string.lower(game.GetMap() or "")
+    for _,prefix in ipairs(pack.maps or {}) do
+        if isstring(prefix) and string.StartWith(map,string.lower(prefix)) then
+            return true
+        end
+    end
+    return false
+end
+
+local function PackIndex(id,pack)
+    local index=CLIENT and API.ServerIndices[id] or nil
+    index=index or pack.registeredID
+    if not isnumber(index) or index<1 then return end
+    local tableEntry=Metrostroi and Metrostroi.AnnouncementsASNP
+        and Metrostroi.AnnouncementsASNP[index]
+    local route=Metrostroi and Metrostroi.ASNPSetup
+        and Metrostroi.ASNPSetup[index]
+    -- Do not advertise a pack that was not installed at this index. Otherwise
+    -- the spawner can select the Russian voice occupying the same number.
+    if not istable(tableEntry) or not istable(route)
+        or tableEntry.name~=pack.name or route.name~=pack.name then return end
+    return index
+end
+
+-- Ezh3/81-710 reserve option #1 for their mechanical RRI cassette. Other
+-- ASNP-equipped trains (Ezh, 81-717, 81-720, 81-718, addons...) use the
+-- announcer's ID directly. Detect the offset by the *native option*, rather
+-- than applying it to all "Ezh" or 81-series models.
+local function IsCassetteFirst(class,options)
+    if class=="gmod_subway_ezh3" or string.find(class,"81%-710") then return true end
+    if not istable(options) or not isstring(options[1]) then return false end
+    local rri=Metrostroi and isfunction(Metrostroi.GetPhrase)
+        and Metrostroi.GetPhrase("Spawner.710.RRI")
+    return rri~=nil and options[1]==rri
+end
+
+local function CustomChoices(class,original,...)
+    local base=isfunction(original) and original(...) or original
+    local options=table.Copy(istable(base) and base or {})
+    local legacy=IsCassetteFirst(class,options)
+    if legacy and options[1]==nil then
+        options[1]="RRI: Cassette announcer"
+    end
+    for id,pack in pairs(API.Packs) do
+        if IsActivePack(pack) then
+            local idx=PackIndex(id,pack)
+            if idx then
+                local sound=Metrostroi.AnnouncementsASNP[idx]
+                -- ASNP custom voices are intentionally valid for both
+                -- ordinary and RIU-filtered ASNP hardware, never RRI mode.
+                if not sound.riu and not sound.asnp then
+                    options[legacy and idx+1 or idx]=pack.name
+                end
+            end
+        end
+    end
+    return options
+end
+
+local function HasASNPAnnouncer(train)
+    return IsValid(train) and train.ASNP~=nil and train.Announcer~=nil
+        and train.Announcer.AnnTable=="AnnouncementsASNP"
+end
+
+local function DetectASNPClasses()
+    for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+        if HasASNPAnnouncer(train) then
+            API.ASNPHardwareClasses[train:GetClass()]=true
+        end
+    end
+end
+
+local function PatchOneSpawner(class,record)
+    if not istable(record) or not istable(record.Spawner) then return 0 end
+    local found=false
+    local count=0
+    for _,setting in ipairs(record.Spawner) do
+        if istable(setting) and setting[1]=="Announcer" and setting[3]=="List" then
+            found=true
+            local original=setting.MEXASNPOriginal or setting[4]
+            if isfunction(original) or istable(original) then
+                -- The selector itself is a client-side widget. The server
+                -- still runs the train's original setting[6] callback, so all
+                -- original spawn conversions and ASNP/RRI mode switches stay.
+                if CLIENT and not setting.MEXASNPOriginal then
                     setting.MEXASNPOriginal=original
                     setting[4]=function(...)
-                        local base=isfunction(original) and original(...) or original
-                        local options=table.Copy(istable(base) and base or {})
-                        local legacy=class=="gmod_subway_ezh3" or class:find("81%-710")~=nil
-                        -- The stock GUI hides an announcer selector when there
-                        -- is only one option (RRI). Add synced ASNP packs under
-                        -- their actual server IDs, preserving the +1 RRI slot.
-                        if legacy and not options[1] then
-                            options[1]="RRI: Cassette announcer"
-                        end
-                        for id,pack in pairs(API.Packs) do
-                            local index=API.ServerIndices[id] or pack.registeredID
-                            local sound=Metrostroi and Metrostroi.AnnouncementsASNP
-                                and Metrostroi.AnnouncementsASNP[index or -1]
-                            if index and (not sound or not sound.asnp) then
-                                options[SpawnerIndex(class,index)]=pack.name
-                            end
-                        end
-                        return options
+                        return CustomChoices(class,original,...)
                     end
                     count=count+1
                 end
             end
         end
-        return count
     end
+    if not found and API.ASNPHardwareClasses[class] then
+        -- For trains with a permanently fitted ASNP but no announcer menu,
+        -- install an ordinary NW2 'Announcer' selection on both realms.
+        -- Only do this after an actual spawned train confirms ASNP hardware.
+        local entry={
+            "Announcer","Spawner.717.Announcer","List",
+            function()
+                local opts={}
+                for idx,sound in pairs(Metrostroi and Metrostroi.AnnouncementsASNP or {}) do
+                    if isnumber(idx) and istable(sound) and not sound.riu then
+                        opts[idx]=sound.name or tostring(idx)
+                    end
+                end
+                return opts
+            end,
+        }
+        table.insert(record.Spawner,entry)
+        if CLIENT then
+            entry.MEXASNPOriginal=entry[4]
+            local original=entry[4]
+            entry[4]=function(...) return CustomChoices(class,original,...) end
+        end
+        count=count+1
+    end
+    return count
+end
 
-    concommand.Add("mex_asnp_spawner_status",function()
-        local language=API.Languages.ad
+function API.PatchTrainSpawners()
+    DetectASNPClasses()
+    local count=0
+    for class,record in pairs(scripted_ents.GetList() or {}) do
+        if isstring(class) and string.StartWith(class,"gmod_subway_")
+            and istable(record) and istable(record.t) then
+            count=count+PatchOneSpawner(class,record.t)
+        end
+    end
+    return count
+end
+
+timer.Create("MEXASNP_Spawners",2,0,API.PatchTrainSpawners)
+hook.Add("InitPostEntity","MEXASNP_SpawnerInit",function()
+    timer.Simple(0,API.PatchTrainSpawners)
+end)
+
+if CLIENT then
+    concommand.Add("mex_asnp_spawner_status",function(_,_,args)
+        local class=(args and args[1]) or "gmod_subway_ezh3"
         print("[MEX ASNP SPAWNER] map="..tostring(game.GetMap())
+            .." class="..class
             .." received="..tostring(next(API.ServerDefinitions)~=nil)
-            .." adamovianLanguage="..tostring(istable(language) and table.Count(language) or 0))
-        local record=scripted_ents.GetStored("gmod_subway_ezh3")
-        local train=record and record.t
+            .." adamovianLanguage="..tostring(
+                istable(API.Languages.ad) and table.Count(API.Languages.ad) or 0))
+        local ent=scripted_ents.Get(class)
         local found=false
-        for _,entry in ipairs(train and train.Spawner or {}) do
-            if entry[1]=="Announcer" then
+        for _,setting in ipairs(ent and ent.Spawner or {}) do
+            if setting[1]=="Announcer" and setting[3]=="List" then
                 found=true
-                local opts=isfunction(entry[4]) and entry[4]()
-                    or (istable(entry[4]) and entry[4] or {})
-                for i,name in pairs(opts) do
-                    print("[MEX ASNP SPAWNER] option "..tostring(i)
-                        .." = "..tostring(name))
+                local opts=isfunction(setting[4]) and setting[4]()
+                    or (istable(setting[4]) and setting[4] or {})
+                for idx,name in SortedPairs(opts) do
+                    print("[MEX ASNP SPAWNER] option "..idx.." = "..tostring(name))
                 end
             end
         end
-        if not found then print("[MEX ASNP SPAWNER] Ezh3 has no Announcer setting") end
-        for id,pack in pairs(API.Packs) do
-            print("[MEX ASNP SPAWNER] pack "..id
-                .." ID="..tostring(pack.registeredID)
-                .." serverID="..tostring(API.ServerIndices[id]))
+        if not found then
+            print("[MEX ASNP SPAWNER] no ASNP selector (hardware detected="
+                ..tostring(API.ASNPHardwareClasses[class] or false)..")")
+        end
+        for id,pack in SortedPairs(API.Packs) do
+            if IsActivePack(pack) then
+                print("[MEX ASNP SPAWNER] pack "..id
+                    .." localID="..tostring(pack.registeredID)
+                    .." serverID="..tostring(API.ServerIndices[id])
+                    .." validID="..tostring(PackIndex(id,pack)))
+            end
         end
     end)
-
-    timer.Create("MEXASNP_Spawners",2,0,API.PatchTrainSpawners)
 end
