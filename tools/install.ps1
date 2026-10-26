@@ -207,4 +207,4 @@ foreach ($relative in $required) {
 Write-Host ""
 Write-Host "Installed successfully." -ForegroundColor Green
 Write-Host "Restart Garry's Mod or change/restart the map before testing."
-Write-Host "Passenger seat status command: mps_status"
+Write-Host "Passenger seat status command: mex_passanger_seats_status"
