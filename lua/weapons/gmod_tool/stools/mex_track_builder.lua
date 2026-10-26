@@ -22,7 +22,7 @@ TOOL.ClientConVar = {
 }
 
 if CLIENT then
-    language.Add("tool.mex_track_builder.name", "Track Builder")
+    language.Add("tool.mex_track_builder.name", "Track Builder [ALPHA]")
     language.Add("tool.mex_track_builder.desc",
         "Browse original Metrostroi / Track Pack model catalog")
     language.Add("tool.mex_track_builder.0",
@@ -67,11 +67,8 @@ end
 if CLIENT then
     local currentBrowser
 
-    local BG = Color(28, 34, 41)
-    local PANE = Color(39, 47, 56)
-    local SELECTED = Color(61, 106, 84)
-    local WHITE = Color(238, 244, 246)
-    local MUTED = Color(162, 187, 198)
+    -- Use the standard GMod Derma skin for the model catalog and toolgun UI.
+    -- Only model-preview lighting and selected-model outline are customized.
 
     local function TrackName(info)
         return info.name or string.StripExtension(
@@ -111,28 +108,17 @@ if CLIENT then
 
         local frame = vgui.Create("DFrame")
         currentBrowser = frame
-        frame:SetTitle("Metrostroi Expanded  /  Track Model Catalog")
+        frame:SetTitle("Metrostroi Expanded | Track Model Catalog [ALPHA]")
         frame:SetSize(math.min(ScrW() - 45, 1060), math.min(ScrH() - 45, 755))
         frame:SetMinWidth(640)
         frame:SetMinHeight(475)
         frame:SetSizable(true)
         frame:Center()
         frame:MakePopup()
-        frame.Paint = function(_, w, h)
-            draw.RoundedBox(4, 0, 0, w, h, BG)
-            surface.SetDrawColor(76, 100, 108)
-            surface.DrawOutlinedRect(0, 0, w, h, 1)
-        end
-
         local header = vgui.Create("DPanel", frame)
         header:Dock(TOP)
         header:SetTall(74)
         header:DockPadding(9, 8, 9, 7)
-        header.Paint = function(_, w, h)
-            surface.SetDrawColor(PANE)
-            surface.DrawRect(0, 0, w, h)
-        end
-
         local search = vgui.Create("DTextEntry", header)
         search:Dock(TOP)
         search:SetTall(27)
@@ -180,17 +166,12 @@ if CLIENT then
         footer:Dock(BOTTOM)
         footer:SetTall(42)
         footer:DockPadding(10, 6, 10, 6)
-        footer.Paint = function(_, w, h)
-            surface.SetDrawColor(PANE)
-            surface.DrawRect(0, 0, w, h)
-        end
         local useModel = vgui.Create("DButton", footer)
         useModel:Dock(RIGHT)
         useModel:SetWide(150)
-        useModel:SetText("USE THIS MODEL")
+        useModel:SetText("Use selected model")
         local countText = vgui.Create("DLabel", footer)
         countText:Dock(FILL)
-        countText:SetTextColor(WHITE)
         countText:SetContentAlignment(4)
 
         local details = vgui.Create("DPanel", frame)
@@ -198,27 +179,16 @@ if CLIENT then
         details:SetWide(300)
         details:DockMargin(7, 8, 10, 8)
         details:DockPadding(9, 9, 9, 9)
-        details.Paint = function(_, w, h)
-            surface.SetDrawColor(PANE)
-            surface.DrawRect(0, 0, w, h)
-        end
-
         local name = vgui.Create("DLabel", details)
         name:Dock(TOP)
         name:SetTall(34)
         name:SetFont("DermaLarge")
-        name:SetTextColor(WHITE)
         name:SetText("Choose a track model")
 
         local viewportBackground = vgui.Create("DPanel", details)
         viewportBackground:Dock(TOP)
         viewportBackground:SetTall(275)
         viewportBackground:DockMargin(0, 4, 0, 7)
-        viewportBackground.Paint = function(_, w, h)
-            surface.SetDrawColor(18, 23, 29)
-            surface.DrawRect(0, 0, w, h)
-        end
-
         local preview = vgui.Create("DModelPanel", viewportBackground)
         preview:Dock(FILL)
         preview:SetMouseInputEnabled(true)
@@ -253,13 +223,11 @@ if CLIENT then
         modelPath:Dock(TOP)
         modelPath:SetTall(73)
         modelPath:SetWrap(true)
-        modelPath:SetTextColor(MUTED)
         modelPath:SetText("Select a model to see its real 3-D geometry.")
 
         local attributes = vgui.Create("DLabel", details)
         attributes:Dock(TOP)
         attributes:SetTall(42)
-        attributes:SetTextColor(Color(142, 220, 181))
         attributes:SetWrap(true)
         attributes:SetText("Original Metrostroi / Track Pack assets only.")
 
@@ -282,16 +250,11 @@ if CLIENT then
         hint:Dock(TOP)
         hint:SetTall(60)
         hint:SetWrap(true)
-        hint:SetTextColor(WHITE)
         hint:SetText("Drag the model to rotate. Scroll over the preview to zoom.")
 
         local scroll = vgui.Create("DScrollPanel", frame)
         scroll:Dock(FILL)
         scroll:DockMargin(9, 8, 0, 8)
-        scroll.Paint = function(_, w, h)
-            surface.SetDrawColor(24, 29, 36)
-            surface.DrawRect(0, 0, w, h)
-        end
         local grid = vgui.Create("DIconLayout", scroll)
         grid:Dock(TOP)
         grid:DockMargin(8, 8, 8, 8)
@@ -345,10 +308,11 @@ if CLIENT then
                 tile.ModelPath = info.model
                 tile.Selected = info.model == selected
                 tile.Paint = function(self, w, h)
-                    draw.RoundedBox(3, 0, 0, w, h, self.Selected
-                        and SELECTED or Color(48, 56, 65))
+                    -- GMod's default panel skin, plus a simple selection
+                    -- outline rather than a custom dark/green theme.
+                    derma.SkinHook("Paint", "Panel", self, w, h)
                     if self.Selected then
-                        surface.SetDrawColor(120, 230, 165)
+                        surface.SetDrawColor(65, 130, 200, 255)
                         surface.DrawOutlinedRect(0, 0, w, h, 2)
                     end
                 end
@@ -382,11 +346,6 @@ if CLIENT then
                 label:SetFont("DermaDefault")
                 label:SetText(TrackName(info))
                 label:SetTooltip(info.model)
-                label:SetTextColor(WHITE)
-                label.Paint = function(_, w, h)
-                    surface.SetDrawColor(34, 42, 51)
-                    surface.DrawRect(0, 0, w, h)
-                end
                 label.DoClick = function() SelectModel(info) end
             end
             loaded = upper
@@ -466,14 +425,15 @@ if CLIENT then
 
     function TOOL.BuildCPanel(panel)
         panel:AddControl("Header", {
-            Text = "Metrostroi Expanded | Track Builder",
-            Description = "Only original mounted Metrostroi / Track Pack railway models.",
+            Text = "Metrostroi Expanded | Track Builder [ALPHA]",
+            Description = "Experimental original Metrostroi / Track Pack railway construction tool.",
         })
-        local open = panel:Button("OPEN TRACK MODEL CATALOG")
+        panel:Help("ALPHA: experimental, unfinished and may contain bugs or affect performance.")
+        local open = panel:Button("Open track model catalog")
         open.DoClick = OpenModelCatalog
         panel:TextEntry("Selected model", "mex_track_builder_native_model")
         panel:CheckBox("Reverse rail direction", "mex_track_builder_native_reverse")
-        panel:Help("STATION STARTER - rail geometry only (platform models later)")
+        panel:Help("Station starter (rail geometry only)")
         local station = vgui.Create("DComboBox")
         station:SetTall(26)
         station:AddChoice("Ordinary railway", 0)
