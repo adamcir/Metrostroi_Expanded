@@ -73,4 +73,4 @@ done
 echo
 echo "Installed successfully."
 echo "Restart Garry's Mod or change/restart the map before testing."
-echo "Passenger seat status command: mps_status"
+echo "Passenger seat status command: mex_passanger_seats_status"
