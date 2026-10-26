@@ -20,6 +20,46 @@ function API.RegisterPack(id, definition)
     API.Packs[id] = definition
 end
 
+-- ASNP cab hardware exists independently from a map's track metadata. For
+-- mapless sandbox/testing maps, a content pack may explicitly allow MANUAL
+-- station selection. Do not activate that mode when ANY pack fits this map.
+function API.MatchesMap(pack)
+    if not istable(pack) then return false end
+    if not istable(pack.maps) then return true end
+    local map=string.lower(game.GetMap() or "")
+    for _,prefix in ipairs(pack.maps) do
+        if isstring(prefix) and string.StartWith(map,string.lower(prefix)) then
+            return true
+        end
+    end
+    return false
+end
+
+function API.IsManualFallback(pack)
+    if not istable(pack) or pack.manualAnyMap~=true then return false end
+    for _,candidate in pairs(API.Packs) do
+        if API.MatchesMap(candidate) then return false end
+    end
+    return true
+end
+
+function API.IsAvailable(pack)
+    return API.MatchesMap(pack) or API.IsManualFallback(pack)
+end
+
+function API.DisplayName(pack)
+    if not istable(pack) then return "" end
+    if API.IsManualFallback(pack) then
+        return (pack.name or "Custom ASNP").." [MANUAL: "..
+            (pack.lineName or "off-map").."]"
+    end
+    return pack.name or "Custom ASNP"
+end
+
+local function RegisteredName(pack)
+    return pack and (pack._registeredName or pack.name)
+end
+
 local function Read32(data, offset)
     local a,b,c,d = string.byte(data,offset,offset+3)
     if not d then return end
@@ -74,7 +114,7 @@ local function PinServerIndex(id,pack)
     local current=pack.registeredID
     local route=Metrostroi.ASNPSetup[current]
     local sounds=Metrostroi.AnnouncementsASNP[current]
-    if not route or route.name~=pack.name or not sounds then return end
+    if not route or route.name~=RegisteredName(pack) or not sounds then return end
     if expected~=current then
         Metrostroi.ASNPSetup[expected]=route
         Metrostroi.AnnouncementsASNP[expected]=sounds
@@ -88,12 +128,8 @@ if SERVER then
     API.SentResources=API.SentResources or {}
     local function SendIndexSync(ply)
         if not Metrostroi then return end
-        local map=string.lower(game.GetMap() or "")
         for id,pack in pairs(API.Packs) do
-            local matching=false
-            for _,prefix in ipairs(pack.maps or {}) do
-                if string.StartWith(map,string.lower(prefix)) then matching=true break end
-            end
+            local matching=API.IsAvailable(pack)
             local setup=Metrostroi.ASNPSetup and Metrostroi.ASNPSetup[pack.registeredID or -1]
             local sounds=Metrostroi.AnnouncementsASNP
                 and Metrostroi.AnnouncementsASNP[pack.registeredID or -1]
@@ -103,7 +139,7 @@ if SERVER then
                 net.WriteUInt(pack.registeredID,16)
                 net.WriteTable(setup)
                 net.WriteTable(sounds)
-                net.WriteString(pack.name or id)
+                net.WriteString(RegisteredName(pack) or id)
                 net.WriteString(pack.language or "en")
                 -- Content-only packs (including Adamovian Metro) may not
                 -- have their Lua files on remote clients. The translated UI
@@ -160,7 +196,7 @@ else
             API.Packs[id]=pack
         end
         -- Do not retain an old 'en' fallback from a previous map/session.
-        pack.name=name
+        pack._registeredName=name
         pack.language=language
         PinServerIndex(id,pack)
     end)
@@ -180,21 +216,17 @@ end
 function API.TryRegister()
     if not Metrostroi or not isfunction(Metrostroi.AddANSPAnnouncer)
         or not istable(Metrostroi.ASNPSetup) or not istable(Metrostroi.AnnouncementsASNP) then return end
-    local map=game.GetMap():lower()
     local ids=table.GetKeys(API.Packs)
     table.sort(ids) -- Stable ordering of custom IDs on server and all clients.
     for _,id in ipairs(ids) do
         local pack=API.Packs[id]
-        local matches=(not pack.maps) or false
-        for _,prefix in ipairs(pack.maps or {}) do
-            if string.StartWith(map,prefix:lower()) then matches=true break end
-        end
-        if matches then
+        if API.IsAvailable(pack) then
             if CLIENT and API.ServerDefinitions[id] then
                 -- The server-selected ID and sounds are authoritative.
                 -- Do not re-register the client copy under a different ID.
                 PinServerIndex(id,pack)
             else
+            pack._registeredName=API.DisplayName(pack)
             -- Workshop content is not automatically transmitted when an addon
             -- was manually installed on a dedicated server. Send the WAVs too.
             if SERVER and isstring(pack.soundRoot) then
@@ -262,7 +294,7 @@ function API.TryRegister()
             if istable(routes) then
                 local present
                 for index,data in ipairs(Metrostroi.ASNPSetup) do
-                    if data.name==pack.name then present=index break end
+                    if data.name==RegisteredName(pack) then present=index break end
                 end
                 -- Hot reload and saved spawner indexes may keep an older ASNP
                 -- route even after pack files were updated. Always compare the
@@ -314,11 +346,11 @@ function API.TryRegister()
                     end
                 end
                 if not pack._applied or not matches then
-                    Metrostroi.AddANSPAnnouncer(pack.name,sounds,routes)
+                    Metrostroi.AddANSPAnnouncer(RegisteredName(pack),sounds,routes)
                     pack._applied=true
                 end
                 for index,data in ipairs(Metrostroi.ASNPSetup) do
-                    if data.name==pack.name then
+                    if data.name==RegisteredName(pack) then
                         pack.registeredID=index
                         break
                     end
@@ -334,17 +366,12 @@ end
 -- Metrostroi configs and files that exist in Git but not in installed addons.
 concommand.Add("mex_asnp_route_status", function(ply)
     if SERVER and IsValid(ply) and not ply:IsAdmin() then return end
-    local map=string.lower(game.GetMap() or "")
     for id,pack in pairs(API.Packs) do
-        local relevant=false
-        for _,prefix in ipairs(pack.maps or {}) do
-            if string.StartWith(map,string.lower(prefix)) then relevant=true break end
-        end
-        if relevant then
+        if API.IsAvailable(pack) then
             local index=API.ServerIndices[id] or pack.registeredID
             if not index then
                 for i,setup in ipairs(Metrostroi and Metrostroi.ASNPSetup or {}) do
-                    if setup.name==pack.name then index=i break end
+                    if setup.name==RegisteredName(pack) then index=i break end
                 end
             end
             local setup=index and Metrostroi.ASNPSetup[index]
@@ -545,12 +572,9 @@ local function SelectedPack(train)
     local idx=train:GetNW2Int("Announcer",1)
     local setup=Metrostroi.ASNPSetup[idx]
     if not setup then return end
-    local map=string.lower(game.GetMap() or "")
     for _,pack in pairs(API.Packs) do
-        if pack.name==setup.name then
-            for _,prefix in ipairs(pack.maps or {}) do
-                if string.StartWith(map,string.lower(prefix)) then return pack end
-            end
+        if RegisteredName(pack)==setup.name and API.IsAvailable(pack) then
+            return pack
         end
     end
 end
@@ -679,7 +703,7 @@ if SERVER then
                 and Metrostroi.ASNPSetup[train:GetNW2Int("Announcer",1)]
             if not setup then return false end
             for _,pack in pairs(API.Packs) do
-                if pack.name==setup.name then return true end
+                if RegisteredName(pack)==setup.name then return true end
             end
         elseif device.AnnTable=="AnnouncementsRRI" then
             local line=Metrostroi and Metrostroi.RRISetup and Metrostroi.RRISetup[1]
@@ -770,14 +794,7 @@ local function SupportsASNP(class)
 end
 
 local function IsActivePack(pack)
-    if not istable(pack) then return false end
-    local map = string.lower(game.GetMap() or "")
-    for _,prefix in ipairs(pack.maps or {}) do
-        if isstring(prefix) and string.StartWith(map,string.lower(prefix)) then
-            return true
-        end
-    end
-    return false
+    return API.IsAvailable(pack)
 end
 
 local function PackIndex(id,pack)
@@ -791,7 +808,8 @@ local function PackIndex(id,pack)
     -- Do not advertise a pack that was not installed at this index. Otherwise
     -- the spawner can select the Russian voice occupying the same number.
     if not istable(tableEntry) or not istable(route)
-        or tableEntry.name~=pack.name or route.name~=pack.name then return end
+        or tableEntry.name~=RegisteredName(pack)
+        or route.name~=RegisteredName(pack) then return end
     return index
 end
 
@@ -822,7 +840,7 @@ local function CustomChoices(class,original,...)
                 -- ASNP custom voices are intentionally valid for both
                 -- ordinary and RIU-filtered ASNP hardware, never RRI mode.
                 if not sound.riu and not sound.asnp then
-                    options[legacy and idx+1 or idx]=pack.name
+                    options[legacy and idx+1 or idx]=RegisteredName(pack)
                 end
             end
         end
@@ -958,6 +976,8 @@ if CLIENT then
                 print("[MEX ASNP SPAWNER] pack "..id
                     .." localID="..tostring(pack.registeredID)
                     .." serverID="..tostring(API.ServerIndices[id])
+                    .." registeredName="..tostring(RegisteredName(pack))
+                    .." manual="..tostring(API.IsManualFallback(pack))
                     .." validID="..tostring(PackIndex(id,pack)))
             end
         end
