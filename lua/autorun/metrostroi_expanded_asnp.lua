@@ -728,9 +728,19 @@ if CLIENT then
                     setting[4]=function(...)
                         local base=isfunction(original) and original(...) or original
                         local options=table.Copy(istable(base) and base or {})
-                        for _,pack in pairs(API.Packs) do
-                            if pack.registeredID then
-                                options[SpawnerIndex(class,pack.registeredID)]=pack.name
+                        local legacy=class=="gmod_subway_ezh3" or class:find("81%-710")~=nil
+                        -- The stock GUI hides an announcer selector when there
+                        -- is only one option (RRI). Add synced ASNP packs under
+                        -- their actual server IDs, preserving the +1 RRI slot.
+                        if legacy and not options[1] then
+                            options[1]="RRI: Cassette announcer"
+                        end
+                        for id,pack in pairs(API.Packs) do
+                            local index=API.ServerIndices[id] or pack.registeredID
+                            local sound=Metrostroi and Metrostroi.AnnouncementsASNP
+                                and Metrostroi.AnnouncementsASNP[index or -1]
+                            if index and (not sound or not sound.asnp) then
+                                options[SpawnerIndex(class,index)]=pack.name
                             end
                         end
                         return options
@@ -741,6 +751,31 @@ if CLIENT then
         end
         return count
     end
+
+    concommand.Add("mex_asnp_spawner_status",function()
+        print("[MEX ASNP SPAWNER] map="..tostring(game.GetMap())
+            .." received="..tostring(next(API.ServerDefinitions)~=nil))
+        local record=scripted_ents.GetStored("gmod_subway_ezh3")
+        local train=record and record.t
+        local found=false
+        for _,entry in ipairs(train and train.Spawner or {}) do
+            if entry[1]=="Announcer" then
+                found=true
+                local opts=isfunction(entry[4]) and entry[4]()
+                    or (istable(entry[4]) and entry[4] or {})
+                for i,name in pairs(opts) do
+                    print("[MEX ASNP SPAWNER] option "..tostring(i)
+                        .." = "..tostring(name))
+                end
+            end
+        end
+        if not found then print("[MEX ASNP SPAWNER] Ezh3 has no Announcer setting") end
+        for id,pack in pairs(API.Packs) do
+            print("[MEX ASNP SPAWNER] pack "..id
+                .." ID="..tostring(pack.registeredID)
+                .." serverID="..tostring(API.ServerIndices[id]))
+        end
+    end)
 
     timer.Create("MEXASNP_Spawners",2,0,API.PatchTrainSpawners)
 end
