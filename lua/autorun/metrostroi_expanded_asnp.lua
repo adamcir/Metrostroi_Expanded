@@ -118,6 +118,12 @@ else
     net.Receive("MEXASNP_IndexSync",function()
         local id=net.ReadString()
         local index=net.ReadUInt(16)
+        -- Older MEX servers only transmit the numeric index.
+        if net.BytesLeft()<=0 then
+            API.ServerIndices[id]=index
+            if API.Packs[id] then PinServerIndex(id,API.Packs[id]) end
+            return
+        end
         local setup=net.ReadTable()
         local sounds=net.ReadTable()
         local name=net.ReadString()
