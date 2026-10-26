@@ -26,7 +26,10 @@ local function Read32(data, offset)
     return a+b*256+c*65536+d*16777216
 end
 
+API.DurationCache=API.DurationCache or {}
 function API.AudioDuration(path, fallback)
+    local cached=API.DurationCache[path]
+    if cached then return cached end
     local data = file.Read("sound/"..path,"GAME")
     if not data or data:sub(1,4)~="RIFF" or data:sub(9,12)~="WAVE" then return fallback end
     local pos,rate,bytes=13
@@ -39,7 +42,9 @@ function API.AudioDuration(path, fallback)
         if rate and bytes then break end
         pos=body+size+(size%2)
     end
-    return rate and rate>0 and bytes and (bytes/rate) or fallback
+    local duration=rate and rate>0 and bytes and (bytes/rate) or nil
+    if duration and duration>0 then API.DurationCache[path]=duration end
+    return duration or fallback
 end
 
 -- A client can have a different set/order of legacy Metrostroi announcers
