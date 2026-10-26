@@ -69,6 +69,27 @@ of wheel contact, slopes and custom double-track profiles is required.
 
 See [Track Builder documentation](docs/TUNNEL_BUILDER.md).
 
+## ARS signal and player-position diagnostics
+
+MEX includes the original read-only nearest-signal and position helpers, now
+integrated under the `mex_ars_*` prefix. They run on the server; player-issued
+commands report results to the player's console and the server log. In the
+dedicated server console, the first connected player is used as the target.
+
+- `mex_ars_nearest` — nearest `gmod_track_signal` and distance
+- `mex_ars_nearest_full` — detailed signal position, path, track direction and ARS
+- `mex_ars_nearest_pos` — nearest signal's world coordinates
+- `mex_ars_nearest_json` — nearest signal name and position as JSON
+- `mex_ars_nearest_track` — nearest signal's Metrostroi track data
+- `mex_ars_nearest_within <units>` — limit search to a radius (default 500)
+- `mex_ars_player_pos` — player world position
+- `mex_ars_player_pos_full` — player position and eye angles
+- `mex_ars_player_pos_json` — player position as JSON
+- `mex_ars_player_pos_track` — player position on the Metrostroi track graph
+
+These utilities do **not** modify signals or ARS/EPK state. For deeper map
+diagnostics, see `mex_ars_map_check` and `mex_ars_map_train <entity ID>`.
+
 ## Passenger Seats
 
 Current passenger-seat module version: **0.2.0**
@@ -100,10 +121,10 @@ Press **E** again to leave. The addon moves the player back into the aisle after
 
 ### Commands
 
-- `mps_status` — show number of supported live trains and passenger seats
-- `mps_rescan` — rescan already spawned trains
-- `mps_debug_seats 1` — show passenger-seat interaction positions
-- `mps_debug_seats 0` — hide debug positions
+- `mex_passanger_seats_status` — show number of supported live trains and passenger seats
+- `mex_passanger_seats_rescan` — rescan already spawned trains
+- `mex_passanger_seats_debug_seats 1` — show passenger-seat interaction positions
+- `mex_passanger_seats_debug_seats 0` — hide debug positions
 
 
 ## StormFox 2 train weather (optional)
