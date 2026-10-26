@@ -6,6 +6,7 @@ MEXASNP.RegisterLanguage("cs", {
     ["route.label"] = "Trasa",
     ["track.label"] = "Kolej",
     ["ordinal.first"] = "prvni",
+    ["ordinal.second"] = "druhy",
     ["action.verify"] = "Zkontrolujte udaje",
     ["error.unknown"] = "Neznamy text",
     ["error.map"] = "Mapa nepodporovana",
