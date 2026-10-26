@@ -50,12 +50,27 @@ end
 -- A client can have a different set/order of legacy Metrostroi announcers
 -- than a dedicated server. The server's Announcer NW2 index is authoritative.
 API.ServerIndices=API.ServerIndices or {}
+API.ServerDefinitions=API.ServerDefinitions or {}
 local function PinServerIndex(id,pack)
     if not CLIENT then return end
     local expected=API.ServerIndices[id]
-    if not expected or expected<1 or not pack.registeredID
+    if not expected or expected<1
         or not Metrostroi or not istable(Metrostroi.ASNPSetup)
         or not istable(Metrostroi.AnnouncementsASNP) then return end
+
+    -- Replicate the route, not just the numeric index. Map-provided Metrostroi
+    -- announcers are not automatically synchronized on multiplayer clients.
+    -- In particular, a player lacking the content Lua sees no ASNP option at
+    -- all, or the same ID selecting a completely different Russian announcer.
+    local network=API.ServerDefinitions[id]
+    if network and istable(network.routes) and istable(network.sounds) then
+        Metrostroi.ASNPSetup[expected]=network.routes
+        Metrostroi.AnnouncementsASNP[expected]=network.sounds
+        pack.registeredID=expected
+        return
+    end
+
+    if not pack.registeredID then return end
     local current=pack.registeredID
     local route=Metrostroi.ASNPSetup[current]
     local sounds=Metrostroi.AnnouncementsASNP[current]
@@ -78,10 +93,17 @@ if SERVER then
             for _,prefix in ipairs(pack.maps or {}) do
                 if string.StartWith(map,string.lower(prefix)) then matching=true break end
             end
-            if matching and pack.registeredID then
+            local setup=Metrostroi.ASNPSetup and Metrostroi.ASNPSetup[pack.registeredID or -1]
+            local sounds=Metrostroi.AnnouncementsASNP
+                and Metrostroi.AnnouncementsASNP[pack.registeredID or -1]
+            if matching and pack.registeredID and istable(setup) and istable(sounds) then
                 net.Start("MEXASNP_IndexSync")
                 net.WriteString(id)
                 net.WriteUInt(pack.registeredID,16)
+                net.WriteTable(setup)
+                net.WriteTable(sounds)
+                net.WriteString(pack.name or id)
+                net.WriteString(pack.language or "en")
                 if IsValid(ply) then net.Send(ply) else net.Broadcast() end
             end
         end
@@ -96,9 +118,21 @@ else
     net.Receive("MEXASNP_IndexSync",function()
         local id=net.ReadString()
         local index=net.ReadUInt(16)
+        local setup=net.ReadTable()
+        local sounds=net.ReadTable()
+        local name=net.ReadString()
+        local language=net.ReadString()
+        if index<1 or not istable(setup) or not istable(sounds) then return end
         API.ServerIndices[id]=index
+        API.ServerDefinitions[id]={routes=setup,sounds=sounds}
         local pack=API.Packs[id]
-        if pack then PinServerIndex(id,pack) end
+        if not pack then
+            -- The pack's Lua may exist only on the dedicated server. The
+            -- server advertises it directly to every connected player's UI.
+            pack={name=name,language=language,maps={game.GetMap()}}
+            API.Packs[id]=pack
+        end
+        PinServerIndex(id,pack)
     end)
 end
 
@@ -115,6 +149,11 @@ function API.TryRegister()
             if string.StartWith(map,prefix:lower()) then matches=true break end
         end
         if matches then
+            if CLIENT and API.ServerDefinitions[id] then
+                -- The server-selected ID and sounds are authoritative.
+                -- Do not re-register the client copy under a different ID.
+                PinServerIndex(id,pack)
+            else
             -- Workshop content is not automatically transmitted when an addon
             -- was manually installed on a dedicated server. Send the WAVs too.
             if SERVER and isstring(pack.soundRoot) then
@@ -245,6 +284,7 @@ function API.TryRegister()
                 end
                 PinServerIndex(id,pack)
             end
+            end -- local registration is skipped once server config has arrived
         end
     end
 end
