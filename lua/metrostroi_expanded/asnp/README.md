@@ -89,10 +89,18 @@ custom content addon (e.g. Adamovian Metro) must be installed on the server
 with the sound WAVs. On joining, clients receive the matching route, announcer
 ID and translation dictionary from the server.
 
-**Map dependency:** Train support does not create a route on every map. A voice
-appears only when a compatible custom ASNP line pack matches the current map;
-Adamovian Metro currently supplies its own line packs for its configured maps.
+**Map support and manual mode:** A content author can set
+`manualAnyMap = true` on a *single* pack. It registers only if no other pack
+matches the map. In that case its spawner option explicitly says
+`[MANUAL: <line name>]`. This is useful when testing ASNP-equipped trains on
+a generic sandbox map (including weather/snow maps). The manual option plays
+the pack's defined stations and is **not** automatically tied to physical
+stations or track data on that sandbox map. Adamovian Metro enables this for
+its Suburb Construct ASNP pack. On a supported map MEX registers the correct
+pack normally and hides the off-map manual option. RPI/RRI does not inherit
+the manual fallback; its cassette stays map-specific.
+
 Use `mex_asnp_spawner_status gmod_subway_81-717_mvm` to see whether the missing
-menu comes from train compatibility, server synchronization, or an unsupported
-map. Do not force a mismatched route onto another map: station announcements
-would be wrong.
+menu comes from train compatibility, server synchronization, or a missing
+line pack. Close and reopen the Train Spawner after the server's announcer
+configuration arrives.
