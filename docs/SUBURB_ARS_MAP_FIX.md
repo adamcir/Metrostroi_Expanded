@@ -32,11 +32,10 @@ Make a backup before installing a new `garrysmod/data/metrostroi_data/signs_gm_s
 metrostroi_ars_independent 0
 mex_ars_map_check
 mex_ars_map_train <train_entity_id>
-mex_ars_status <train_entity_id>
 ```
 
 `mex_ars_map_check` reports every signal's route codes, type, track position/path, direction, `NextSignalLink`, occupancy and current effective ARS code. `mex_ars_map_train` calls the original `GetARSJoint` for the train and reports the next and previous signal it actually reads.
 
-A very high brake cylinder pressure or active `PneumaticNo2` is not sufficient proof of an EPK vent. Confirm `EmergencyValveEPK` and an event beginning `[MEX ARS] EPK ACTIVATED` in the **server** log.
+A very high brake cylinder pressure or active `PneumaticNo2` is not sufficient proof of an EPK vent. The experimental `mex_ars_repair.lua` module and its EPK event monitor were removed. Native Metrostroi ARS/EPK logic now runs without that patch. You can inspect the live `EmergencyValveEPK` field with the read-only `mex_ars_map_train` command.
 
 References: `metrostroi-repo/metrostroi_beta`: `gmod_track_signal/init.lua`, `sys_als_ars.lua`, `sv_railnetwork.lua`.
