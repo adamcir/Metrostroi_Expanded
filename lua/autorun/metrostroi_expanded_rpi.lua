@@ -54,6 +54,13 @@ local function SoundTable(pack)
         if isstring(key) and istable(source) and isstring(source[1]) then
             local path = pack.soundRoot .. "/" .. source[1]
             if file.Exists("sound/" .. path, "GAME") then
+                if SERVER then
+                    API.SentResources = API.SentResources or {}
+                    if not API.SentResources[path] then
+                        resource.AddFile("sound/" .. path)
+                        API.SentResources[path] = true
+                    end
+                end
                 local duration = tonumber(source[2]) or 2
                 if MEXASNP and isfunction(MEXASNP.AudioDuration) then
                     duration = MEXASNP.AudioDuration(path, duration) or duration
@@ -226,7 +233,32 @@ function API.TryRegister()
                     break
                 end
             end
+            if same and (istable(old[i].arrlast) ~= istable(new[i].arrlast)) then
+                same=false
+            end
             if not same then break end
+        end
+    end
+    -- Some Metrostroi maps replace only the cassette sound table. Never
+    -- leave a new circular route playing old or missing station recordings.
+    if same then
+        local installed=Metrostroi.AnnouncementsRRI
+            and Metrostroi.AnnouncementsRRI[1]
+        if not istable(installed) then
+            same=false
+        else
+            for key,source in pairs(pack.sounds or {}) do
+                if istable(source) and isstring(source[1]) then
+                    local path=pack.soundRoot.."/"..source[1]
+                    local oldSound=installed[key]
+                    local exists=file.Exists("sound/"..path,"GAME")
+                    if exists and (not istable(oldSound) or oldSound[1]~=path)
+                        or not exists and oldSound~=0.01 then
+                        same=false
+                        break
+                    end
+                end
+            end
         end
     end
     if same then
