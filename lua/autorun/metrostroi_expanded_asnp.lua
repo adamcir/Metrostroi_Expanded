@@ -292,7 +292,7 @@ end
 -- Show the actual registered route and station WAVs. This reveals stale
 -- Metrostroi configs and files that exist in Git but not in installed addons.
 concommand.Add("mex_asnp_route_status", function(ply)
-    if IsValid(ply) and not ply:IsAdmin() then return end
+    if SERVER and IsValid(ply) and not ply:IsAdmin() then return end
     local map=string.lower(game.GetMap() or "")
     for id,pack in pairs(API.Packs) do
         local relevant=false
@@ -300,9 +300,11 @@ concommand.Add("mex_asnp_route_status", function(ply)
             if string.StartWith(map,string.lower(prefix)) then relevant=true break end
         end
         if relevant then
-            local index
-            for i,setup in ipairs(Metrostroi and Metrostroi.ASNPSetup or {}) do
-                if setup.name==pack.name then index=i break end
+            local index=API.ServerIndices[id] or pack.registeredID
+            if not index then
+                for i,setup in ipairs(Metrostroi and Metrostroi.ASNPSetup or {}) do
+                    if setup.name==pack.name then index=i break end
+                end
             end
             local setup=index and Metrostroi.ASNPSetup[index]
             local line=setup and setup[1]
@@ -343,9 +345,10 @@ end)
 -- The same command works in a listen server, on a dedicated server
 -- console, and on a connected client (whose ID may have been reconciled).
 concommand.Add("mex_announcer_mp_status",function(ply)
-    if IsValid(ply) and not ply:IsAdmin() then return end
+    if SERVER and IsValid(ply) and not ply:IsAdmin() then return end
     print("[MEX AUDIO] realm="..(SERVER and "server" or "client")
-        .." map="..tostring(game.GetMap()))
+        .." map="..tostring(game.GetMap())
+        .." ASNPsync="..tostring(CLIENT and next(API.ServerDefinitions)~=nil or SERVER))
     for id,pack in pairs(API.Packs) do
         if pack.registeredID then
             print("[MEX AUDIO] pack="..id.." localIndex="..pack.registeredID
@@ -366,6 +369,10 @@ concommand.Add("mex_announcer_mp_status",function(ply)
                 .." arrived="..tostring(asnp and asnp.Arrived)
                 .." RRI="..tostring(rri and rri.Station)
                 .." arrived="..tostring(rri and rri.Arrived)
+                .." annType="..train:GetNW2Int("AnnType",-1)
+                .." rriLine="..train:GetNW2Int("RRI:Line",-1)
+                .." rriCassette="..tostring(Metrostroi and Metrostroi.RRISetup
+                    and Metrostroi.RRISetup[1] and Metrostroi.RRISetup[1].Name)
                 .." routeCurrent="..tostring(rri and Metrostroi
                     and rri.CurrentTable==Metrostroi.RRISetup))
         end
