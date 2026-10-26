@@ -26,7 +26,9 @@ In gmpublisher, select the folder printed by this script:
 
 It contains only `addon.json` and allowable mounted game files (including all
 MEX Lua modules), and excludes README/Markdown files, external backend scripts,
-Git metadata and installer tools. Do **not** select the entire Git repository
+Git metadata and installer tools.
+The builder verifies all essential ASNP/RPI and AI Driver Lua modules before
+upload; if a module is missing, it aborts instead of shipping a broken addon. Do **not** select the entire Git repository
 or any private Adamovian Metro addon. This builder leaves your working source
 and installed addon untouched and recreates only the staging folder.
 
@@ -681,7 +683,14 @@ Replicated archived server ConVars:
 - **Admin Train Fixer** is admin-only: left click fully repairs one wagon, right click repairs its consist, Reload repairs every Metrostroi wagon on the map
 - `mex_damage_status` now reports failed control/relay/light/indicator counts and the last wear-related failure
 
-## AI Driver visible operator
+## AI Driver [ALPHA] — visible operator
+
+**ALPHA WARNING:** This is an optional, unfinished feature. It is dry-run only
+by default (`mex_ai_live 0`), and it does not yet provide autonomous station
+navigation. Without LuaSocket and the external backend, AI control stays
+disabled while the rest of MEX continues to run. If any of the bundled
+`lua/metrostroi_expanded/ai_driver/*.lua` files are missing, MEX now disables
+the AI module without crashing the server. Use `mex_ai_status` to diagnose it.
 
 When `mex_ai_attach` is used on a supported cab, MEX displays a seated AI operator
 using the standard `models/player/barney.mdl` (blue-uniformed) model.
@@ -710,6 +719,6 @@ under genuine active ARS conditions when the map has no documented
 route graph. This is opt-in and cannot provide station navigation.
 `mex_ai_live` still defaults to 0.
 
-## AI Metro Driver (experimental)
+## AI Metro Driver [ALPHA] (experimental)
 
 A dry-run-first AI driver for Metrostroi using LuaSocket and an independent Node.js/Ollama backend is available in this repository. The installer scripts are scripts/install_ai_backend.ps1 (Windows) and scripts/install_ai_backend.sh (Linux). Train control is server-side; model guidelines live in tools/ai_driver_backend/driver_guide.md. See docs/AI_DRIVER.md for integration and safety requirements. An accurate track-route provider is not yet included, so automatic sign detection and unattended driving are not yet functional.
