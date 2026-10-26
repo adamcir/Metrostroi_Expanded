@@ -389,7 +389,8 @@ concommand.Add("mex_announcer_mp_status",function(ply)
     if SERVER and IsValid(ply) and not ply:IsAdmin() then return end
     print("[MEX AUDIO] realm="..(SERVER and "server" or "client")
         .." map="..tostring(game.GetMap())
-        .." ASNPsync="..tostring(CLIENT and next(API.ServerDefinitions)~=nil or SERVER))
+        .." ASNPsync="..tostring(CLIENT and next(API.ServerDefinitions)~=nil or SERVER)
+        .." adLang="..tostring(API.Languages.ad and table.Count(API.Languages.ad) or 0))
     for id,pack in pairs(API.Packs) do
         if pack.registeredID then
             print("[MEX AUDIO] pack="..id.." localIndex="..pack.registeredID
@@ -788,8 +789,10 @@ if CLIENT then
     end
 
     concommand.Add("mex_asnp_spawner_status",function()
+        local language=API.Languages.ad
         print("[MEX ASNP SPAWNER] map="..tostring(game.GetMap())
-            .." received="..tostring(next(API.ServerDefinitions)~=nil))
+            .." received="..tostring(next(API.ServerDefinitions)~=nil)
+            .." adamovianLanguage="..tostring(istable(language) and table.Count(language) or 0))
         local record=scripted_ents.GetStored("gmod_subway_ezh3")
         local train=record and record.t
         local found=false
