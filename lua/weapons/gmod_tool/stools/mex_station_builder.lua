@@ -12,7 +12,7 @@ TOOL.ClientConVar={
 }
 
 if CLIENT then
-    language.Add("tool.mex_station_builder.name","Station Builder")
+    language.Add("tool.mex_station_builder.name","Station Builder [ALPHA]")
     language.Add("tool.mex_station_builder.desc",
         "Build editable, walkable metro stations on original Metrostroi tracks")
     language.Add("tool.mex_station_builder.0",
@@ -72,53 +72,43 @@ function TOOL:Reload(trace)
     return MEXStationBuilder.Remove(ply,trace.Entity)
 end
 if CLIENT then
-    local C_TITLE=Color(62,109,83)
-    local C_TEXT=Color(227,234,234)
-    local function Section(panel,text)
-        local label=vgui.Create("DLabel",panel)
-        label:Dock(TOP)
-        label:DockMargin(0,13,0,5)
-        label:SetTall(30)
-        label:SetFont("DermaDefaultBold")
-        label:SetTextColor(C_TEXT)
-        label:SetText("  "..text)
-        label.Paint=function(_,w,h)
-            draw.RoundedBox(3,0,0,w,h,C_TITLE)
-        end
-        panel:AddItem(label)
+    -- Use the default Garry's Mod Derma toolgun panel skin. No custom
+    -- backgrounds, hard-coded bright text, or colored category headers.
+    local function Section(panel,title)
+        panel:Help(string.upper(title))
     end
+
     local function Choices(panel,title,cvar,choices)
-        local row=vgui.Create("DPanel")
-        row:SetTall(53)
-        row:SetPaintBackground(false)
-        local name=vgui.Create("DLabel",row)
-        name:Dock(TOP)
-        name:SetTall(21)
-        name:SetTextColor(C_TEXT)
-        name:SetText(title)
-        local combo=vgui.Create("DComboBox",row)
-        combo:Dock(TOP)
-        combo:SetTall(28)
-        local cv=GetConVar("mex_station_builder_"..cvar)
+        -- Native ComboBox appearance, as used in other GMod tools.
+        panel:Help(title)
+        local combo=vgui.Create("DComboBox")
+        combo:SetTall(24)
+        local convarName="mex_station_builder_"..cvar
+        local cv=GetConVar(convarName)
         local selected=cv and cv:GetInt() or 1
         local choiceID=1
-        for i,v in ipairs(choices) do
-            combo:AddChoice(v[1],v[2])
-            if v[2]==selected then choiceID=i end
+        for i,option in ipairs(choices) do
+            combo:AddChoice(option[1],option[2])
+            if option[2]==selected then choiceID=i end
         end
         combo:ChooseOptionID(choiceID)
         combo.OnSelect=function(_,_,_,value)
-            RunConsoleCommand("mex_station_builder_"..cvar,tostring(value))
+            if value~=nil then
+                RunConsoleCommand(convarName,tostring(value))
+            end
         end
-        panel:AddItem(row)
+        panel:AddItem(combo)
     end
+
     function TOOL.BuildCPanel(panel)
         panel:AddControl("Header",{
-            Text="Metrostroi Expanded | Station Builder",
-            Description="Build real walkable platforms, walls, roof, cladding, lighting, signs and stairs. Works alongside Track Builder."
+            Text="Metrostroi Expanded | Station Builder [ALPHA]",
+            Description="Experimental: create walkable metro platforms, walls, roofing, cladding, signs and stairs using standard GMod tools."
         })
+        panel:Help("ALPHA: unfinished and may contain bugs or affect performance.")
         panel:Help("LMB 1: choose starting point (snaps to existing rail). LMB 2: choose platform end. RMB on an existing station: apply new design. R: remove the whole station.")
-        Section(panel,"1. STATION PLAN")
+
+        Section(panel,"1. Station plan")
         panel:TextEntry("Station name","mex_station_builder_name")
         Choices(panel,"Platform arrangement","layout",{
             {"Left side platform (1 track)",1},
@@ -138,7 +128,8 @@ if CLIENT then
             "mex_station_builder_length",512,4096,0)
         panel:NumSlider("Rotate from measured track heading (degrees)",
             "mex_station_builder_rotation",-180,180,0)
-        Section(panel,"2. ARCHITECTURE")
+
+        Section(panel,"2. Architecture")
         Choices(panel,"Architectural theme","style",{
             {"Classic concrete and tile",1},
             {"Modern clean station",2},
@@ -153,26 +144,23 @@ if CLIENT then
             "mex_station_builder_height",28,80,0)
         panel:NumSlider("Clear ceiling above platform (SU)",
             "mex_station_builder_ceiling",250,480,0)
-        local label=vgui.Create("DLabel")
-        label:SetText("Accent color (HEX)")
-        label:SetTextColor(C_TEXT)
-        label:SetTall(20)
-        panel:AddItem(label)
-        panel:TextEntry("RRGGBB / station stripe color",
+        panel:TextEntry("Accent color (HEX RRGGBB)",
             "mex_station_builder_accent")
         panel:CheckBox("Ceiling lamps with dynamic lighting",
             "mex_station_builder_lights")
-        Section(panel,"3. ENTRANCES")
+
+        Section(panel,"3. Entrances")
         Choices(panel,"Straight stairways and upper landings","stairs",{
             {"No stairs",0},
             {"Entrance stairs at start",1},
             {"Entrance stairs at end",2},
             {"Stairs at both ends",3},
         })
-        panel:Help("Stairways are aligned to the platforms with 11-SU risers. They lead to raised landings; terrain connections can be finished with props or the map editor.")
-        Section(panel,"4. BUILD / EDIT")
-        panel:Help("Aim near a straight original rail for accurate direction and elevation. Two-track layouts use your selected midpoint between the two rails. Station Builder does not move, duplicate or replace the original Metrostroi rails.")
-        panel:Help("Edit: adjust options above and RMB an existing station part. This regenerates the station in the same location and saves it for the current map.")
-        panel:Help("Saved stations reload with the map and reappear after a map cleanup. Only admins can build, edit or remove stations.")
+        panel:Help("Stairways are aligned to platforms with 11-SU risers. They lead to upper landings; connect terrain with props or the map editor.")
+
+        Section(panel,"4. Build / edit")
+        panel:Help("Aim near a straight original rail for accurate direction and elevation. Two-track layouts use the selected midpoint between rails; original Metrostroi rails are not moved.")
+        panel:Help("Edit: change settings above, then RMB on a station part to regenerate the station in place.")
+        panel:Help("Stations reload with the map and survive cleanup. Only admins can build, edit or remove stations.")
     end
 end
