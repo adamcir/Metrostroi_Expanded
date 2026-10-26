@@ -743,6 +743,30 @@ timer.Create("MEXASNP_Register",1,0,API.TryRegister)
 -- realms. Only touch classes with an Announcer selector or proven 81_71_ASNP
 -- hardware; do not offer ASNP on UPO/RRI-only or otherwise incompatible cabs.
 API.ASNPHardwareClasses = API.ASNPHardwareClasses or {}
+-- Standard Metrostroi classes confirmed to load the 81_71_ASNP system.
+-- Do not infer ASNP compatibility merely from an "Announcer" dropdown:
+-- 81-722 has Sarmat UPO, 81-703 has RRI, and 81-718 has ASNP disabled.
+local StandardASNPClasses={
+    ["gmod_subway_ezh"]=true,
+    ["gmod_subway_ezh3"]=true,
+    ["gmod_subway_81-717_mvm"]=true,
+    ["gmod_subway_81-720"]=true,
+}
+function API.RegisterASNPTrainClass(class)
+    assert(isstring(class) and string.StartWith(class,"gmod_subway_"),
+        "ASNP train class name expected")
+    API.ASNPHardwareClasses[class]=true
+end
+
+local function SupportsASNP(class)
+    if API.ASNPHardwareClasses[class] or StandardASNPClasses[class] then return true end
+    if scripted_ents and isfunction(scripted_ents.IsBasedOn) then
+        for base in pairs(StandardASNPClasses) do
+            if scripted_ents.IsBasedOn(class,base) then return true end
+        end
+    end
+    return false
+end
 
 local function IsActivePack(pack)
     if not istable(pack) then return false end
@@ -819,6 +843,7 @@ local function DetectASNPClasses()
 end
 
 local function PatchOneSpawner(class,record)
+    if not SupportsASNP(class) then return 0 end
     if not istable(record) or not istable(record.Spawner) then return 0 end
     local found=false
     local count=0
