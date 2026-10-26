@@ -139,10 +139,20 @@ function API.RefreshTrainTables()
     if not istable(route) or not route.MEXRPIPackID then return end
     for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
         local rri=train.RRI
-        -- A train with its own AnnTable is not using map-wide RRI cassettes.
-        if rri and not rri.AnnTable and rri.CurrentTable ~= Metrostroi.RRISetup then
+        -- Stock RRI is initialized before custom map packs on some servers.
+        -- Repair an invalid initial Line=-1 even when CurrentTable is already
+        -- pointing at the new configuration.
+        if rri and not rri.AnnTable then
             rri.CurrentTable=Metrostroi.RRISetup
-            rri.Line=math.Clamp(tonumber(rri.Line) or 1,1,#Metrostroi.RRISetup)
+            local lineIndex=tonumber(rri.Line)
+            if not lineIndex or lineIndex<1 or lineIndex>#Metrostroi.RRISetup then
+                rri.Line=1
+                rri.FirstStation=-1
+                rri.LastStation=0
+                rri.Path=false
+                rri.Station=1
+                rri.Arrived=true
+            end
             local line=rri.CurrentTable[rri.Line]
             if line and (not isnumber(rri.Station) or rri.Station<1 or rri.Station>#line) then
                 rri.Station=1
@@ -247,6 +257,35 @@ else
         ApplyCassette()
     end)
     timer.Create("MEXRPI_ApplyClientCassette",1,0,ApplyCassette)
+
+    -- The RRI screen uses a client-only CurrentTable and can display
+    -- "No cassete" while a correctly configured server is already playing
+    -- station announcements. Force the received cassette into the local RRI
+    -- renderer, including trains instantiated before the network sync.
+    local function PatchRRIClientScreen(system)
+        if not system or system.MEXRPIClientScreenWrapped
+            or not isfunction(system.ClientThink) then return end
+        local original=system.ClientThink
+        system.ClientThink=function(self,...)
+            if API.ServerCassette and self.Train and IsValid(self.Train)
+                and self.Train:GetNW2Int("AnnType",1)==1
+                and istable(Metrostroi and Metrostroi.RRISetup)
+                and istable(Metrostroi.RRISetup[1]) then
+                self.CurrentTable=Metrostroi.RRISetup
+            end
+            return original(self,...)
+        end
+        system.MEXRPIClientScreenWrapped=true
+    end
+    timer.Create("MEXRPI_ClientScreen",1,0,function()
+        if not API.ServerCassette then return end
+        if Metrostroi and Metrostroi.BaseSystems then
+            PatchRRIClientScreen(Metrostroi.BaseSystems["81_71_RRI"])
+        end
+        for _,train in ipairs(ents.FindByClass("gmod_subway_*")) do
+            if train.RRI then PatchRRIClientScreen(train.RRI) end
+        end
+    end)
 end
 
 function API.TryRegister()
