@@ -11,7 +11,28 @@ end
 MetrostroiPassengerSeats = MetrostroiPassengerSeats or {}
 local MPS = MetrostroiPassengerSeats
 
-MPS.Version = "0.2.0"
+MPS.Version = "0.2.1"
+
+-- Server-wide setting, replicated so the Utilities checkbox and seat prompts
+-- always reflect the server's state (even for non-admin players).
+local ENABLED_CVAR_NAME = "mex_passanger_seats_enabled"
+local enabledConVar
+
+if SERVER then
+    enabledConVar = CreateConVar(
+        ENABLED_CVAR_NAME,
+        "1",
+        bit.bor(FCVAR_ARCHIVE, FCVAR_REPLICATED, FCVAR_NOTIFY),
+        "Enable Metrostroi Expanded passenger seats on all trains",
+        0,
+        1
+    )
+end
+
+function MPS.IsEnabled()
+    local cvar = enabledConVar or GetConVar(ENABLED_CVAR_NAME)
+    return not cvar or cvar:GetBool()
+end
 
 -- The X positions come from the passenger-seat prototype that existed in the
 -- old Metrostroi AI entity. They line up with the gaps between the four pairs
@@ -176,7 +197,7 @@ local function GetSeatTargetWorld(seat)
 end
 
 local function FindLookedAtSeat(ply, maxDistance, minDot)
-    if not IsValid(ply) then return nil end
+    if not MPS.IsEnabled() or not IsValid(ply) then return nil end
 
     local eye = ply:EyePos()
     local aim = ply:GetAimVector()
@@ -210,6 +231,7 @@ if SERVER then
     MPS.Seats = MPS.Seats or {}
 
     local function RegisterSeat(train, cfg, x, side)
+        if not MPS.IsEnabled() then return nil end
         local y = cfg.y * side
         local localPos = Vector(x, y, cfg.seat_z)
         local localAngle = side < 0 and Angle(0, 90, 0) or Angle(0, 270, 0)
@@ -246,7 +268,7 @@ if SERVER then
     end
 
     local function CreateSeatsForTrain(train)
-        if not IsValid(train) then return false end
+        if not MPS.IsEnabled() or not IsValid(train) then return false end
         if train.MPSPassengerSeatsCreated then return true end
         if not isfunction(train.CreateSeat) or not istable(train.Seats) then return false end
 
@@ -273,11 +295,13 @@ if SERVER then
     end
 
     local function ScheduleSeatCreation(train, attempt)
+        if not MPS.IsEnabled() then return end
         attempt = attempt or 1
         if not IsValid(train) or train.MPSPassengerSeatsCreated then return end
         if not IsSubwayClass(train:GetClass()) then return end
 
         timer.Simple(0.10, function()
+            if not MPS.IsEnabled() then return end
             if not IsValid(train) or train.MPSPassengerSeatsCreated then return end
             if CreateSeatsForTrain(train) then return end
             if attempt < 35 then
@@ -287,6 +311,7 @@ if SERVER then
     end
 
     local function ScanExistingTrains()
+        if not MPS.IsEnabled() then return end
         for _, ent in ipairs(ents.GetAll()) do
             if IsValid(ent) and IsSubwayClass(ent:GetClass()) then
                 ScheduleSeatCreation(ent, 1)
@@ -305,7 +330,7 @@ if SERVER then
     end)
 
     hook.Add("KeyPress", "MPS.UsePassengerSeat", function(ply, key)
-        if key ~= IN_USE then return end
+        if not MPS.IsEnabled() or key ~= IN_USE then return end
         if not IsValid(ply) or not ply:Alive() or ply:InVehicle() then return end
 
         local seat = FindLookedAtSeat(ply, 105, 0.91)
@@ -367,6 +392,78 @@ if SERVER then
         end
     end)
 
+    -- Disabling is immediate: remove only MEX-created pods, safely eject
+    -- occupants, and clear each train's bookkeeping so enabling can rebuild.
+    local function RemoveAllPassengerSeats()
+        local ownedByTrain = {}
+
+        for _, seat in ipairs(ents.FindByClass("prop_vehicle_prisoner_pod")) do
+            if IsValid(seat) and seat:GetNW2Bool("MPS.PassengerSeat", false) then
+                local train = seat:GetNW2Entity("MPS.Train")
+                if IsValid(train) then
+                    ownedByTrain[train] = ownedByTrain[train] or {}
+                    ownedByTrain[train][seat] = true
+                end
+
+                local occupant = seat:GetDriver()
+                if not IsValid(occupant) and seat.GetPassenger then
+                    occupant = seat:GetPassenger(0)
+                end
+                if IsValid(occupant) and occupant:IsPlayer() then
+                    -- Clear the short entry lock before forcing an exit.
+                    occupant.MPSEntryLockUntil = 0
+                    occupant.MPSEntrySeat = nil
+                    occupant:ExitVehicle()
+                end
+
+                seat:Remove()
+            end
+        end
+
+        for _, train in ipairs(ents.GetAll()) do
+            if IsValid(train) and train.MPSPassengerSeatsCreated then
+                local owned = ownedByTrain[train] or {}
+                for _, seat in ipairs(train.MPSPassengerSeats or {}) do
+                    owned[seat] = true
+                end
+
+                if istable(train.Seats) then
+                    -- Keep Metrostroi's native seats intact. Remove only our
+                    -- own references from numeric and named seat entries.
+                    for i = #train.Seats, 1, -1 do
+                        if owned[train.Seats[i]] then
+                            table.remove(train.Seats, i)
+                        end
+                    end
+                    for key, seat in pairs(train.Seats) do
+                        if owned[seat] then train.Seats[key] = nil end
+                    end
+                end
+
+                train.MPSPassengerSeatsCreated = nil
+                train.MPSPassengerSeats = nil
+            end
+        end
+
+        MPS.Seats = {}
+    end
+
+    cvars.AddChangeCallback(ENABLED_CVAR_NAME, function(_, _, newValue)
+        if tonumber(newValue) == 0 then
+            RemoveAllPassengerSeats()
+        else
+            ScanExistingTrains()
+        end
+    end, "MPS.EnablePassengerSeats")
+
+    -- Clients must use this admin-checked server command, not a local cvar.
+    concommand.Add("mex_passanger_seats_set_enabled", function(ply, _, args)
+        if IsValid(ply) and not ply:IsAdmin() then return end
+        local value = tonumber(args[1])
+        if value ~= 0 and value ~= 1 then return end
+        enabledConVar:SetBool(value == 1)
+    end)
+
     concommand.Add("mex_passanger_seats_rescan", function(ply)
         if IsValid(ply) and not ply:IsAdmin() then return end
         ScanExistingTrains()
@@ -405,6 +502,66 @@ if CLIENT then
         "Draw Metrostroi Passenger Seats helper positions"
     )
 
+    hook.Add("PopulateToolMenu", "MPS.PopulatePassengerSeatUtilities", function()
+        spawnmenu.AddToolMenuOption(
+            "Utilities",
+            "Metrostroi Expanded",
+            "MEXPassengerSeatsSettings",
+            "Passenger Seats",
+            "",
+            "",
+            function(panel)
+                panel:ClearControls()
+                panel:Help(
+                    "Enable or disable MEX passenger seats on all Metrostroi trains."
+                )
+
+                local check = vgui.Create("DCheckBoxLabel", panel)
+                check:SetText("Enable MEX passenger seats")
+                check:SetDark(true)
+                check:SizeToContents()
+                panel:AddItem(check)
+
+                local updating = false
+                local function Refresh()
+                    if not IsValid(check) then return end
+                    updating = true
+                    check:SetChecked(MPS.IsEnabled())
+                    updating = false
+                    check:SetEnabled(
+                        IsValid(LocalPlayer()) and LocalPlayer():IsAdmin()
+                    )
+                end
+
+                check.OnChange = function(_, enabled)
+                    if updating then return end
+                    if not IsValid(LocalPlayer()) or not LocalPlayer():IsAdmin() then
+                        Refresh()
+                        return
+                    end
+                    RunConsoleCommand(
+                        "mex_passanger_seats_set_enabled",
+                        enabled and "1" or "0"
+                    )
+                end
+
+                panel:Help(
+                    "Server-wide setting (admin only). Disabling removes MEX "
+                    .. "passenger seats from existing trains and safely exits "
+                    .. "seated players. Enabling recreates seats automatically."
+                )
+
+                local nextRefresh = 0
+                panel.Think = function()
+                    if RealTime() < nextRefresh then return end
+                    nextRefresh = RealTime() + 0.35
+                    Refresh()
+                end
+                Refresh()
+            end
+        )
+    end)
+
     local nextCandidateUpdate = 0
     local currentCandidate = nil
 
@@ -413,7 +570,7 @@ if CLIENT then
         nextCandidateUpdate = CurTime() + 0.10
 
         local ply = LocalPlayer()
-        if not IsValid(ply) or not ply:Alive() or ply:InVehicle() then
+        if not MPS.IsEnabled() or not IsValid(ply) or not ply:Alive() or ply:InVehicle() then
             currentCandidate = nil
             return
         end
@@ -422,6 +579,7 @@ if CLIENT then
     end)
 
     hook.Add("HUDPaint", "MPS.PassengerSeatPrompt", function()
+        if not MPS.IsEnabled() then return end
         if not IsValid(currentCandidate) or SeatOccupied(currentCandidate) then return end
         draw.SimpleTextOutlined(
             "E  Sednout si",
@@ -437,7 +595,7 @@ if CLIENT then
     end)
 
     hook.Add("PostDrawTranslucentRenderables", "MPS.DebugPassengerSeats", function()
-        if not debugSeats:GetBool() then return end
+        if not MPS.IsEnabled() or not debugSeats:GetBool() then return end
         for _, seat in ipairs(ents.FindByClass("prop_vehicle_prisoner_pod")) do
             if IsValid(seat) and seat:GetNW2Bool("MPS.PassengerSeat", false) then
                 local train = seat:GetNW2Entity("MPS.Train")
