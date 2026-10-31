@@ -92,7 +92,7 @@ diagnostics, see `mex_ars_map_check` and `mex_ars_map_train <entity ID>`.
 
 ## Passenger Seats
 
-Current passenger-seat module version: **0.2.0**
+Current passenger-seat module version: **0.2.1**
 
 It adds usable invisible `models/nova/jeep_seat.mdl` vehicle seats to the real passenger benches without modifying Metrostroi itself.
 
@@ -119,8 +119,20 @@ Walk up to a passenger bench, aim at the seat and press **E**.
 
 Press **E** again to leave. The addon moves the player back into the aisle after exiting.
 
+### Utilities setting
+
+Open **Utilities → Metrostroi Expanded → Passenger Seats** and use
+**Enable MEX passenger seats** (server-wide, administrator only).
+The setting is enabled by default and saved across restarts.
+Disabling it immediately removes MEX-created seats from trains, safely exits
+their occupants, and hides the seat prompts; it does not remove Metrostroi's
+original driver seats. Re-enabling automatically restores the passenger seats
+to already spawned and newly spawned compatible trains.
+
 ### Commands
 
+- `mex_passanger_seats_enabled 0/1` — persistent server-side setting (server console)
+- `mex_passanger_seats_set_enabled 0/1` — admin-only console command to disable/enable passenger seats
 - `mex_passanger_seats_status` — show number of supported live trains and passenger seats
 - `mex_passanger_seats_rescan` — rescan already spawned trains
 - `mex_passanger_seats_debug_seats 1` — show passenger-seat interaction positions
