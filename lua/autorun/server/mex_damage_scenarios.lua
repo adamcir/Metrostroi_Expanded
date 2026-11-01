@@ -104,7 +104,7 @@ end
 
 for _, kind in ipairs({"electrical", "water", "impact"}) do
     local scenario = kind
-    concommand.Add("mex_damage_" .. scenario .. "_now", function(ply, _, args)
+    concommand.Add("mex_damage_" .. scenario .. "_set", function(ply, _, args)
         RunScenario(scenario, ply, args or {})
     end)
 end
