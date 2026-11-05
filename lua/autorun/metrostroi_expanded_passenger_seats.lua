@@ -494,14 +494,6 @@ if SERVER then
 end
 
 if CLIENT then
-    local debugSeats = CreateClientConVar(
-        "mex_passanger_seats_debug_seats",
-        "0",
-        true,
-        false,
-        "Draw Metrostroi Passenger Seats helper positions"
-    )
-
     hook.Add("PopulateToolMenu", "MPS.PopulatePassengerSeatUtilities", function()
         spawnmenu.AddToolMenuOption(
             "Utilities",
@@ -594,16 +586,4 @@ if CLIENT then
         )
     end)
 
-    hook.Add("PostDrawTranslucentRenderables", "MPS.DebugPassengerSeats", function()
-        if not MPS.IsEnabled() or not debugSeats:GetBool() then return end
-        for _, seat in ipairs(ents.FindByClass("prop_vehicle_prisoner_pod")) do
-            if IsValid(seat) and seat:GetNW2Bool("MPS.PassengerSeat", false) then
-                local train = seat:GetNW2Entity("MPS.Train")
-                if IsValid(train) then
-                    local pos = train:LocalToWorld(seat:GetNW2Vector("MPS.UseLocal", vector_origin))
-                    render.DrawWireframeSphere(pos, 4, 8, 8, Color(80, 220, 120), true)
-                end
-            end
-        end
-    end)
 end
