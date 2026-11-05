@@ -135,8 +135,6 @@ to already spawned and newly spawned compatible trains.
 - `mex_passanger_seats_set_enabled 0/1` — admin-only console command to disable/enable passenger seats
 - `mex_passanger_seats_status` — show number of supported live trains and passenger seats
 - `mex_passanger_seats_rescan` — rescan already spawned trains
-- `mex_passanger_seats_debug_seats 1` — show passenger-seat interaction positions
-- `mex_passanger_seats_debug_seats 0` — hide debug positions
 
 
 ## StormFox 2 train weather (optional)
